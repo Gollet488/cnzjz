@@ -1,3 +1,4 @@
+
 # Kinetic 动观 · 人体姿态量化分析 Demo
 
 按同目录 `requiremen.md` 实现的纯前端项目。使用 Vue 3 组合式 API / `<script setup>`、TypeScript、Vite、Element Plus、ECharts 和 MediaPipe Pose Landmarker。没有后端，不上传视频或帧。
@@ -78,3 +79,6 @@ MediaPipe 官方文档：https://developers.google.com/edge/mediapipe/solutions/
 Lite 模型：https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task
 
 MediaPipe Tasks Vision 按其 Apache-2.0 许可使用。其余依赖保留各自许可。
+
+
+
