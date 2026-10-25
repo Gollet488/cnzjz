@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.local
+.DS_Store
+.qa/
+.pnpm-store/
+*.tsbuildinfo
+.demo/
+.env
+.env.*
+!.env.example

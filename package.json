@@ -1,0 +1,6 @@
+{
+  "name": "kinetic-pose-lab", "version": "0.1.0", "private": true, "type": "module",
+  "scripts": { "dev": "vite --host 127.0.0.1", "build": "vue-tsc -b && vite build", "preview": "vite preview --host 127.0.0.1", "test": "node --test tests/poseMath.test.ts", "prepare:assets": "node scripts/prepare-assets.mjs" },
+  "dependencies": { "@mediapipe/tasks-vision": "0.10.32", "echarts": "^6.0.0", "element-plus": "^2.11.0", "lucide-vue-next": "^0.468.0", "vue": "^3.5.0" },
+  "devDependencies": { "@types/node": "^24.0.0", "@vitejs/plugin-vue": "^6.0.0", "typescript": "~5.9.3", "vite": "^7.2.0", "vue-tsc": "^3.1.0" }
+}
