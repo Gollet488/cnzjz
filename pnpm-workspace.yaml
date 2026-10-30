@@ -1,2 +1,18 @@
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - mp4box@2.5.0
+  - '@typescript-eslint/eslint-plugin@8.72.1'
+  - '@typescript-eslint/parser@8.72.1'
+  - '@typescript-eslint/project-service@8.72.1'
+  - '@typescript-eslint/scope-manager@8.72.1'
+  - '@typescript-eslint/tsconfig-utils@8.72.1'
+  - '@typescript-eslint/type-utils@8.72.1'
+  - '@typescript-eslint/types@8.72.1'
+  - '@typescript-eslint/typescript-estree@8.72.1'
+  - '@typescript-eslint/utils@8.72.1'
+  - '@typescript-eslint/visitor-keys@8.72.1'
+  - eslint-plugin-vue@10.12.0
+  - typescript-eslint@8.72.1
+# 安装显式执行；检查和开发命令不得自动重装或清理依赖。
+verifyDepsBeforeRun: error

@@ -1,6 +1,53 @@
 {
-  "name": "kinetic-pose-lab", "version": "0.1.0", "private": true, "type": "module",
-  "scripts": { "dev": "vite --host 127.0.0.1", "build": "vue-tsc -b && vite build", "preview": "vite preview --host 127.0.0.1", "test": "node --test tests/poseMath.test.ts", "prepare:assets": "node scripts/prepare-assets.mjs" },
-  "dependencies": { "@mediapipe/tasks-vision": "0.10.32", "echarts": "^6.0.0", "element-plus": "^2.11.0", "lucide-vue-next": "^0.468.0", "vue": "^3.5.0" },
-  "devDependencies": { "@types/node": "^24.0.0", "@vitejs/plugin-vue": "^6.0.0", "typescript": "~5.9.3", "vite": "^7.2.0", "vue-tsc": "^3.1.0" }
+  "name": "kinetic-pose-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=24.22.1 <25",
+    "pnpm": "11.25.0"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "node scripts/check-assets.mjs && vue-tsc -b && vite build",
+    "typecheck": "vue-tsc -b",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "test:browser:real": "playwright test --config playwright.real.config.ts",
+    "verify:browser-files": "node scripts/verify-browser-files.mjs",
+    "test:agent:real": "node scripts/verify-agent.mjs",
+    "eval:agent:real": "node scripts/evaluate-agent.mjs",
+    "verify:efficiency": "node scripts/verify-efficiency.mjs",
+    "verify:delivery": "node scripts/verify-delivery.mjs",
+    "create:delivery": "node scripts/create-delivery-manifest.mjs",
+    "prepare:assets": "node scripts/prepare-assets.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "check:assets": "node scripts/check-assets.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "0.10.32",
+    "echarts": "^6.0.0",
+    "element-plus": "^2.11.0",
+    "lucide-vue-next": "^0.468.0",
+    "mp4box": "2.5.0",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@types/node": "^24.0.0",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "eslint": "10.13.0",
+    "eslint-plugin-vue": "10.12.0",
+    "globals": "17.13.0",
+    "prettier": "3.6.2",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "^7.2.0",
+    "vue-tsc": "^3.1.0"
+  }
 }

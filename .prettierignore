@@ -1,0 +1,18 @@
+# 只格式化维护中的源码、测试及配置；排除依赖、资源、产物和工具状态。
+node_modules/
+.pnpm-store/
+public/
+dist/
+.git/
+.demo/
+.qa/
+.delivery/
+test-results/
+playwright-report/
+*.tsbuildinfo
+pnpm-lock.yaml
+# Markdown 文档单独维护排版。
+*.md
+docs/
+# Windows 启停脚本使用 CRLF，由工程测试验证启动路径。
+*.cmd

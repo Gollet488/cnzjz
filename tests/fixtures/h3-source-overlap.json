@@ -1,0 +1,117 @@
+{
+  "source": "docs/evidence/phase-h3-20261028/screen-1.json.http-2.receipt.json",
+  "goal": "{\"modelProtocolVersion\":\"3.0.0\",\"bindings\":{\"taskRef\":null},\"goal\":\"比较前后各 5 秒的左右膝 filtered ROM，并展示差异\",\"currentSession\":{\"sessionId\":\"da00f8de-f860-4046-a888-da8789d42217\",\"revision\":401,\"source\":\"demo\",\"synthetic\":true,\"parameters\":{\"threshold\":0.5,\"window\":5,\"aspect\":1,\"metricVersion\":\"2.0\"},\"range\":[0,20],\"sampleCount\":401,\"acquisition\":null},\"userSources\":[{\"sourceId\":\"63f45035-e952-40d2-9ecb-1ab4bf41f35e\",\"kind\":\"current\",\"text\":\"比较前后各 5 秒的左右膝 filtered ROM，并展示差异\",\"runId\":\"cdb62740-2295-4f32-a715-ad3add3ee9b3\"}],\"previousTask\":null,\"context\":{\"referenceChanged\":false,\"recentFeedback\":null,\"unavailableFields\":[],\"omitted\":[\"historical evidence and metadata\"]},\"acceptedTask\":null,\"protocolFingerprint\":\"90e16d7ea5d03c82d054da2de6ad2bf6498a98d0b2e65f3cd363df198a07c69e\"}",
+  "call": {
+    "index": 0,
+    "name": "set_task_spec",
+    "arguments": {
+      "goalTypes": ["comparison"],
+      "joint": "knee",
+      "channels": ["left", "right"],
+      "basis": "filtered",
+      "interval": [0, 5],
+      "comparison": {
+        "direction": "second_minus_first",
+        "second": [15, 20]
+      },
+      "metrics": ["rom"],
+      "time": null,
+      "deliveries": {
+        "export": {
+          "format": "csv",
+          "interval": [0, 5]
+        },
+        "report": true,
+        "view": {
+          "basis": "filtered",
+          "channels": ["left", "right"],
+          "interval": [0, 5],
+          "joint": "knee"
+        }
+      },
+      "sources": [
+        {
+          "field": "goalTypes",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "joint",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "channels",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "basis",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "interval",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "comparison",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "metrics",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "deliveries.view",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "deliveries.report",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "deliveries.export",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "deliveries.view.joint",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "deliveries.view.channels",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "deliveries.view.basis",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "deliveries.view.interval",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "deliveries.export.interval",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        },
+        {
+          "field": "deliveries.export.format",
+          "origin": "explicit",
+          "sourceId": "63f45035-e952-40d2-9ecb-1ab4bf41f35e"
+        }
+      ],
+      "unresolved": []
+    }
+  }
+}

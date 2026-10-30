@@ -1,0 +1,21 @@
+# 与 Prettier 的 LF 策略一致，避免 Windows checkout 后格式检查反复失败。
+*.ts text eol=lf
+*.mts text eol=lf
+*.vue text eol=lf
+*.css text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.html text eol=lf
+*.svg text eol=lf
+.gitignore text eol=lf
+.prettierignore text eol=lf
+.node-version text eol=lf
+.gitattributes text eol=lf
+*.cmd text eol=crlf
+# Preserve upstream bytes for pinned resource hashes on every platform.
+public/mediapipe/** -text
+# Immutable evidence and fixture hashes must survive a fresh checkout unchanged.
+docs/evidence/** -text
+tests/fixtures/** -text

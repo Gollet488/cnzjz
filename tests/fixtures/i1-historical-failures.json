@@ -1,0 +1,2563 @@
+{
+  "kind": "frozen historical excerpts, never model success",
+  "sources": {
+    "h3": {
+      "path": "docs/evidence/phase-h3-20261028/screen-2.json",
+      "sha256": "c49aa78cf7efe4f700e51e2f36e9e33c7b542a7bb72b411d850711b50653cb38"
+    },
+    "report": {
+      "path": "docs/evidence/phase-h5-20261028/production-1/session-2/real-turn-3-audit.json",
+      "sha256": "4d9262c38166cf4c8fdcc5c958b469f684309575eba8274f8b3712c05986e2c5"
+    },
+    "multi": {
+      "path": "docs/evidence/phase-h5-20261028/production-1/session-3/real-turn-3-audit.json",
+      "sha256": "6e0481d8ad330e8b46d6b0d3b0e4ba3510b1b62fc46e5fc9e1fd33c338d6a84f"
+    },
+    "http": {
+      "path": "docs/evidence/phase-h3-20261028/screen-2.json.http-14.receipt.json",
+      "sha256": "bd2413f7adbea1eb90386c28b7f966cc7cdf556d635bd51bdc63790e1bfbc720"
+    }
+  },
+  "compare": {
+    "goal": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+    "spec": {
+      "goalTypes": ["comparison"],
+      "joint": "knee",
+      "channels": ["left", "right"],
+      "basis": "filtered",
+      "interval": [0, 5],
+      "comparison": {
+        "direction": "second_minus_first",
+        "second": [15, 20]
+      },
+      "metrics": ["rom"],
+      "time": null,
+      "deliveries": {
+        "export": {
+          "format": "csv",
+          "interval": [0, 5]
+        },
+        "report": true,
+        "view": {
+          "basis": "filtered",
+          "channels": ["left", "right"],
+          "interval": [0, 5],
+          "joint": "knee"
+        }
+      },
+      "sources": [
+        {
+          "field": "goalTypes",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        },
+        {
+          "field": "joint",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        },
+        {
+          "field": "channels",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        },
+        {
+          "field": "basis",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        },
+        {
+          "field": "interval",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        },
+        {
+          "field": "comparison",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        },
+        {
+          "field": "metrics",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        },
+        {
+          "field": "deliveries.view",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        },
+        {
+          "field": "deliveries.report",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        },
+        {
+          "field": "deliveries.export",
+          "origin": "explicit",
+          "text": "比较前后各 5 秒的左右膝 filtered ROM，并展示差异",
+          "fromRunId": null
+        }
+      ],
+      "unresolved": []
+    },
+    "view": {
+      "sessionId": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3",
+      "revision": 401,
+      "joint": "knee",
+      "channels": ["left", "right"],
+      "basis": "filtered",
+      "interval": [0, 5]
+    },
+    "finish": {
+      "id": "9a5e9292-c12",
+      "name": "finish_analysis",
+      "arguments": {
+        "outcome": "completed",
+        "messageCode": "evidence_ready",
+        "citations": [
+          {
+            "evidenceId": "436ffdee-9bd5-460f-afa0-1ca869c926f6"
+          }
+        ]
+      },
+      "modelArguments": {
+        "outcome": "completed",
+        "messageCode": "evidence_ready",
+        "citations": [
+          {
+            "evidenceId": "436ffdee-9bd5-460f-afa0-1ca869c926f6"
+          }
+        ]
+      },
+      "output": {
+        "ok": false,
+        "tool": "finish_analysis",
+        "error": {
+          "code": "VALIDATION",
+          "message": "INVALID_EVIDENCE_ID：请选择本轮成功工具反馈 evidenceCatalog 中的 evidenceId。"
+        }
+      },
+      "elapsedMs": 0.19570000000385335
+    },
+    "handleCall": {
+      "id": "9a5e9292-c8",
+      "name": "prepare_report",
+      "arguments": {
+        "sessionId": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3",
+        "revision": 401,
+        "joint": "knee",
+        "channels": ["left", "right"],
+        "basis": "filtered",
+        "interval": [0, 5],
+        "comparison": [15, 20]
+      },
+      "modelArguments": {
+        "sessionId": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3",
+        "revision": 401,
+        "joint": "knee",
+        "channels": ["left", "right"],
+        "basis": "filtered",
+        "interval": [0, 5],
+        "comparison": [15, 20],
+        "taskRef": "42a5082e-7057-47ee-885e-4f83eaae4c30"
+      },
+      "output": {
+        "ok": true,
+        "tool": "prepare_report",
+        "result": {
+          "handle": "436ffdee-9bd5-460f-afa0-1ca869c926f6",
+          "evidence": {
+            "sessionId": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3",
+            "revision": 401,
+            "source": "demo",
+            "synthetic": true,
+            "parameters": {
+              "threshold": 0.5,
+              "window": 5,
+              "aspect": 1,
+              "metricVersion": "2.0"
+            },
+            "sampleCount": 101,
+            "acquisition": null,
+            "interval": [0, 5],
+            "basis": "filtered",
+            "sampledRange": [0, 5],
+            "limitations": [
+              "单人单目 2D 几何投影；不代表动作质量或对错。",
+              "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+              "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+            ]
+          },
+          "state": "ready",
+          "facts": {
+            "evidence": {
+              "sessionId": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3",
+              "revision": 401,
+              "source": "demo",
+              "synthetic": true,
+              "parameters": {
+                "threshold": 0.5,
+                "window": 5,
+                "aspect": 1,
+                "metricVersion": "2.0"
+              },
+              "sampleCount": 101,
+              "acquisition": null,
+              "interval": [0, 5],
+              "basis": "filtered",
+              "sampledRange": [0, 5],
+              "limitations": [
+                "单人单目 2D 几何投影；不代表动作质量或对错。",
+                "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+                "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+              ]
+            },
+            "joint": "knee",
+            "channels": [
+              {
+                "channel": "left",
+                "angle": {
+                  "min": 163.81910377820805,
+                  "max": 179.6929117881103,
+                  "mean": 172.64466210459335,
+                  "populationVariance": 19.764039034859223,
+                  "sampleCount": 101
+                },
+                "rom": 15.873808009902262,
+                "velocity": {
+                  "min": -22.330634215651322,
+                  "max": 22.33390560382633,
+                  "mean": 0.11655493445112576,
+                  "populationVariance": 213.05614084689026,
+                  "sampleCount": 100
+                },
+                "peakAbsoluteVelocity": 22.33390560382633,
+                "coverage": 1
+              },
+              {
+                "channel": "right",
+                "angle": {
+                  "min": 157.4199484459653,
+                  "max": 179.91421335235347,
+                  "mean": 166.81739617264557,
+                  "populationVariance": 51.424592457863675,
+                  "sampleCount": 101
+                },
+                "rom": 22.494264906388167,
+                "velocity": {
+                  "min": -27.749848094526428,
+                  "max": 27.755771494763152,
+                  "mean": 0.5814105796416132,
+                  "populationVariance": 339.8943226167391,
+                  "sampleCount": 100
+                },
+                "peakAbsoluteVelocity": 27.755771494763152,
+                "coverage": 1
+              }
+            ],
+            "units": {
+              "angle": "deg",
+              "velocity": "deg/s",
+              "angleVariance": "deg²",
+              "coordinateVariance": "normalized_coordinate²"
+            },
+            "coordinateVariance": {
+              "windows": {
+                "min": 9.842157613631797e-7,
+                "max": 0.00004268138509992521,
+                "mean": 0.000020598676191305008,
+                "populationVariance": 1.8808893995830751e-10,
+                "sampleCount": 100
+              },
+              "validPointSamples": 16302,
+              "configuredWindowFrames": 5,
+              "windowInterval": [0, 5]
+            }
+          },
+          "comparison": {
+            "first": {
+              "evidence": {
+                "sessionId": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3",
+                "revision": 401,
+                "source": "demo",
+                "synthetic": true,
+                "parameters": {
+                  "threshold": 0.5,
+                  "window": 5,
+                  "aspect": 1,
+                  "metricVersion": "2.0"
+                },
+                "sampleCount": 101,
+                "acquisition": null,
+                "interval": [0, 5],
+                "basis": "filtered",
+                "sampledRange": [0, 5],
+                "limitations": [
+                  "单人单目 2D 几何投影；不代表动作质量或对错。",
+                  "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+                  "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+                ]
+              },
+              "joint": "knee",
+              "channels": [
+                {
+                  "channel": "left",
+                  "angle": {
+                    "min": 163.81910377820805,
+                    "max": 179.6929117881103,
+                    "mean": 172.64466210459335,
+                    "populationVariance": 19.764039034859223,
+                    "sampleCount": 101
+                  },
+                  "rom": 15.873808009902262,
+                  "velocity": {
+                    "min": -22.330634215651322,
+                    "max": 22.33390560382633,
+                    "mean": 0.11655493445112576,
+                    "populationVariance": 213.05614084689026,
+                    "sampleCount": 100
+                  },
+                  "peakAbsoluteVelocity": 22.33390560382633,
+                  "coverage": 1
+                },
+                {
+                  "channel": "right",
+                  "angle": {
+                    "min": 157.4199484459653,
+                    "max": 179.91421335235347,
+                    "mean": 166.81739617264557,
+                    "populationVariance": 51.424592457863675,
+                    "sampleCount": 101
+                  },
+                  "rom": 22.494264906388167,
+                  "velocity": {
+                    "min": -27.749848094526428,
+                    "max": 27.755771494763152,
+                    "mean": 0.5814105796416132,
+                    "populationVariance": 339.8943226167391,
+                    "sampleCount": 100
+                  },
+                  "peakAbsoluteVelocity": 27.755771494763152,
+                  "coverage": 1
+                }
+              ],
+              "units": {
+                "angle": "deg",
+                "velocity": "deg/s",
+                "angleVariance": "deg²",
+                "coordinateVariance": "normalized_coordinate²"
+              },
+              "coordinateVariance": {
+                "windows": {
+                  "min": 9.842157613631797e-7,
+                  "max": 0.00004268138509992521,
+                  "mean": 0.000020598676191305008,
+                  "populationVariance": 1.8808893995830751e-10,
+                  "sampleCount": 100
+                },
+                "validPointSamples": 16302,
+                "configuredWindowFrames": 5,
+                "windowInterval": [0, 5]
+              }
+            },
+            "second": {
+              "evidence": {
+                "sessionId": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3",
+                "revision": 401,
+                "source": "demo",
+                "synthetic": true,
+                "parameters": {
+                  "threshold": 0.5,
+                  "window": 5,
+                  "aspect": 1,
+                  "metricVersion": "2.0"
+                },
+                "sampleCount": 101,
+                "acquisition": null,
+                "interval": [15, 20],
+                "basis": "filtered",
+                "sampledRange": [15, 20],
+                "limitations": [
+                  "单人单目 2D 几何投影；不代表动作质量或对错。",
+                  "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+                  "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+                ]
+              },
+              "joint": "knee",
+              "channels": [
+                {
+                  "channel": "left",
+                  "angle": {
+                    "min": 163.82012796448006,
+                    "max": 179.66335793078034,
+                    "mean": 171.95911083157958,
+                    "populationVariance": 21.9610918440633,
+                    "sampleCount": 101
+                  },
+                  "rom": 15.843229966300271,
+                  "velocity": {
+                    "min": -22.332133232402406,
+                    "max": 22.32861116786719,
+                    "mean": -1.4237808471225133,
+                    "populationVariance": 244.7769672110879,
+                    "sampleCount": 100
+                  },
+                  "peakAbsoluteVelocity": 22.332133232402406,
+                  "coverage": 1
+                },
+                {
+                  "channel": "right",
+                  "angle": {
+                    "min": 157.4202842929308,
+                    "max": 179.9947722190977,
+                    "mean": 169.71074611920332,
+                    "populationVariance": 47.117243915709246,
+                    "sampleCount": 101
+                  },
+                  "rom": 22.57448792616691,
+                  "velocity": {
+                    "min": -27.75626266050057,
+                    "max": 27.754249578600426,
+                    "mean": 2.5076946745725497,
+                    "populationVariance": 384.11584243865235,
+                    "sampleCount": 100
+                  },
+                  "peakAbsoluteVelocity": 27.75626266050057,
+                  "coverage": 1
+                }
+              ],
+              "units": {
+                "angle": "deg",
+                "velocity": "deg/s",
+                "angleVariance": "deg²",
+                "coordinateVariance": "normalized_coordinate²"
+              },
+              "coordinateVariance": {
+                "windows": {
+                  "min": 0.000001805129604846572,
+                  "max": 0.00006934868102660348,
+                  "mean": 0.000037317766435861014,
+                  "populationVariance": 5.465100823636785e-10,
+                  "sampleCount": 101
+                },
+                "validPointSamples": 16665,
+                "configuredWindowFrames": 5,
+                "windowInterval": [14.8, 20]
+              }
+            },
+            "comparable": true,
+            "reasons": [],
+            "differences": [
+              {
+                "channel": "left",
+                "rom": -0.030578043601991567,
+                "meanAngle": -0.6855512730137718,
+                "peakAbsoluteVelocity": -0.0017723714239252786
+              },
+              {
+                "channel": "right",
+                "rom": 0.08022301977874235,
+                "meanAngle": 2.8933499465577484,
+                "peakAbsoluteVelocity": 0.0004911657374186973
+              }
+            ],
+            "differenceDirection": "second_minus_first"
+          },
+          "quality": {
+            "evidence": {
+              "sessionId": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3",
+              "revision": 401,
+              "source": "demo",
+              "synthetic": true,
+              "parameters": {
+                "threshold": 0.5,
+                "window": 5,
+                "aspect": 1,
+                "metricVersion": "2.0"
+              },
+              "sampleCount": 101,
+              "acquisition": null,
+              "interval": [0, 5],
+              "basis": "raw",
+              "sampledRange": [0, 5],
+              "limitations": [
+                "单人单目 2D 几何投影；不代表动作质量或对错。",
+                "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+                "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+              ]
+            },
+            "detectedSamples": 101,
+            "missingSamples": 0,
+            "fullyReliableSamples": 101,
+            "effectiveRate": 1,
+            "meanConfidence": 0.9600882258643452,
+            "lowConfidenceIntervals": [],
+            "omittedIntervals": 0,
+            "maxSampleGapSeconds": 0.05000000000000071
+          },
+          "trends": [
+            "left ROM：后段较小（仅区间差异，非阶段趋势或质量判断）",
+            "right ROM：后段较大（仅区间差异，非阶段趋势或质量判断）"
+          ],
+          "missing": [
+            "0–5 s：未检测 0 个；全点不可靠 0 个；省略低置信段 0 个。",
+            "15–20 s：未检测 0 个；全点不可靠 0 个；省略低置信段 0 个。"
+          ],
+          "limitations": [
+            "单人单目 2D 几何投影；不代表动作质量或对错。",
+            "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+            "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。",
+            "ROM 至少需要两个有效角度；空值保持缺失。"
+          ]
+        }
+      },
+      "elapsedMs": 1.4161000000021886,
+      "evidenceCatalog": {
+        "version": "1.0.0",
+        "entries": [
+          {
+            "evidenceId": "5840e8ed-befd-451b-bdea-df689742be8e",
+            "path": "/handle",
+            "label": "handle",
+            "value": "436ffdee-9bd5-460f-afa0-1ca869c926f6"
+          },
+          {
+            "evidenceId": "64f79c7c-6121-4f16-b420-98b42a447fba",
+            "path": "/state",
+            "label": "state",
+            "value": "ready"
+          },
+          {
+            "evidenceId": "cec75936-2e92-4310-8111-971fb73187cd",
+            "path": "/evidence/sessionId",
+            "label": "evidence.sessionId",
+            "value": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3"
+          },
+          {
+            "evidenceId": "c395ebd7-c943-4de2-9e9a-0e20cff20ec2",
+            "path": "/evidence/revision",
+            "label": "evidence.revision",
+            "value": 401
+          },
+          {
+            "evidenceId": "2745cd3c-c6e1-4a9f-a336-a4d133291b10",
+            "path": "/evidence/source",
+            "label": "evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "8c30c29e-3881-4183-b0af-ce89e2c21329",
+            "path": "/evidence/synthetic",
+            "label": "evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "b99a573a-3294-41c2-9ed8-807da51d4e2b",
+            "path": "/evidence/sampleCount",
+            "label": "evidence.sampleCount",
+            "value": 101
+          },
+          {
+            "evidenceId": "5f398b85-6f86-4825-a368-d2bf15345194",
+            "path": "/evidence/acquisition",
+            "label": "evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "8a291ba5-8b8d-4baf-b65e-b1acb7f53960",
+            "path": "/evidence/basis",
+            "label": "evidence.basis",
+            "value": "filtered"
+          },
+          {
+            "evidenceId": "d41591f9-aa88-4cfa-83ac-d9da786e072a",
+            "path": "/facts/joint",
+            "label": "facts.joint",
+            "value": "knee"
+          },
+          {
+            "evidenceId": "006e23ce-e224-4f53-9e66-c49ed9df15ab",
+            "path": "/comparison/comparable",
+            "label": "comparison.comparable",
+            "value": true
+          },
+          {
+            "evidenceId": "a1cd4c8a-f10f-4137-89c2-0cd8861f9ff5",
+            "path": "/comparison/differenceDirection",
+            "label": "comparison.differenceDirection",
+            "value": "second_minus_first"
+          },
+          {
+            "evidenceId": "357e8ec2-0d7c-473f-9fb5-00d5633729b3",
+            "path": "/quality/detectedSamples",
+            "label": "quality.detectedSamples",
+            "value": 101
+          },
+          {
+            "evidenceId": "55bb5dd3-d66b-48e0-8740-4ff7519adec9",
+            "path": "/quality/missingSamples",
+            "label": "quality.missingSamples",
+            "value": 0
+          },
+          {
+            "evidenceId": "fc1e50f5-f698-4319-8044-b925510ebc15",
+            "path": "/quality/fullyReliableSamples",
+            "label": "quality.fullyReliableSamples",
+            "value": 101
+          },
+          {
+            "evidenceId": "e7045b20-7af3-4596-87e7-9e774efb5262",
+            "path": "/quality/effectiveRate",
+            "label": "quality.effectiveRate",
+            "value": 1
+          },
+          {
+            "evidenceId": "963ba814-3bf6-4480-b84f-1b718be3164b",
+            "path": "/quality/meanConfidence",
+            "label": "quality.meanConfidence",
+            "value": 0.9600882258643452
+          },
+          {
+            "evidenceId": "f9b59af3-d7be-432b-a1d8-dfd41e221f04",
+            "path": "/quality/omittedIntervals",
+            "label": "quality.omittedIntervals",
+            "value": 0
+          },
+          {
+            "evidenceId": "6194e0ff-8c5f-4766-b8c5-10e8cfaad69b",
+            "path": "/quality/maxSampleGapSeconds",
+            "label": "quality.maxSampleGapSeconds",
+            "value": 0.05000000000000071
+          },
+          {
+            "evidenceId": "3f5ecfc2-ce91-4fc2-9c1e-34d9eda3816a",
+            "path": "/trends/0",
+            "label": "trends.0",
+            "value": "left ROM：后段较小（仅区间差异，非阶段趋势或质量判断）"
+          },
+          {
+            "evidenceId": "94fd98f1-4741-4cf4-9f29-6776a1da43cb",
+            "path": "/trends/1",
+            "label": "trends.1",
+            "value": "right ROM：后段较大（仅区间差异，非阶段趋势或质量判断）"
+          },
+          {
+            "evidenceId": "25cd5dc9-da04-458e-af0d-6bdff56fabf4",
+            "path": "/missing/0",
+            "label": "missing.0",
+            "value": "0–5 s：未检测 0 个；全点不可靠 0 个；省略低置信段 0 个。"
+          },
+          {
+            "evidenceId": "d157128b-9eae-459f-8391-b517715f4684",
+            "path": "/missing/1",
+            "label": "missing.1",
+            "value": "15–20 s：未检测 0 个；全点不可靠 0 个；省略低置信段 0 个。"
+          },
+          {
+            "evidenceId": "a9d79ab1-056c-45f2-b43d-fd154e7cd9e1",
+            "path": "/limitations/0",
+            "label": "limitations.0",
+            "value": "单人单目 2D 几何投影；不代表动作质量或对错。"
+          },
+          {
+            "evidenceId": "f275f947-0d8d-4a52-a43f-5f40d7d8fc06",
+            "path": "/limitations/1",
+            "label": "limitations.1",
+            "value": "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。"
+          },
+          {
+            "evidenceId": "533a4f85-d0ef-40aa-abb3-edac2cf1a651",
+            "path": "/limitations/2",
+            "label": "limitations.2",
+            "value": "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+          },
+          {
+            "evidenceId": "b05ecd0b-c9e7-48a6-9d6a-c0981fde7c1d",
+            "path": "/limitations/3",
+            "label": "limitations.3",
+            "value": "ROM 至少需要两个有效角度；空值保持缺失。"
+          },
+          {
+            "evidenceId": "670cce37-a56e-4d89-adc8-6b57a34f9ed2",
+            "path": "/evidence/parameters/threshold",
+            "label": "evidence.parameters.threshold",
+            "value": 0.5
+          },
+          {
+            "evidenceId": "349fb7d3-ae65-46ad-ab3f-8d888c39ff2e",
+            "path": "/evidence/parameters/window",
+            "label": "evidence.parameters.window",
+            "value": 5
+          },
+          {
+            "evidenceId": "49cdff4d-3265-4d10-a244-bef375ae4cc5",
+            "path": "/evidence/parameters/aspect",
+            "label": "evidence.parameters.aspect",
+            "value": 1
+          },
+          {
+            "evidenceId": "815934ce-68e5-4994-b9a4-20386a5fb61f",
+            "path": "/evidence/parameters/metricVersion",
+            "label": "evidence.parameters.metricVersion",
+            "value": "2.0"
+          },
+          {
+            "evidenceId": "0b975679-8f16-4f23-8550-0d4a88c4288a",
+            "path": "/evidence/interval/0",
+            "label": "evidence.interval.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "b18094f2-a063-4668-91bb-0335c4623393",
+            "path": "/evidence/interval/1",
+            "label": "evidence.interval.1",
+            "value": 5
+          },
+          {
+            "evidenceId": "82fca824-920b-4200-8d9e-0bf2fc64b9a8",
+            "path": "/evidence/sampledRange/0",
+            "label": "evidence.sampledRange.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "e023096b-4da4-414b-8ef0-ca3f6cdd338e",
+            "path": "/evidence/sampledRange/1",
+            "label": "evidence.sampledRange.1",
+            "value": 5
+          },
+          {
+            "evidenceId": "2ee7198f-c29a-42ad-ae35-0d6a0d7f74a0",
+            "path": "/evidence/limitations/0",
+            "label": "evidence.limitations.0",
+            "value": "单人单目 2D 几何投影；不代表动作质量或对错。"
+          },
+          {
+            "evidenceId": "fd79da40-5e65-4bfa-9721-4aef60c2f758",
+            "path": "/evidence/limitations/1",
+            "label": "evidence.limitations.1",
+            "value": "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。"
+          },
+          {
+            "evidenceId": "98aebc8a-4152-47dc-9bb8-39e919abb7ff",
+            "path": "/evidence/limitations/2",
+            "label": "evidence.limitations.2",
+            "value": "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+          },
+          {
+            "evidenceId": "f9513c07-5766-4c60-8386-2061627ea95a",
+            "path": "/facts/evidence/sessionId",
+            "label": "facts.evidence.sessionId",
+            "value": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3"
+          },
+          {
+            "evidenceId": "8f2f318e-d962-4f68-a7e7-00a55fc0bf9f",
+            "path": "/facts/evidence/revision",
+            "label": "facts.evidence.revision",
+            "value": 401
+          },
+          {
+            "evidenceId": "7232a227-ec5c-423f-8f9e-5c264ad7e295",
+            "path": "/facts/evidence/source",
+            "label": "facts.evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "bff83f44-3a2d-479d-b1ba-12e6b28bdbcc",
+            "path": "/facts/evidence/synthetic",
+            "label": "facts.evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "5d0be68e-802a-47dd-86e3-4e657dc2925c",
+            "path": "/facts/evidence/sampleCount",
+            "label": "facts.evidence.sampleCount",
+            "value": 101
+          },
+          {
+            "evidenceId": "9d92a210-547b-4091-88cb-448001839218",
+            "path": "/facts/evidence/acquisition",
+            "label": "facts.evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "974f5b0f-86b9-41ad-85d3-111447c1b8f3",
+            "path": "/facts/evidence/basis",
+            "label": "facts.evidence.basis",
+            "value": "filtered"
+          },
+          {
+            "evidenceId": "9db4f285-4b70-46bb-9da7-e72919abb55b",
+            "path": "/facts/units/angle",
+            "label": "facts.units.angle",
+            "value": "deg"
+          },
+          {
+            "evidenceId": "bd015be7-f101-46d1-9e4e-480e054f5206",
+            "path": "/facts/units/velocity",
+            "label": "facts.units.velocity",
+            "value": "deg/s"
+          },
+          {
+            "evidenceId": "d264ed39-bec3-438a-be36-657900a27ce1",
+            "path": "/facts/units/angleVariance",
+            "label": "facts.units.angleVariance",
+            "value": "deg²"
+          },
+          {
+            "evidenceId": "63cc9b68-6d75-4d7f-b6d5-8a932f074d95",
+            "path": "/facts/units/coordinateVariance",
+            "label": "facts.units.coordinateVariance",
+            "value": "normalized_coordinate²"
+          },
+          {
+            "evidenceId": "0a2d5d03-16a4-4e05-8782-484189e1b948",
+            "path": "/facts/coordinateVariance/validPointSamples",
+            "label": "facts.coordinateVariance.validPointSamples",
+            "value": 16302
+          },
+          {
+            "evidenceId": "35fa4807-50a0-413f-a861-dd45a990ea05",
+            "path": "/facts/coordinateVariance/configuredWindowFrames",
+            "label": "facts.coordinateVariance.configuredWindowFrames",
+            "value": 5
+          },
+          {
+            "evidenceId": "9091883d-b632-4cb1-b8fd-4d7ee720ba1e",
+            "path": "/comparison/first/joint",
+            "label": "comparison.first.joint",
+            "value": "knee"
+          },
+          {
+            "evidenceId": "90f5372c-4417-4e89-ae72-acbe0fe53c81",
+            "path": "/comparison/second/joint",
+            "label": "comparison.second.joint",
+            "value": "knee"
+          },
+          {
+            "evidenceId": "0403a22f-0fd1-4d72-8f8e-cee98847c8a6",
+            "path": "/quality/evidence/sessionId",
+            "label": "quality.evidence.sessionId",
+            "value": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3"
+          },
+          {
+            "evidenceId": "f5989bea-b0ce-47eb-afb5-281eef2b633f",
+            "path": "/quality/evidence/revision",
+            "label": "quality.evidence.revision",
+            "value": 401
+          },
+          {
+            "evidenceId": "4f637939-aee5-4626-9b90-6068b5d99694",
+            "path": "/quality/evidence/source",
+            "label": "quality.evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "8cbe06b4-5778-4d70-bb0a-b5b7e8e1f8c4",
+            "path": "/quality/evidence/synthetic",
+            "label": "quality.evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "992baabc-7dee-4035-92fd-d31d8d37e40b",
+            "path": "/quality/evidence/sampleCount",
+            "label": "quality.evidence.sampleCount",
+            "value": 101
+          },
+          {
+            "evidenceId": "3b1fdf11-7e92-4e31-b438-3f328eca677b",
+            "path": "/quality/evidence/acquisition",
+            "label": "quality.evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "6baf04b7-b0ce-44bc-973d-fdef5b4a0d4b",
+            "path": "/quality/evidence/basis",
+            "label": "quality.evidence.basis",
+            "value": "raw"
+          },
+          {
+            "evidenceId": "2adc0831-4884-4499-98be-4d636e05d372",
+            "path": "/facts/evidence/parameters/threshold",
+            "label": "facts.evidence.parameters.threshold",
+            "value": 0.5
+          },
+          {
+            "evidenceId": "72ebdb3c-29fd-46c8-9251-1d89a3fa5e92",
+            "path": "/facts/evidence/parameters/window",
+            "label": "facts.evidence.parameters.window",
+            "value": 5
+          },
+          {
+            "evidenceId": "8ad77297-7486-499b-8918-febb3b39e636",
+            "path": "/facts/evidence/parameters/aspect",
+            "label": "facts.evidence.parameters.aspect",
+            "value": 1
+          },
+          {
+            "evidenceId": "ce8ab870-b2e1-4c7a-bd60-a20d1cbd5f66",
+            "path": "/facts/evidence/parameters/metricVersion",
+            "label": "facts.evidence.parameters.metricVersion",
+            "value": "2.0"
+          },
+          {
+            "evidenceId": "fb23e116-cdd3-4ccc-8f96-151b6fb8cd2f",
+            "path": "/facts/evidence/interval/0",
+            "label": "facts.evidence.interval.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "65b3ac2e-fb0b-41fc-a976-7333488d9edc",
+            "path": "/facts/evidence/interval/1",
+            "label": "facts.evidence.interval.1",
+            "value": 5
+          },
+          {
+            "evidenceId": "1e71dc33-a656-4e53-8c31-42997ae29fb1",
+            "path": "/facts/evidence/sampledRange/0",
+            "label": "facts.evidence.sampledRange.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "120124f1-c66d-46b7-9f78-8382e3295041",
+            "path": "/facts/evidence/sampledRange/1",
+            "label": "facts.evidence.sampledRange.1",
+            "value": 5
+          },
+          {
+            "evidenceId": "21f562ea-70a5-4f52-8590-f50ba2fb5ee0",
+            "path": "/facts/evidence/limitations/0",
+            "label": "facts.evidence.limitations.0",
+            "value": "单人单目 2D 几何投影；不代表动作质量或对错。"
+          },
+          {
+            "evidenceId": "c6b7234d-0498-4fab-9283-82972bead3fe",
+            "path": "/facts/evidence/limitations/1",
+            "label": "facts.evidence.limitations.1",
+            "value": "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。"
+          },
+          {
+            "evidenceId": "f45682ad-3018-4ee4-b022-e48c5b1223f1",
+            "path": "/facts/evidence/limitations/2",
+            "label": "facts.evidence.limitations.2",
+            "value": "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+          },
+          {
+            "evidenceId": "fb63274d-c3ff-4ad3-b37d-ea0f1e8661b1",
+            "path": "/facts/channels/0/channel",
+            "label": "facts.channels.0.channel",
+            "value": "left"
+          },
+          {
+            "evidenceId": "67344243-f13a-4717-bacf-43bc784e81bd",
+            "path": "/facts/channels/0/rom",
+            "label": "facts.channels.0.rom",
+            "value": 15.873808009902262
+          },
+          {
+            "evidenceId": "e75de348-a806-4b61-a20e-8f1277e3d78c",
+            "path": "/facts/channels/0/peakAbsoluteVelocity",
+            "label": "facts.channels.0.peakAbsoluteVelocity",
+            "value": 22.33390560382633
+          },
+          {
+            "evidenceId": "9d58517a-c492-4eb0-b1a3-c682d8b4b9b5",
+            "path": "/facts/channels/0/coverage",
+            "label": "facts.channels.0.coverage",
+            "value": 1
+          },
+          {
+            "evidenceId": "5761ae96-2eed-45af-85b2-a96d7a075a02",
+            "path": "/facts/channels/1/channel",
+            "label": "facts.channels.1.channel",
+            "value": "right"
+          },
+          {
+            "evidenceId": "a5fa8215-b388-4034-beea-9302295ce186",
+            "path": "/facts/channels/1/rom",
+            "label": "facts.channels.1.rom",
+            "value": 22.494264906388167
+          },
+          {
+            "evidenceId": "f837ad65-8315-4dce-aa09-f3bffaf4efc6",
+            "path": "/facts/channels/1/peakAbsoluteVelocity",
+            "label": "facts.channels.1.peakAbsoluteVelocity",
+            "value": 27.755771494763152
+          },
+          {
+            "evidenceId": "0816f6cb-fc78-4b03-a062-23030c86bea3",
+            "path": "/facts/channels/1/coverage",
+            "label": "facts.channels.1.coverage",
+            "value": 1
+          },
+          {
+            "evidenceId": "3d77ef8c-281f-43e8-9b67-42c82887a256",
+            "path": "/facts/coordinateVariance/windows/min",
+            "label": "facts.coordinateVariance.windows.min",
+            "value": 9.842157613631797e-7
+          },
+          {
+            "evidenceId": "f8223d2f-6412-4a47-ac92-9dfdf975462f",
+            "path": "/facts/coordinateVariance/windows/max",
+            "label": "facts.coordinateVariance.windows.max",
+            "value": 0.00004268138509992521
+          },
+          {
+            "evidenceId": "e35ee8e5-94b4-4b06-8716-b4f0372f1a71",
+            "path": "/facts/coordinateVariance/windows/mean",
+            "label": "facts.coordinateVariance.windows.mean",
+            "value": 0.000020598676191305008
+          },
+          {
+            "evidenceId": "3990e005-56fa-4727-a1cc-4bedf38f05c1",
+            "path": "/facts/coordinateVariance/windows/populationVariance",
+            "label": "facts.coordinateVariance.windows.populationVariance",
+            "value": 1.8808893995830751e-10
+          },
+          {
+            "evidenceId": "2b8b3d14-5c08-4f94-8845-5e7c9b8bb118",
+            "path": "/facts/coordinateVariance/windows/sampleCount",
+            "label": "facts.coordinateVariance.windows.sampleCount",
+            "value": 100
+          },
+          {
+            "evidenceId": "5eac5194-2a97-46db-9d12-12607f5090e3",
+            "path": "/facts/coordinateVariance/windowInterval/0",
+            "label": "facts.coordinateVariance.windowInterval.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "b9d879b3-3fe7-4ee3-8ea1-798a6dd8ab11",
+            "path": "/facts/coordinateVariance/windowInterval/1",
+            "label": "facts.coordinateVariance.windowInterval.1",
+            "value": 5
+          },
+          {
+            "evidenceId": "82225c0b-72b9-4424-a38f-ff80467750aa",
+            "path": "/comparison/first/evidence/sessionId",
+            "label": "comparison.first.evidence.sessionId",
+            "value": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3"
+          },
+          {
+            "evidenceId": "73f853ce-6392-4f2d-868c-79b08969db27",
+            "path": "/comparison/first/evidence/revision",
+            "label": "comparison.first.evidence.revision",
+            "value": 401
+          },
+          {
+            "evidenceId": "a923502e-dd94-4109-a2a3-3fbdd24f5cc6",
+            "path": "/comparison/first/evidence/source",
+            "label": "comparison.first.evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "521e5046-80e3-434d-8661-cc8291dd3192",
+            "path": "/comparison/first/evidence/synthetic",
+            "label": "comparison.first.evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "edb9ce8d-48f1-43b3-85c9-c566ae1c149d",
+            "path": "/comparison/first/evidence/sampleCount",
+            "label": "comparison.first.evidence.sampleCount",
+            "value": 101
+          },
+          {
+            "evidenceId": "4a430c73-cf80-42d6-889e-178b4ad7516a",
+            "path": "/comparison/first/evidence/acquisition",
+            "label": "comparison.first.evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "00dfa65c-d763-4c4e-8771-0b7d4277b6d5",
+            "path": "/comparison/first/evidence/basis",
+            "label": "comparison.first.evidence.basis",
+            "value": "filtered"
+          },
+          {
+            "evidenceId": "29b81754-d618-4dde-9e7f-e7120cd55af5",
+            "path": "/comparison/first/units/angle",
+            "label": "comparison.first.units.angle",
+            "value": "deg"
+          },
+          {
+            "evidenceId": "3dca9320-716d-4a4d-9077-6c3545bae847",
+            "path": "/comparison/first/units/velocity",
+            "label": "comparison.first.units.velocity",
+            "value": "deg/s"
+          },
+          {
+            "evidenceId": "b81be387-1a0b-4922-82ad-feefaa0dfd18",
+            "path": "/comparison/first/units/angleVariance",
+            "label": "comparison.first.units.angleVariance",
+            "value": "deg²"
+          },
+          {
+            "evidenceId": "380679f4-8980-43a2-8ba3-3892cfc8aa5a",
+            "path": "/comparison/first/units/coordinateVariance",
+            "label": "comparison.first.units.coordinateVariance",
+            "value": "normalized_coordinate²"
+          },
+          {
+            "evidenceId": "303f244d-dd47-4598-af76-f9c4e9e63e5c",
+            "path": "/comparison/first/coordinateVariance/validPointSamples",
+            "label": "comparison.first.coordinateVariance.validPointSamples",
+            "value": 16302
+          },
+          {
+            "evidenceId": "3e13cc80-1765-446c-8e02-99063e131a6e",
+            "path": "/comparison/first/coordinateVariance/configuredWindowFrames",
+            "label": "comparison.first.coordinateVariance.configuredWindowFrames",
+            "value": 5
+          },
+          {
+            "evidenceId": "cd14ffd0-c568-4066-87a3-16c8269353c3",
+            "path": "/comparison/second/evidence/sessionId",
+            "label": "comparison.second.evidence.sessionId",
+            "value": "08b9bcbf-ee71-4ba8-ab29-c11d4f651ce3"
+          },
+          {
+            "evidenceId": "039d5b77-9d72-4ae4-b3af-484bcd341f28",
+            "path": "/comparison/second/evidence/revision",
+            "label": "comparison.second.evidence.revision",
+            "value": 401
+          },
+          {
+            "evidenceId": "38770899-1462-4b41-85e8-89e5201946e2",
+            "path": "/comparison/second/evidence/source",
+            "label": "comparison.second.evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "b87eb4f5-1c33-42c9-8fd9-0d310ab631ed",
+            "path": "/comparison/second/evidence/synthetic",
+            "label": "comparison.second.evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "2d65ce9f-52ec-4f86-bbea-a521cc45acfd",
+            "path": "/comparison/second/evidence/sampleCount",
+            "label": "comparison.second.evidence.sampleCount",
+            "value": 101
+          },
+          {
+            "evidenceId": "6ac3f9ee-82b7-410d-aae1-1250bdb737ec",
+            "path": "/comparison/second/evidence/acquisition",
+            "label": "comparison.second.evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "e6257b87-4aeb-4b07-920d-0b11b8a1096b",
+            "path": "/comparison/second/evidence/basis",
+            "label": "comparison.second.evidence.basis",
+            "value": "filtered"
+          },
+          {
+            "evidenceId": "018d93ef-b40c-4757-bf91-08e91fde61e8",
+            "path": "/comparison/second/units/angle",
+            "label": "comparison.second.units.angle",
+            "value": "deg"
+          },
+          {
+            "evidenceId": "57c12e48-fe72-4cfc-ae6f-5ea9fd2a31a3",
+            "path": "/comparison/second/units/velocity",
+            "label": "comparison.second.units.velocity",
+            "value": "deg/s"
+          },
+          {
+            "evidenceId": "ee4c0055-6eaa-4ac6-ad52-7029ad944b9a",
+            "path": "/comparison/second/units/angleVariance",
+            "label": "comparison.second.units.angleVariance",
+            "value": "deg²"
+          },
+          {
+            "evidenceId": "4d8e729b-5f9d-42d5-835d-f689de67c83b",
+            "path": "/comparison/second/units/coordinateVariance",
+            "label": "comparison.second.units.coordinateVariance",
+            "value": "normalized_coordinate²"
+          },
+          {
+            "evidenceId": "b635c2be-db7f-4d2f-8749-88d492c559b8",
+            "path": "/comparison/second/coordinateVariance/validPointSamples",
+            "label": "comparison.second.coordinateVariance.validPointSamples",
+            "value": 16665
+          },
+          {
+            "evidenceId": "e4b532c5-6e39-44dc-ab88-4ef8783dee4c",
+            "path": "/comparison/second/coordinateVariance/configuredWindowFrames",
+            "label": "comparison.second.coordinateVariance.configuredWindowFrames",
+            "value": 5
+          },
+          {
+            "evidenceId": "e9290f98-871a-4c08-b96f-1774b2d2e0d4",
+            "path": "/comparison/differences/0/channel",
+            "label": "comparison.differences.0.channel",
+            "value": "left"
+          },
+          {
+            "evidenceId": "76920d4f-155b-40ee-bd75-4c3096309215",
+            "path": "/comparison/differences/0/rom",
+            "label": "comparison.differences.0.rom",
+            "value": -0.030578043601991567
+          },
+          {
+            "evidenceId": "93dd250e-5885-4713-b4a0-9e3dba149f33",
+            "path": "/comparison/differences/0/meanAngle",
+            "label": "comparison.differences.0.meanAngle",
+            "value": -0.6855512730137718
+          },
+          {
+            "evidenceId": "783b2248-e42a-4d64-a5f9-c9cf80050962",
+            "path": "/comparison/differences/0/peakAbsoluteVelocity",
+            "label": "comparison.differences.0.peakAbsoluteVelocity",
+            "value": -0.0017723714239252786
+          },
+          {
+            "evidenceId": "ffca5ff5-632f-496c-b935-914665f8f980",
+            "path": "/comparison/differences/1/channel",
+            "label": "comparison.differences.1.channel",
+            "value": "right"
+          },
+          {
+            "evidenceId": "1ee36c8c-f4b4-495c-b136-da3a7d2a4fa6",
+            "path": "/comparison/differences/1/rom",
+            "label": "comparison.differences.1.rom",
+            "value": 0.08022301977874235
+          },
+          {
+            "evidenceId": "be567ffa-9914-45de-94d2-9419997a6b3b",
+            "path": "/comparison/differences/1/meanAngle",
+            "label": "comparison.differences.1.meanAngle",
+            "value": 2.8933499465577484
+          },
+          {
+            "evidenceId": "e1ba091d-6a62-4d12-9fb9-ba7bb6d1a7d3",
+            "path": "/comparison/differences/1/peakAbsoluteVelocity",
+            "label": "comparison.differences.1.peakAbsoluteVelocity",
+            "value": 0.0004911657374186973
+          },
+          {
+            "evidenceId": "61c8662e-e96a-4e39-a4de-70586b5ba51a",
+            "path": "/quality/evidence/parameters/threshold",
+            "label": "quality.evidence.parameters.threshold",
+            "value": 0.5
+          },
+          {
+            "evidenceId": "1351e05a-6e4a-48f9-b832-21ecd3a530cc",
+            "path": "/quality/evidence/parameters/window",
+            "label": "quality.evidence.parameters.window",
+            "value": 5
+          },
+          {
+            "evidenceId": "6118ceec-4da9-49b0-8841-42383fe91282",
+            "path": "/quality/evidence/parameters/aspect",
+            "label": "quality.evidence.parameters.aspect",
+            "value": 1
+          },
+          {
+            "evidenceId": "673efe5c-76d3-483b-a37b-0269e8226551",
+            "path": "/quality/evidence/parameters/metricVersion",
+            "label": "quality.evidence.parameters.metricVersion",
+            "value": "2.0"
+          },
+          {
+            "evidenceId": "aa2a162a-ee87-4e6b-ac54-6e7a77351c1d",
+            "path": "/quality/evidence/interval/0",
+            "label": "quality.evidence.interval.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "9c57b833-c386-4524-a025-11abe5a5d9bf",
+            "path": "/quality/evidence/interval/1",
+            "label": "quality.evidence.interval.1",
+            "value": 5
+          },
+          {
+            "evidenceId": "678e5f97-86da-4483-a3da-aa8aee1cad37",
+            "path": "/quality/evidence/sampledRange/0",
+            "label": "quality.evidence.sampledRange.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "30731818-ba8b-4e07-ab27-ab4f65415b52",
+            "path": "/quality/evidence/sampledRange/1",
+            "label": "quality.evidence.sampledRange.1",
+            "value": 5
+          }
+        ],
+        "truncated": true
+      }
+    }
+  },
+  "report": {
+    "goal": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+    "spec": {
+      "goalTypes": ["report", "export"],
+      "joint": "knee",
+      "channels": ["right"],
+      "basis": "filtered",
+      "interval": [0, 17],
+      "comparison": {
+        "direction": "second_minus_first",
+        "second": [12, 17]
+      },
+      "metrics": ["rom"],
+      "time": null,
+      "deliveries": {
+        "export": {
+          "format": "csv",
+          "interval": [0, 17]
+        },
+        "report": true,
+        "view": null
+      },
+      "sources": [
+        {
+          "field": "goalTypes",
+          "origin": "explicit",
+          "text": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+          "fromRunId": null
+        },
+        {
+          "field": "joint",
+          "origin": "explicit",
+          "text": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+          "fromRunId": null
+        },
+        {
+          "field": "channels",
+          "origin": "explicit",
+          "text": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+          "fromRunId": null
+        },
+        {
+          "field": "basis",
+          "origin": "explicit",
+          "text": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+          "fromRunId": null
+        },
+        {
+          "field": "interval",
+          "origin": "explicit",
+          "text": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+          "fromRunId": null
+        },
+        {
+          "field": "comparison",
+          "origin": "explicit",
+          "text": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+          "fromRunId": null
+        },
+        {
+          "field": "metrics",
+          "origin": "explicit",
+          "text": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+          "fromRunId": null
+        },
+        {
+          "field": "deliveries",
+          "origin": "explicit",
+          "text": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+          "fromRunId": null
+        }
+      ],
+      "unresolved": []
+    },
+    "call": {
+      "id": "a74697f0-c6",
+      "name": "prepare_report",
+      "arguments": {
+        "sessionId": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d",
+        "revision": 416,
+        "joint": "knee",
+        "channels": ["right"],
+        "basis": "filtered",
+        "interval": [0, 17],
+        "comparison": [12, 17]
+      },
+      "modelArguments": {
+        "sessionId": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d",
+        "revision": 416,
+        "joint": "knee",
+        "channels": ["right"],
+        "basis": "filtered",
+        "interval": [0, 17],
+        "comparison": [12, 17],
+        "taskRef": "f94e2de8-f7ab-4f3a-ba88-ebba8dec6d0d"
+      },
+      "output": {
+        "ok": true,
+        "tool": "prepare_report",
+        "result": {
+          "handle": "727ce47f-848b-48f8-a494-1fe17122dc3a",
+          "evidence": {
+            "sessionId": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d",
+            "revision": 416,
+            "source": "demo",
+            "synthetic": true,
+            "parameters": {
+              "threshold": 0.5,
+              "window": 5,
+              "aspect": 1.4406779661016949,
+              "metricVersion": "2.0"
+            },
+            "sampleCount": 334,
+            "acquisition": null,
+            "interval": [0, 17],
+            "basis": "filtered",
+            "sampledRange": [0, 16.966999999999796],
+            "limitations": [
+              "单人单目 2D 几何投影；不代表动作质量或对错。",
+              "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+              "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+            ]
+          },
+          "state": "ready",
+          "facts": {
+            "evidence": {
+              "sessionId": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d",
+              "revision": 416,
+              "source": "demo",
+              "synthetic": true,
+              "parameters": {
+                "threshold": 0.5,
+                "window": 5,
+                "aspect": 1.4406779661016949,
+                "metricVersion": "2.0"
+              },
+              "sampleCount": 334,
+              "acquisition": null,
+              "interval": [0, 17],
+              "basis": "filtered",
+              "sampledRange": [0, 16.966999999999796],
+              "limitations": [
+                "单人单目 2D 几何投影；不代表动作质量或对错。",
+                "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+                "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+              ]
+            },
+            "joint": "knee",
+            "channels": [
+              {
+                "channel": "right",
+                "angle": {
+                  "min": 150.2898273861692,
+                  "max": 179.99595831942113,
+                  "mean": 165.44127665528714,
+                  "populationVariance": 89.97801043577124,
+                  "sampleCount": 334
+                },
+                "rom": 29.706130933251927,
+                "velocity": {
+                  "min": -38.222712949882435,
+                  "max": 39.886953201209124,
+                  "mean": 0.8390742179399856,
+                  "populationVariance": 625.6747564270458,
+                  "sampleCount": 333
+                },
+                "peakAbsoluteVelocity": 39.886953201209124,
+                "coverage": 1
+              }
+            ],
+            "units": {
+              "angle": "deg",
+              "velocity": "deg/s",
+              "angleVariance": "deg²",
+              "coordinateVariance": "normalized_coordinate²"
+            },
+            "coordinateVariance": {
+              "windows": {
+                "min": 9.842157613631784e-7,
+                "max": 0.0000902683381728246,
+                "mean": 0.000028820592330738537,
+                "populationVariance": 4.291660985558458e-10,
+                "sampleCount": 333
+              },
+              "validPointSamples": 54747,
+              "configuredWindowFrames": 5,
+              "windowInterval": [0, 16.966999999999796]
+            }
+          },
+          "comparison": {
+            "first": {
+              "evidence": {
+                "sessionId": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d",
+                "revision": 416,
+                "source": "demo",
+                "synthetic": true,
+                "parameters": {
+                  "threshold": 0.5,
+                  "window": 5,
+                  "aspect": 1.4406779661016949,
+                  "metricVersion": "2.0"
+                },
+                "sampleCount": 334,
+                "acquisition": null,
+                "interval": [0, 17],
+                "basis": "filtered",
+                "sampledRange": [0, 16.966999999999796],
+                "limitations": [
+                  "单人单目 2D 几何投影；不代表动作质量或对错。",
+                  "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+                  "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+                ]
+              },
+              "joint": "knee",
+              "channels": [
+                {
+                  "channel": "right",
+                  "angle": {
+                    "min": 150.2898273861692,
+                    "max": 179.99595831942113,
+                    "mean": 165.44127665528714,
+                    "populationVariance": 89.97801043577124,
+                    "sampleCount": 334
+                  },
+                  "rom": 29.706130933251927,
+                  "velocity": {
+                    "min": -38.222712949882435,
+                    "max": 39.886953201209124,
+                    "mean": 0.8390742179399856,
+                    "populationVariance": 625.6747564270458,
+                    "sampleCount": 333
+                  },
+                  "peakAbsoluteVelocity": 39.886953201209124,
+                  "coverage": 1
+                }
+              ],
+              "units": {
+                "angle": "deg",
+                "velocity": "deg/s",
+                "angleVariance": "deg²",
+                "coordinateVariance": "normalized_coordinate²"
+              },
+              "coordinateVariance": {
+                "windows": {
+                  "min": 9.842157613631784e-7,
+                  "max": 0.0000902683381728246,
+                  "mean": 0.000028820592330738537,
+                  "populationVariance": 4.291660985558458e-10,
+                  "sampleCount": 333
+                },
+                "validPointSamples": 54747,
+                "configuredWindowFrames": 5,
+                "windowInterval": [0, 16.966999999999796]
+              }
+            },
+            "second": {
+              "evidence": {
+                "sessionId": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d",
+                "revision": 416,
+                "source": "demo",
+                "synthetic": true,
+                "parameters": {
+                  "threshold": 0.5,
+                  "window": 5,
+                  "aspect": 1.4406779661016949,
+                  "metricVersion": "2.0"
+                },
+                "sampleCount": 97,
+                "acquisition": null,
+                "interval": [12, 17],
+                "basis": "filtered",
+                "sampledRange": [12.033499999999881, 16.966999999999796],
+                "limitations": [
+                  "单人单目 2D 几何投影；不代表动作质量或对错。",
+                  "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+                  "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+                ]
+              },
+              "joint": "knee",
+              "channels": [
+                {
+                  "channel": "right",
+                  "angle": {
+                    "min": 150.29922256930323,
+                    "max": 179.99595831942113,
+                    "mean": 167.82087536897166,
+                    "populationVariance": 77.19422953871536,
+                    "sampleCount": 97
+                  },
+                  "rom": 29.69673575011791,
+                  "velocity": {
+                    "min": -38.222712949882435,
+                    "max": 36.97955457460016,
+                    "mean": 1.8927689327948236,
+                    "populationVariance": 614.892873682835,
+                    "sampleCount": 96
+                  },
+                  "peakAbsoluteVelocity": 38.222712949882435,
+                  "coverage": 1
+                }
+              ],
+              "units": {
+                "angle": "deg",
+                "velocity": "deg/s",
+                "angleVariance": "deg²",
+                "coordinateVariance": "normalized_coordinate²"
+              },
+              "coordinateVariance": {
+                "windows": {
+                  "min": 0.0000019333670419143667,
+                  "max": 0.0000746201883165614,
+                  "mean": 0.00003546305713405016,
+                  "populationVariance": 6.077039977089232e-10,
+                  "sampleCount": 97
+                },
+                "validPointSamples": 16005,
+                "configuredWindowFrames": 5,
+                "windowInterval": [11.83339999999989, 16.966999999999796]
+              }
+            },
+            "comparable": false,
+            "reasons": ["区间时长不同", "区间重叠，不能作为独立片段"],
+            "differences": [
+              {
+                "channel": "right",
+                "rom": -0.00939518313401777,
+                "meanAngle": 2.3795987136845156,
+                "peakAbsoluteVelocity": -1.6642402513266887
+              }
+            ],
+            "differenceDirection": "second_minus_first"
+          },
+          "quality": {
+            "evidence": {
+              "sessionId": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d",
+              "revision": 416,
+              "source": "demo",
+              "synthetic": true,
+              "parameters": {
+                "threshold": 0.5,
+                "window": 5,
+                "aspect": 1.4406779661016949,
+                "metricVersion": "2.0"
+              },
+              "sampleCount": 334,
+              "acquisition": null,
+              "interval": [0, 17],
+              "basis": "raw",
+              "sampledRange": [0, 16.966999999999796],
+              "limitations": [
+                "单人单目 2D 几何投影；不代表动作质量或对错。",
+                "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+                "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+              ]
+            },
+            "detectedSamples": 334,
+            "missingSamples": 0,
+            "fullyReliableSamples": 334,
+            "effectiveRate": 1,
+            "meanConfidence": 0.9600596950032877,
+            "lowConfidenceIntervals": [],
+            "omittedIntervals": 0,
+            "maxSampleGapSeconds": 0.15000000000000036
+          },
+          "trends": ["right ROM：后段较小（仅区间差异，非阶段趋势或质量判断）"],
+          "missing": [
+            "0–17 s：未检测 0 个；全点不可靠 0 个；省略低置信段 0 个。",
+            "12–17 s：未检测 0 个；全点不可靠 0 个；省略低置信段 0 个。"
+          ],
+          "limitations": [
+            "单人单目 2D 几何投影；不代表动作质量或对错。",
+            "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。",
+            "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。",
+            "区间时长不同",
+            "区间重叠，不能作为独立片段",
+            "ROM 至少需要两个有效角度；空值保持缺失。"
+          ]
+        }
+      },
+      "elapsedMs": 3.299999952316284,
+      "evidenceCatalog": {
+        "version": "1.0.0",
+        "entries": [
+          {
+            "evidenceId": "768e9f35-7b2a-4bc0-be02-97bee55d038d",
+            "path": "/handle",
+            "label": "handle",
+            "value": "727ce47f-848b-48f8-a494-1fe17122dc3a"
+          },
+          {
+            "evidenceId": "ae7ee08c-ec5a-41ce-ac2a-39b53476588a",
+            "path": "/state",
+            "label": "state",
+            "value": "ready"
+          },
+          {
+            "evidenceId": "903b1756-75fd-4c03-88f9-ad9e08b2d785",
+            "path": "/evidence/sessionId",
+            "label": "evidence.sessionId",
+            "value": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d"
+          },
+          {
+            "evidenceId": "2bbfe85f-70d6-4d71-a66e-e82cd371bace",
+            "path": "/evidence/revision",
+            "label": "evidence.revision",
+            "value": 416
+          },
+          {
+            "evidenceId": "f1006bdd-d284-4b4e-a403-8399545711db",
+            "path": "/evidence/source",
+            "label": "evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "8be4b0a2-9d5f-463e-90dd-84734b00d20d",
+            "path": "/evidence/synthetic",
+            "label": "evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "0b489e10-ff15-4791-b430-9c1f1576b48e",
+            "path": "/evidence/sampleCount",
+            "label": "evidence.sampleCount",
+            "value": 334
+          },
+          {
+            "evidenceId": "fb3f34ca-eea9-4d37-ac4d-7892149417f5",
+            "path": "/evidence/acquisition",
+            "label": "evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "291dd0b7-c6a1-4e44-91d4-553358dac118",
+            "path": "/evidence/basis",
+            "label": "evidence.basis",
+            "value": "filtered"
+          },
+          {
+            "evidenceId": "a1816918-4290-4edd-87db-66dc01a55b95",
+            "path": "/facts/joint",
+            "label": "facts.joint",
+            "value": "knee"
+          },
+          {
+            "evidenceId": "5d1ffc4e-5a1f-415a-8b7c-ecc370b38136",
+            "path": "/comparison/comparable",
+            "label": "comparison.comparable",
+            "value": false
+          },
+          {
+            "evidenceId": "2b4c0bfa-3177-4303-a53f-e0fddecd661c",
+            "path": "/comparison/differenceDirection",
+            "label": "comparison.differenceDirection",
+            "value": "second_minus_first"
+          },
+          {
+            "evidenceId": "18a5d617-b54a-4067-8639-b8d63bc9af71",
+            "path": "/quality/detectedSamples",
+            "label": "quality.detectedSamples",
+            "value": 334
+          },
+          {
+            "evidenceId": "f1620b8e-a315-4db8-b74c-7b02efefa635",
+            "path": "/quality/missingSamples",
+            "label": "quality.missingSamples",
+            "value": 0
+          },
+          {
+            "evidenceId": "4dbff052-04d9-4a23-bc72-3f652f3104a2",
+            "path": "/quality/fullyReliableSamples",
+            "label": "quality.fullyReliableSamples",
+            "value": 334
+          },
+          {
+            "evidenceId": "c32c26db-de70-4ed4-b70d-5a39d4dcbaa1",
+            "path": "/quality/effectiveRate",
+            "label": "quality.effectiveRate",
+            "value": 1
+          },
+          {
+            "evidenceId": "6df4643e-f525-4acb-bf6c-6bea9f11c64d",
+            "path": "/quality/meanConfidence",
+            "label": "quality.meanConfidence",
+            "value": 0.9600596950032877
+          },
+          {
+            "evidenceId": "75a8c37a-8ac7-4b98-a468-117f38a7a4bb",
+            "path": "/quality/omittedIntervals",
+            "label": "quality.omittedIntervals",
+            "value": 0
+          },
+          {
+            "evidenceId": "1c4a70eb-5352-4afa-8517-8172618eb00b",
+            "path": "/quality/maxSampleGapSeconds",
+            "label": "quality.maxSampleGapSeconds",
+            "value": 0.15000000000000036
+          },
+          {
+            "evidenceId": "9784f2ee-f7f9-4977-a87b-90e715520ee5",
+            "path": "/trends/0",
+            "label": "trends.0",
+            "value": "right ROM：后段较小（仅区间差异，非阶段趋势或质量判断）"
+          },
+          {
+            "evidenceId": "0c4d94e2-71e4-455a-b35f-d617639265c8",
+            "path": "/missing/0",
+            "label": "missing.0",
+            "value": "0–17 s：未检测 0 个；全点不可靠 0 个；省略低置信段 0 个。"
+          },
+          {
+            "evidenceId": "fad20f0a-8117-4176-8064-298706d7c3fb",
+            "path": "/missing/1",
+            "label": "missing.1",
+            "value": "12–17 s：未检测 0 个；全点不可靠 0 个；省略低置信段 0 个。"
+          },
+          {
+            "evidenceId": "7bee66fa-5ad6-493a-aed6-de0144b15d8a",
+            "path": "/limitations/0",
+            "label": "limitations.0",
+            "value": "单人单目 2D 几何投影；不代表动作质量或对错。"
+          },
+          {
+            "evidenceId": "f6662657-db1b-43e0-a0d4-f8b6769ed77f",
+            "path": "/limitations/1",
+            "label": "limitations.1",
+            "value": "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。"
+          },
+          {
+            "evidenceId": "80006318-d105-4250-bd9f-50c643573f94",
+            "path": "/limitations/2",
+            "label": "limitations.2",
+            "value": "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+          },
+          {
+            "evidenceId": "aaae82f6-75aa-4e91-bc02-fc0a40f3f250",
+            "path": "/limitations/3",
+            "label": "limitations.3",
+            "value": "区间时长不同"
+          },
+          {
+            "evidenceId": "f02badd9-95ad-4898-9fc1-ae602e059cba",
+            "path": "/limitations/4",
+            "label": "limitations.4",
+            "value": "区间重叠，不能作为独立片段"
+          },
+          {
+            "evidenceId": "fbe9a40d-f863-4c7a-8527-08acb61dee36",
+            "path": "/limitations/5",
+            "label": "limitations.5",
+            "value": "ROM 至少需要两个有效角度；空值保持缺失。"
+          },
+          {
+            "evidenceId": "635d8e63-94d8-43b1-8f29-a33c2a3c574e",
+            "path": "/evidence/parameters/threshold",
+            "label": "evidence.parameters.threshold",
+            "value": 0.5
+          },
+          {
+            "evidenceId": "f317df79-f451-439a-b79f-623e5045aac5",
+            "path": "/evidence/parameters/window",
+            "label": "evidence.parameters.window",
+            "value": 5
+          },
+          {
+            "evidenceId": "289ecfae-cf1e-4fa6-9079-f1c496a1e8a1",
+            "path": "/evidence/parameters/aspect",
+            "label": "evidence.parameters.aspect",
+            "value": 1.4406779661016949
+          },
+          {
+            "evidenceId": "8d85c698-6520-42ea-96b0-2338ff7b3ad6",
+            "path": "/evidence/parameters/metricVersion",
+            "label": "evidence.parameters.metricVersion",
+            "value": "2.0"
+          },
+          {
+            "evidenceId": "c5a8f651-f593-457d-ae62-bf69439b42ec",
+            "path": "/evidence/interval/0",
+            "label": "evidence.interval.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "1e4f13b9-32ea-4d19-8cfc-3dc0765f795c",
+            "path": "/evidence/interval/1",
+            "label": "evidence.interval.1",
+            "value": 17
+          },
+          {
+            "evidenceId": "ad027996-1ce7-498f-b367-d127ca231358",
+            "path": "/evidence/sampledRange/0",
+            "label": "evidence.sampledRange.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "fe378be3-4348-45e9-bd7d-0fab8663df0e",
+            "path": "/evidence/sampledRange/1",
+            "label": "evidence.sampledRange.1",
+            "value": 16.966999999999796
+          },
+          {
+            "evidenceId": "b17e125a-de52-4d8d-a016-68bae8a35348",
+            "path": "/evidence/limitations/0",
+            "label": "evidence.limitations.0",
+            "value": "单人单目 2D 几何投影；不代表动作质量或对错。"
+          },
+          {
+            "evidenceId": "1f74d173-07b2-40c1-ad30-aa7d00c7936d",
+            "path": "/evidence/limitations/1",
+            "label": "evidence.limitations.1",
+            "value": "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。"
+          },
+          {
+            "evidenceId": "f5a57053-0cf3-43d8-96b0-219787c9bbec",
+            "path": "/evidence/limitations/2",
+            "label": "evidence.limitations.2",
+            "value": "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+          },
+          {
+            "evidenceId": "928bfd7e-93aa-42b1-bf8a-73f15c93499e",
+            "path": "/facts/evidence/sessionId",
+            "label": "facts.evidence.sessionId",
+            "value": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d"
+          },
+          {
+            "evidenceId": "59cd032d-c3dd-4092-ba75-4578ae8084e4",
+            "path": "/facts/evidence/revision",
+            "label": "facts.evidence.revision",
+            "value": 416
+          },
+          {
+            "evidenceId": "eb9027a0-a9c8-4d3e-a5d0-bf47f80af3a2",
+            "path": "/facts/evidence/source",
+            "label": "facts.evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "240df69f-1b4c-4f39-8ed3-c8272c876eea",
+            "path": "/facts/evidence/synthetic",
+            "label": "facts.evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "e13129ec-e403-4488-92c9-a0aa2a90c81c",
+            "path": "/facts/evidence/sampleCount",
+            "label": "facts.evidence.sampleCount",
+            "value": 334
+          },
+          {
+            "evidenceId": "ed4ca597-9c22-49aa-8faa-9ef549cdf771",
+            "path": "/facts/evidence/acquisition",
+            "label": "facts.evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "42acdc9a-899a-4ab4-bb08-4fd2d6fa125e",
+            "path": "/facts/evidence/basis",
+            "label": "facts.evidence.basis",
+            "value": "filtered"
+          },
+          {
+            "evidenceId": "76dcf211-a3bc-472d-81de-a42144170e65",
+            "path": "/facts/units/angle",
+            "label": "facts.units.angle",
+            "value": "deg"
+          },
+          {
+            "evidenceId": "28aad892-85b5-454e-8967-e8ac45e61a6b",
+            "path": "/facts/units/velocity",
+            "label": "facts.units.velocity",
+            "value": "deg/s"
+          },
+          {
+            "evidenceId": "e0e51b13-a3cb-4599-af42-9e22745741ff",
+            "path": "/facts/units/angleVariance",
+            "label": "facts.units.angleVariance",
+            "value": "deg²"
+          },
+          {
+            "evidenceId": "2e458ea4-e10f-4245-9b4a-4fa0012afd1c",
+            "path": "/facts/units/coordinateVariance",
+            "label": "facts.units.coordinateVariance",
+            "value": "normalized_coordinate²"
+          },
+          {
+            "evidenceId": "07ce1df0-9cea-48e6-8fc9-35d6cc1b3cfa",
+            "path": "/facts/coordinateVariance/validPointSamples",
+            "label": "facts.coordinateVariance.validPointSamples",
+            "value": 54747
+          },
+          {
+            "evidenceId": "f1a69ede-9a50-4516-9ecd-c641dd237aee",
+            "path": "/facts/coordinateVariance/configuredWindowFrames",
+            "label": "facts.coordinateVariance.configuredWindowFrames",
+            "value": 5
+          },
+          {
+            "evidenceId": "1b447ce1-0ae4-41d6-a86c-2654a30a751f",
+            "path": "/comparison/first/joint",
+            "label": "comparison.first.joint",
+            "value": "knee"
+          },
+          {
+            "evidenceId": "ea91c8ee-7565-426a-b9e7-65ba4d87e53a",
+            "path": "/comparison/second/joint",
+            "label": "comparison.second.joint",
+            "value": "knee"
+          },
+          {
+            "evidenceId": "8b0b8275-8634-416e-9afc-5453293a066c",
+            "path": "/comparison/reasons/0",
+            "label": "comparison.reasons.0",
+            "value": "区间时长不同"
+          },
+          {
+            "evidenceId": "d72b1e94-9d3a-41db-923f-c07a09d0ae2c",
+            "path": "/comparison/reasons/1",
+            "label": "comparison.reasons.1",
+            "value": "区间重叠，不能作为独立片段"
+          },
+          {
+            "evidenceId": "feedec97-2068-498a-8316-22758fbdaf4d",
+            "path": "/quality/evidence/sessionId",
+            "label": "quality.evidence.sessionId",
+            "value": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d"
+          },
+          {
+            "evidenceId": "a55e91ba-c5cb-4363-96e1-ea5aafed52cb",
+            "path": "/quality/evidence/revision",
+            "label": "quality.evidence.revision",
+            "value": 416
+          },
+          {
+            "evidenceId": "298f68d4-90bf-4e92-baeb-2a42b42d2641",
+            "path": "/quality/evidence/source",
+            "label": "quality.evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "59344f9f-2f37-4a35-ad22-27222bea4b7a",
+            "path": "/quality/evidence/synthetic",
+            "label": "quality.evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "a3c3d4be-69cb-494e-958f-fbc85899af27",
+            "path": "/quality/evidence/sampleCount",
+            "label": "quality.evidence.sampleCount",
+            "value": 334
+          },
+          {
+            "evidenceId": "42d6c2ab-39e2-4231-a03f-2400a574177d",
+            "path": "/quality/evidence/acquisition",
+            "label": "quality.evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "0284576e-8020-4041-ac19-20658f7002f3",
+            "path": "/quality/evidence/basis",
+            "label": "quality.evidence.basis",
+            "value": "raw"
+          },
+          {
+            "evidenceId": "7242bb1a-3c07-4eb9-8709-10a28e6c9b9d",
+            "path": "/facts/evidence/parameters/threshold",
+            "label": "facts.evidence.parameters.threshold",
+            "value": 0.5
+          },
+          {
+            "evidenceId": "0cb2307b-f225-434f-9648-589c339d2789",
+            "path": "/facts/evidence/parameters/window",
+            "label": "facts.evidence.parameters.window",
+            "value": 5
+          },
+          {
+            "evidenceId": "9237cee3-c7e3-4054-b45e-cd5a10e5270d",
+            "path": "/facts/evidence/parameters/aspect",
+            "label": "facts.evidence.parameters.aspect",
+            "value": 1.4406779661016949
+          },
+          {
+            "evidenceId": "8a14a331-7400-4c47-8773-20798945c734",
+            "path": "/facts/evidence/parameters/metricVersion",
+            "label": "facts.evidence.parameters.metricVersion",
+            "value": "2.0"
+          },
+          {
+            "evidenceId": "a8a7e2ea-1c81-48b8-bdd3-01f71306fe1d",
+            "path": "/facts/evidence/interval/0",
+            "label": "facts.evidence.interval.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "56f8e94b-efd4-4d26-b1ee-1cd425717530",
+            "path": "/facts/evidence/interval/1",
+            "label": "facts.evidence.interval.1",
+            "value": 17
+          },
+          {
+            "evidenceId": "08243607-4f27-4843-9302-ce19986eaf70",
+            "path": "/facts/evidence/sampledRange/0",
+            "label": "facts.evidence.sampledRange.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "f8a35a59-37fd-420d-ac36-41ddc5f6587b",
+            "path": "/facts/evidence/sampledRange/1",
+            "label": "facts.evidence.sampledRange.1",
+            "value": 16.966999999999796
+          },
+          {
+            "evidenceId": "ebe40279-27c6-41ff-9f28-2e2c1cced289",
+            "path": "/facts/evidence/limitations/0",
+            "label": "facts.evidence.limitations.0",
+            "value": "单人单目 2D 几何投影；不代表动作质量或对错。"
+          },
+          {
+            "evidenceId": "febff2d1-211a-4432-b5ed-3e5baec32c04",
+            "path": "/facts/evidence/limitations/1",
+            "label": "facts.evidence.limitations.1",
+            "value": "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。"
+          },
+          {
+            "evidenceId": "0355186d-f889-420e-b5af-3d1b735efd6f",
+            "path": "/facts/evidence/limitations/2",
+            "label": "facts.evidence.limitations.2",
+            "value": "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+          },
+          {
+            "evidenceId": "ee7a0a2a-575f-452f-ada9-2012c516f762",
+            "path": "/facts/channels/0/channel",
+            "label": "facts.channels.0.channel",
+            "value": "right"
+          },
+          {
+            "evidenceId": "e5f88284-be9b-4fa3-95c9-269e75cbff59",
+            "path": "/facts/channels/0/rom",
+            "label": "facts.channels.0.rom",
+            "value": 29.706130933251927
+          },
+          {
+            "evidenceId": "febd4be0-ed79-4b39-a590-50fa31fdbeb8",
+            "path": "/facts/channels/0/peakAbsoluteVelocity",
+            "label": "facts.channels.0.peakAbsoluteVelocity",
+            "value": 39.886953201209124
+          },
+          {
+            "evidenceId": "79a6fa41-b96b-45db-b9c1-e552a7eec583",
+            "path": "/facts/channels/0/coverage",
+            "label": "facts.channels.0.coverage",
+            "value": 1
+          },
+          {
+            "evidenceId": "089ebc4a-68f9-415a-88eb-e1f8f886a858",
+            "path": "/facts/coordinateVariance/windows/min",
+            "label": "facts.coordinateVariance.windows.min",
+            "value": 9.842157613631784e-7
+          },
+          {
+            "evidenceId": "e643d1ea-1170-43fa-bb7d-4aefb6a5f1e0",
+            "path": "/facts/coordinateVariance/windows/max",
+            "label": "facts.coordinateVariance.windows.max",
+            "value": 0.0000902683381728246
+          },
+          {
+            "evidenceId": "89013628-a65d-4c96-b701-3ae97e6c78b7",
+            "path": "/facts/coordinateVariance/windows/mean",
+            "label": "facts.coordinateVariance.windows.mean",
+            "value": 0.000028820592330738537
+          },
+          {
+            "evidenceId": "b823c26e-91ef-4f28-9d33-80de6999366d",
+            "path": "/facts/coordinateVariance/windows/populationVariance",
+            "label": "facts.coordinateVariance.windows.populationVariance",
+            "value": 4.291660985558458e-10
+          },
+          {
+            "evidenceId": "d93a8892-ad58-4fc0-a79f-8377d54f1cc0",
+            "path": "/facts/coordinateVariance/windows/sampleCount",
+            "label": "facts.coordinateVariance.windows.sampleCount",
+            "value": 333
+          },
+          {
+            "evidenceId": "7157f5d6-114d-4983-b341-5731affb88cc",
+            "path": "/facts/coordinateVariance/windowInterval/0",
+            "label": "facts.coordinateVariance.windowInterval.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "9309d9c7-3ff2-4339-a468-a13be0467f4b",
+            "path": "/facts/coordinateVariance/windowInterval/1",
+            "label": "facts.coordinateVariance.windowInterval.1",
+            "value": 16.966999999999796
+          },
+          {
+            "evidenceId": "9109bbef-bdf3-43c5-91a6-66c2a72e6325",
+            "path": "/comparison/first/evidence/sessionId",
+            "label": "comparison.first.evidence.sessionId",
+            "value": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d"
+          },
+          {
+            "evidenceId": "936c1b5e-2d73-4d56-ab39-09e468dcdec8",
+            "path": "/comparison/first/evidence/revision",
+            "label": "comparison.first.evidence.revision",
+            "value": 416
+          },
+          {
+            "evidenceId": "bc772da9-8691-40e4-822b-64ab445353d5",
+            "path": "/comparison/first/evidence/source",
+            "label": "comparison.first.evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "04afcf7c-b6d2-42cf-a8ef-4420582bc2b0",
+            "path": "/comparison/first/evidence/synthetic",
+            "label": "comparison.first.evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "539fcdb9-c18d-474d-a3aa-e85211c5d105",
+            "path": "/comparison/first/evidence/sampleCount",
+            "label": "comparison.first.evidence.sampleCount",
+            "value": 334
+          },
+          {
+            "evidenceId": "c376f857-1611-4d27-a9b4-697c4c65f25e",
+            "path": "/comparison/first/evidence/acquisition",
+            "label": "comparison.first.evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "7c17c8c5-05b6-40ea-a83d-a1055910eb62",
+            "path": "/comparison/first/evidence/basis",
+            "label": "comparison.first.evidence.basis",
+            "value": "filtered"
+          },
+          {
+            "evidenceId": "06cdcbbf-ef46-4f8a-8087-e97b0337b81e",
+            "path": "/comparison/first/units/angle",
+            "label": "comparison.first.units.angle",
+            "value": "deg"
+          },
+          {
+            "evidenceId": "c7eeaa23-e261-4e0d-8aa2-a9dddf0244c6",
+            "path": "/comparison/first/units/velocity",
+            "label": "comparison.first.units.velocity",
+            "value": "deg/s"
+          },
+          {
+            "evidenceId": "c6e1190a-8c25-4e67-af24-fe7197c9fb6d",
+            "path": "/comparison/first/units/angleVariance",
+            "label": "comparison.first.units.angleVariance",
+            "value": "deg²"
+          },
+          {
+            "evidenceId": "85b9a3c7-6740-4759-9df1-eec742d3f240",
+            "path": "/comparison/first/units/coordinateVariance",
+            "label": "comparison.first.units.coordinateVariance",
+            "value": "normalized_coordinate²"
+          },
+          {
+            "evidenceId": "433d5b3b-9081-4dff-b156-f427d17dbf8e",
+            "path": "/comparison/first/coordinateVariance/validPointSamples",
+            "label": "comparison.first.coordinateVariance.validPointSamples",
+            "value": 54747
+          },
+          {
+            "evidenceId": "e9d92a0f-8948-4da7-898c-78f00b2361df",
+            "path": "/comparison/first/coordinateVariance/configuredWindowFrames",
+            "label": "comparison.first.coordinateVariance.configuredWindowFrames",
+            "value": 5
+          },
+          {
+            "evidenceId": "9b3fdf64-fe5d-4cb8-9959-a46d3cb4c9b1",
+            "path": "/comparison/second/evidence/sessionId",
+            "label": "comparison.second.evidence.sessionId",
+            "value": "f64f2661-1bed-46dc-b2ec-478c5c6aa18d"
+          },
+          {
+            "evidenceId": "e78c1a06-63c4-45a1-8a4e-75432d972bfa",
+            "path": "/comparison/second/evidence/revision",
+            "label": "comparison.second.evidence.revision",
+            "value": 416
+          },
+          {
+            "evidenceId": "eef223ea-b979-422e-b513-8e9481642290",
+            "path": "/comparison/second/evidence/source",
+            "label": "comparison.second.evidence.source",
+            "value": "demo"
+          },
+          {
+            "evidenceId": "0d03bccc-5566-423f-86d3-123189bc721b",
+            "path": "/comparison/second/evidence/synthetic",
+            "label": "comparison.second.evidence.synthetic",
+            "value": true
+          },
+          {
+            "evidenceId": "249a660d-e8c7-41e0-8fd2-6b9fc2676365",
+            "path": "/comparison/second/evidence/sampleCount",
+            "label": "comparison.second.evidence.sampleCount",
+            "value": 97
+          },
+          {
+            "evidenceId": "3dea118b-abb0-45fe-b1d3-a935de4f3fc2",
+            "path": "/comparison/second/evidence/acquisition",
+            "label": "comparison.second.evidence.acquisition",
+            "value": null
+          },
+          {
+            "evidenceId": "e00c5198-af2c-4115-9d4e-260c206ff64a",
+            "path": "/comparison/second/evidence/basis",
+            "label": "comparison.second.evidence.basis",
+            "value": "filtered"
+          },
+          {
+            "evidenceId": "aa31a409-b59b-48c9-bf9f-4cf9beb483bb",
+            "path": "/comparison/second/units/angle",
+            "label": "comparison.second.units.angle",
+            "value": "deg"
+          },
+          {
+            "evidenceId": "a2dc5bc9-068d-46ec-aa53-a7fb411f55eb",
+            "path": "/comparison/second/units/velocity",
+            "label": "comparison.second.units.velocity",
+            "value": "deg/s"
+          },
+          {
+            "evidenceId": "8c5bcd32-807a-49cc-85bc-3aea734a2682",
+            "path": "/comparison/second/units/angleVariance",
+            "label": "comparison.second.units.angleVariance",
+            "value": "deg²"
+          },
+          {
+            "evidenceId": "114c87a1-b069-4d25-a59f-2424dd06c004",
+            "path": "/comparison/second/units/coordinateVariance",
+            "label": "comparison.second.units.coordinateVariance",
+            "value": "normalized_coordinate²"
+          },
+          {
+            "evidenceId": "b3de9fda-947e-410f-a200-b4a8438a2406",
+            "path": "/comparison/second/coordinateVariance/validPointSamples",
+            "label": "comparison.second.coordinateVariance.validPointSamples",
+            "value": 16005
+          },
+          {
+            "evidenceId": "35e27ba3-4e26-4dac-9a4e-cbd2996be7e6",
+            "path": "/comparison/second/coordinateVariance/configuredWindowFrames",
+            "label": "comparison.second.coordinateVariance.configuredWindowFrames",
+            "value": 5
+          },
+          {
+            "evidenceId": "08bed10b-e489-4d5f-b3dd-0001fdac8791",
+            "path": "/comparison/differences/0/channel",
+            "label": "comparison.differences.0.channel",
+            "value": "right"
+          },
+          {
+            "evidenceId": "e357b605-4db1-4390-b2ea-937f95db0512",
+            "path": "/comparison/differences/0/rom",
+            "label": "comparison.differences.0.rom",
+            "value": -0.00939518313401777
+          },
+          {
+            "evidenceId": "e056095f-e0c5-43a9-871d-861df686a59b",
+            "path": "/comparison/differences/0/meanAngle",
+            "label": "comparison.differences.0.meanAngle",
+            "value": 2.3795987136845156
+          },
+          {
+            "evidenceId": "eede6c16-630a-4569-9711-d8b6b387785b",
+            "path": "/comparison/differences/0/peakAbsoluteVelocity",
+            "label": "comparison.differences.0.peakAbsoluteVelocity",
+            "value": -1.6642402513266887
+          },
+          {
+            "evidenceId": "704137a7-abf3-42c9-964c-ffa6c732646f",
+            "path": "/quality/evidence/parameters/threshold",
+            "label": "quality.evidence.parameters.threshold",
+            "value": 0.5
+          },
+          {
+            "evidenceId": "b1bb46cd-943e-4a9f-bac6-dfcdadad9770",
+            "path": "/quality/evidence/parameters/window",
+            "label": "quality.evidence.parameters.window",
+            "value": 5
+          },
+          {
+            "evidenceId": "366ebcf0-54ca-4e79-b2fb-11d49208185a",
+            "path": "/quality/evidence/parameters/aspect",
+            "label": "quality.evidence.parameters.aspect",
+            "value": 1.4406779661016949
+          },
+          {
+            "evidenceId": "bac11b92-e94b-4c45-a311-aee055603a78",
+            "path": "/quality/evidence/parameters/metricVersion",
+            "label": "quality.evidence.parameters.metricVersion",
+            "value": "2.0"
+          },
+          {
+            "evidenceId": "1b4f0089-eea3-40ac-b66c-b18c1d37329a",
+            "path": "/quality/evidence/interval/0",
+            "label": "quality.evidence.interval.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "59af1668-7886-48eb-ab92-0c1c290c39c1",
+            "path": "/quality/evidence/interval/1",
+            "label": "quality.evidence.interval.1",
+            "value": 17
+          },
+          {
+            "evidenceId": "91d43b0e-f833-4efc-9edb-c8224ae699d3",
+            "path": "/quality/evidence/sampledRange/0",
+            "label": "quality.evidence.sampledRange.0",
+            "value": 0
+          },
+          {
+            "evidenceId": "5de5f5c6-b009-44bd-98f2-0f530861f85b",
+            "path": "/quality/evidence/sampledRange/1",
+            "label": "quality.evidence.sampledRange.1",
+            "value": 16.966999999999796
+          },
+          {
+            "evidenceId": "1066546d-e484-4b31-89c1-ee365b412b5a",
+            "path": "/quality/evidence/limitations/0",
+            "label": "quality.evidence.limitations.0",
+            "value": "单人单目 2D 几何投影；不代表动作质量或对错。"
+          },
+          {
+            "evidenceId": "351f00db-02e7-4774-9b1b-664f0589dbe5",
+            "path": "/quality/evidence/limitations/1",
+            "label": "quality.evidence.limitations.1",
+            "value": "覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。"
+          },
+          {
+            "evidenceId": "56adff59-d7c0-47c1-9dbd-bce93ba009c2",
+            "path": "/quality/evidence/limitations/2",
+            "label": "quality.evidence.limitations.2",
+            "value": "方差为总体方差；坐标方差是各可靠点 x/y 方差和的均值；滑窗可含查询起点之前的样本。"
+          },
+          {
+            "evidenceId": "4b022630-9c6e-44fd-9afa-6567605ca591",
+            "path": "/facts/channels/0/angle/min",
+            "label": "facts.channels.0.angle.min",
+            "value": 150.2898273861692
+          },
+          {
+            "evidenceId": "365bf085-24f4-4cfc-8341-1832da27a407",
+            "path": "/facts/channels/0/angle/max",
+            "label": "facts.channels.0.angle.max",
+            "value": 179.99595831942113
+          }
+        ],
+        "truncated": true
+      }
+    },
+    "finish": {
+      "id": "a74697f0-c7",
+      "name": "finish_analysis",
+      "arguments": {
+        "outcome": "needs_input",
+        "messageCode": "comparison_limited",
+        "citations": [
+          {
+            "evidenceId": "768e9f35-7b2a-4bc0-be02-97bee55d038d"
+          }
+        ]
+      },
+      "modelArguments": {
+        "outcome": "needs_input",
+        "messageCode": "comparison_limited",
+        "citations": [
+          {
+            "evidenceId": "768e9f35-7b2a-4bc0-be02-97bee55d038d"
+          }
+        ]
+      },
+      "output": {
+        "ok": false,
+        "tool": "finish_analysis",
+        "error": {
+          "code": "VALIDATION",
+          "message": "READ_SESSION_FIRST"
+        }
+      },
+      "elapsedMs": 0.5
+    }
+  },
+  "partialPatch": {
+    "goal": "准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表",
+    "call": {
+      "id": "93319b35-c3",
+      "name": "set_task_patch",
+      "arguments": {
+        "changes": [
+          {
+            "field": "comparison.second",
+            "origin": "derived",
+            "text": "比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表",
+            "fromRunId": "401edb74-1d2d-4c29-9fe3-ae5f2ae1ee2e",
+            "value": [12, 17]
+          },
+          {
+            "field": "deliveries.export.interval",
+            "origin": "derived",
+            "text": "比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表",
+            "fromRunId": "401edb74-1d2d-4c29-9fe3-ae5f2ae1ee2e",
+            "value": [0, 17]
+          },
+          {
+            "field": "deliveries.view.interval",
+            "origin": "derived",
+            "text": "比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表",
+            "fromRunId": "401edb74-1d2d-4c29-9fe3-ae5f2ae1ee2e",
+            "value": [0, 17]
+          }
+        ]
+      },
+      "modelArguments": {
+        "changes": [
+          {
+            "field": "comparison.second",
+            "origin": "derived",
+            "sourceId": "0bc38e86-34ed-4420-9585-085c466f4b0c",
+            "value": [12, 17]
+          },
+          {
+            "field": "deliveries.export.interval",
+            "origin": "derived",
+            "sourceId": "0bc38e86-34ed-4420-9585-085c466f4b0c",
+            "value": [0, 17]
+          },
+          {
+            "field": "deliveries.view.interval",
+            "origin": "derived",
+            "sourceId": "0bc38e86-34ed-4420-9585-085c466f4b0c",
+            "value": [0, 17]
+          }
+        ]
+      },
+      "output": {
+        "ok": false,
+        "tool": "set_task_patch",
+        "error": {
+          "code": "VALIDATION",
+          "message": "SCHEMA $.deliveries.export.format: missing field format; expected enum [\"csv\"]. Supply this field from the current user/task or current session evidence; if unavailable, request clarification. Do not guess.",
+          "issue": {
+            "version": "2.0.0",
+            "kind": "missing_field",
+            "path": "$.deliveries.export.format",
+            "expected": "enum [\"csv\"]",
+            "suggestion": "Supply this field from the current user/task or current session evidence; if unavailable, request clarification. Do not guess."
+          }
+        }
+      },
+      "elapsedMs": 1.8000000715255737
+    }
+  },
+  "http": {
+    "status": 500,
+    "body": "{\"error\":\"llama-server returned invalid tool call arguments for \\\"set_task_spec\\\": unexpected end of JSON input\"}",
+    "inputTokens": null,
+    "outputTokens": null
+  }
+}

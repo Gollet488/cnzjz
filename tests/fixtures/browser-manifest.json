@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "synthetic": true,
+  "generator": "FFmpeg 7.1 libx264 testsrc2; independent showinfo PTS oracle",
+  "files": [
+    {
+      "name": "30fps.mp4",
+      "bytes": 4528,
+      "sha256": "4c280c9bb879a488c24f1b404a5619ac07ddd22ee184bd0a0ce20df86950e6a9"
+    },
+    {
+      "name": "30fps.json",
+      "bytes": 405,
+      "sha256": "6d3e99806d7a7a80588dd58a56bc047d22e3a07727aa20af762e26bd4b38518f"
+    },
+    {
+      "name": "60fps.mp4",
+      "bytes": 6907,
+      "sha256": "b06172ecc4a4d9e91cd05165dc7bda727440e6376866eccbf0012b396ff8214c"
+    },
+    {
+      "name": "60fps.json",
+      "bytes": 679,
+      "sha256": "034dad4d2eea2d1478e3064efff22116fef5f67a30584d5882ced5c1ce3b005b"
+    },
+    {
+      "name": "vfr.mp4",
+      "bytes": 4617,
+      "sha256": "c05365aeac8b83ec89b1905c4757f9d651fd094a1bff3bdec1556a9d2c4f3f23"
+    },
+    {
+      "name": "vfr.json",
+      "bytes": 405,
+      "sha256": "0238da5f1610ccdf7d69a0af4854b95ec058de013259862800e480cebf2412b1"
+    },
+    {
+      "name": "rotate.mp4",
+      "bytes": 4528,
+      "sha256": "b55f24fa350db61c53f7dc4d7d5f5e171a9c8fa482d2b0513ad88f5c3df3c382"
+    },
+    {
+      "name": "rotate.json",
+      "bytes": 405,
+      "sha256": "6d3e99806d7a7a80588dd58a56bc047d22e3a07727aa20af762e26bd4b38518f"
+    },
+    {
+      "name": "fragmented.mp4",
+      "bytes": 4726,
+      "sha256": "292f771036d7611307fb0b8fecd59f07c7c8e6feea259a4ffb7a19fcd3b6e579"
+    }
+  ]
+}
