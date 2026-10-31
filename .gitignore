@@ -6,6 +6,12 @@ dist/
 .pnpm-store/
 *.tsbuildinfo
 .demo/
+test-results/
+playwright-report/
 .env
 .env.*
 !.env.example
+
+# 本机整理出的 GitHub 上传副本与压缩包。
+.delivery/
+*.log

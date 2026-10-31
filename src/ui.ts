@@ -1,0 +1,34 @@
+import type { App } from 'vue';
+import { ElButton } from 'element-plus/es/components/button/index.mjs';
+import 'element-plus/es/components/button/style/css';
+import { ElDialog } from 'element-plus/es/components/dialog/index.mjs';
+import 'element-plus/es/components/dialog/style/css';
+import { ElDrawer } from 'element-plus/es/components/drawer/index.mjs';
+import 'element-plus/es/components/drawer/style/css';
+import { ElSlider } from 'element-plus/es/components/slider/index.mjs';
+import 'element-plus/es/components/slider/style/css';
+import { ElSwitch } from 'element-plus/es/components/switch/index.mjs';
+import 'element-plus/es/components/switch/style/css';
+import { ElTooltip } from 'element-plus/es/components/tooltip/index.mjs';
+import 'element-plus/es/components/tooltip/style/css';
+import { ElSelect, ElOption } from 'element-plus/es/components/select/index.mjs';
+import 'element-plus/es/components/select/style/css';
+import { ElInputNumber } from 'element-plus/es/components/input-number/index.mjs';
+import 'element-plus/es/components/input-number/style/css';
+import { ElCheckbox, ElCheckboxGroup } from 'element-plus/es/components/checkbox/index.mjs';
+import 'element-plus/es/components/checkbox/style/css';
+import 'element-plus/es/components/message/style/css';
+export { ElMessage } from 'element-plus/es/components/message/index.mjs';
+export function installUI(app: App) {
+  app.use(ElButton);
+  app.use(ElDialog);
+  app.use(ElDrawer);
+  app.use(ElSlider);
+  app.use(ElSwitch);
+  app.use(ElTooltip);
+  app.use(ElSelect);
+  app.use(ElOption);
+  app.use(ElInputNumber);
+  app.use(ElCheckbox);
+  app.use(ElCheckboxGroup);
+}

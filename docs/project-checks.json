@@ -1,0 +1,805 @@
+{
+  "reviewDate": "2026-10-29",
+  "timezone": "Asia/Shanghai",
+  "basis": "current workspace source and newly executed checks; no historical reports used",
+  "environment": {
+    "node": "v24.22.1",
+    "pnpm": "11.25.0",
+    "platform": "win32",
+    "browserChannel": "chrome",
+    "model": "qwen2.5:7b-instruct"
+  },
+  "checks": {
+    "lint": "passed",
+    "format": "passed",
+    "assets": "passed",
+    "build": "passed with 595kB charts chunk warning",
+    "unit": {
+      "passed": 266,
+      "failed": 0,
+      "requires": "Windows process identity tests ran outside restricted sandbox"
+    },
+    "browser": {
+      "initial": {
+        "passed": 12,
+        "failed": 2,
+        "cause": "outdated expected protocol 3.0.0; actual 3.1.0"
+      },
+      "targetedRerun": {
+        "passed": 2,
+        "failed": 0,
+        "filter": "scripted protocol"
+      },
+      "coverage": "14 distinct cases in development and production, not one 14/14 run"
+    }
+  },
+  "benchmark": {
+    "synthetic": true,
+    "runtime": "v24.22.1",
+    "platform": "win32",
+    "count": 18000,
+    "acquisitionMs": 853.2235000000001,
+    "baseline": {
+      "rss": 75943936,
+      "heapTotal": 14839808,
+      "heapUsed": 9700640,
+      "external": 9353585,
+      "arrayBuffers": 143635
+    },
+    "resident": {
+      "rss": 409464832,
+      "heapTotal": 342966272,
+      "heapUsed": 193810688,
+      "external": 9290101,
+      "arrayBuffers": 143635
+    },
+    "sessionRetained": {
+      "rss": 333520896,
+      "heapTotal": 328126464,
+      "heapUsed": 184110048,
+      "external": -63484,
+      "arrayBuffers": 0
+    },
+    "timings": {
+      "fullQueryCold": {
+        "medianMs": 52.46259999999984,
+        "maxMs": 52.46259999999984,
+        "runs": 1
+      },
+      "fullQueryCached": {
+        "medianMs": 0.022399999999834108,
+        "maxMs": 0.12780000000020664,
+        "runs": 100
+      },
+      "narrowQueryCold": {
+        "medianMs": 0.7048000000002048,
+        "maxMs": 0.7048000000002048,
+        "runs": 1
+      },
+      "qualityCold": {
+        "medianMs": 42.16890000000012,
+        "maxMs": 42.16890000000012,
+        "runs": 1
+      },
+      "compareCold": {
+        "medianMs": 0.578899999999976,
+        "maxMs": 0.578899999999976,
+        "runs": 1
+      },
+      "summaryFull": {
+        "medianMs": 0.240099999999984,
+        "maxMs": 2.3812000000000353,
+        "runs": 100
+      },
+      "summaryClip": {
+        "medianMs": 0.18880000000012842,
+        "maxMs": 0.7933000000000447,
+        "runs": 100
+      }
+    },
+    "exports": [
+      {
+        "run": 1,
+        "destination": "file",
+        "rows": 18000,
+        "bytes": 104483245,
+        "elapsedMs": 4510.7163,
+        "maxChunkBytes": 141677,
+        "maxHeartbeatGapMs": 19.969699999999648,
+        "sha256": "452a39b5d08f28dd1e82a191efb35a6039edb97bec6f2be3c5c676dcd2528c1d",
+        "before": {
+          "rss": 410820608,
+          "heapTotal": 329596928,
+          "heapUsed": 194009552,
+          "external": 9290101,
+          "arrayBuffers": 143635
+        },
+        "peak": {
+          "rss": 533004288,
+          "heapTotal": 459759616,
+          "heapUsed": 376406024,
+          "external": 12778717,
+          "arrayBuffers": 3626656
+        },
+        "peakExtra": {
+          "rss": 122183680,
+          "heapTotal": 130162688,
+          "heapUsed": 182396472,
+          "external": 3488616,
+          "arrayBuffers": 3483021
+        },
+        "afterGC": {
+          "rss": 526483456,
+          "heapTotal": 351617024,
+          "heapUsed": 194244752,
+          "external": 12495383,
+          "arrayBuffers": 143635
+        }
+      },
+      {
+        "run": 2,
+        "destination": "hash-only",
+        "rows": 18000,
+        "bytes": 104483245,
+        "elapsedMs": 3590.9164999999994,
+        "maxChunkBytes": 141677,
+        "maxHeartbeatGapMs": 30.59650000000056,
+        "sha256": "452a39b5d08f28dd1e82a191efb35a6039edb97bec6f2be3c5c676dcd2528c1d",
+        "before": {
+          "rss": 525717504,
+          "heapTotal": 329596928,
+          "heapUsed": 194216712,
+          "external": 9290101,
+          "arrayBuffers": 143635
+        },
+        "peak": {
+          "rss": 541724672,
+          "heapTotal": 421371904,
+          "heapUsed": 353562840,
+          "external": 15282857,
+          "arrayBuffers": 6136391
+        },
+        "peakExtra": {
+          "rss": 16007168,
+          "heapTotal": 91774976,
+          "heapUsed": 159346128,
+          "external": 5992756,
+          "arrayBuffers": 5992756
+        },
+        "afterGC": {
+          "rss": 530821120,
+          "heapTotal": 338247680,
+          "heapUsed": 194251064,
+          "external": 14728776,
+          "arrayBuffers": 1676364
+        }
+      }
+    ],
+    "limitations": "Node synthetic geometry; not camera/inference/browser memory. RSS includes runtime and GC high-water effects; sampled peaks are lower bounds."
+  },
+  "realModel": [
+    {
+      "file": ".qa/fresh-review-20261029/agent-evaluation.json",
+      "status": "cancelled",
+      "error": "BUSINESS_REQUEST_BUDGET",
+      "summary": {
+        "planned": 3,
+        "started": 2,
+        "executed": 2,
+        "passed": 0,
+        "failed": 2,
+        "incomplete": 0,
+        "unexecuted": 1,
+        "successRate": 0,
+        "calls": 12,
+        "rounds": 12,
+        "requests": 12,
+        "maxRequestBytes": 14396,
+        "elapsedMs": 63091,
+        "reportedUsage": {
+          "inputTokens": 39871,
+          "outputTokens": 2860,
+          "inputTurns": 2,
+          "outputTurns": 2,
+          "totalTurns": 2
+        },
+        "usage": {
+          "inputTokens": 39871,
+          "outputTokens": 2860,
+          "reportedRequests": 12
+        },
+        "groups": {
+          "business": {
+            "planned": 3,
+            "started": 2,
+            "executed": 2,
+            "passed": 0,
+            "failed": 2,
+            "incomplete": 0,
+            "unexecuted": 1,
+            "successRate": 0,
+            "calls": 12,
+            "rounds": 12,
+            "requests": 12,
+            "maxRequestBytes": 14396,
+            "elapsedMs": 63091,
+            "reportedUsage": {
+              "inputTokens": 39871,
+              "outputTokens": 2860,
+              "inputTurns": 2,
+              "outputTurns": 2,
+              "totalTurns": 2
+            },
+            "usage": {
+              "inputTokens": 39871,
+              "outputTokens": 2860,
+              "reportedRequests": 12
+            }
+          },
+          "boundary": {
+            "planned": 0,
+            "started": 0,
+            "executed": 0,
+            "passed": 0,
+            "failed": 0,
+            "incomplete": 0,
+            "unexecuted": 0,
+            "successRate": null,
+            "calls": 0,
+            "rounds": null,
+            "requests": null,
+            "maxRequestBytes": null,
+            "elapsedMs": 0,
+            "reportedUsage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "inputTurns": 0,
+              "outputTurns": 0,
+              "totalTurns": 0
+            },
+            "usage": {
+              "inputTokens": null,
+              "outputTokens": null,
+              "reportedRequests": 0
+            }
+          },
+          "protection": {
+            "planned": 0,
+            "started": 0,
+            "executed": 0,
+            "passed": 0,
+            "failed": 0,
+            "incomplete": 0,
+            "unexecuted": 0,
+            "successRate": null,
+            "calls": 0,
+            "rounds": null,
+            "requests": null,
+            "maxRequestBytes": null,
+            "elapsedMs": 0,
+            "reportedUsage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "inputTurns": 0,
+              "outputTurns": 0,
+              "totalTurns": 0
+            },
+            "usage": {
+              "inputTokens": null,
+              "outputTokens": null,
+              "reportedRequests": 0
+            }
+          }
+        }
+      },
+      "cases": [
+        {
+          "caseId": "compare",
+          "assessment": {
+            "passed": false,
+            "failures": [
+              "turn:1:status:limit",
+              "turn:1:missing_tool_or_parameters:compare_intervals",
+              "turn:1:final_delivery:compare_intervals",
+              "turn:1:missing_delivery_evidence:compare_intervals",
+              "turn:1:missing_tool_or_parameters:set_chart_view",
+              "turn:1:final_delivery:set_chart_view",
+              "turn:1:missing_delivery_evidence:set_chart_view"
+            ],
+            "turns": [
+              {
+                "passed": false,
+                "failures": [
+                  "status:limit",
+                  "missing_tool_or_parameters:compare_intervals",
+                  "final_delivery:compare_intervals",
+                  "missing_delivery_evidence:compare_intervals",
+                  "missing_tool_or_parameters:set_chart_view",
+                  "final_delivery:set_chart_view",
+                  "missing_delivery_evidence:set_chart_view"
+                ],
+                "calls": 5,
+                "elapsedMs": 39802,
+                "usage": {
+                  "inputTokens": 17650,
+                  "outputTokens": 1844,
+                  "reportedRequests": 5
+                }
+              }
+            ],
+            "calls": 5,
+            "rounds": 5,
+            "requests": 5,
+            "maxRequestBytes": 14396,
+            "elapsedMs": 39802,
+            "reportedUsage": {
+              "inputTokens": 17650,
+              "outputTokens": 1844,
+              "inputTurns": 1,
+              "outputTurns": 1,
+              "totalTurns": 1
+            },
+            "usage": {
+              "inputTokens": 17650,
+              "outputTokens": 1844,
+              "reportedRequests": 5
+            }
+          },
+          "turns": [
+            {
+              "status": "limit",
+              "message": "RECOVERY_LIMIT",
+              "rounds": 5,
+              "calls": [
+                {
+                  "name": "set_task_spec",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "TASK_SPEC_COMPARISON_VIEW_INTERVAL：deliveries.view.interval 必须覆盖 interval 与 comparison.second；保留两段统计区间，按用户要求重新声明视图范围，不用视图或 CSV 范围覆盖统计前段。"
+                  }
+                },
+                {
+                  "name": "set_task_spec",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "TASK_SPEC_COMPARISON_VIEW_INTERVAL：deliveries.view.interval 必须覆盖 interval 与 comparison.second；保留两段统计区间，按用户要求重新声明视图范围，不用视图或 CSV 范围覆盖统计前段。"
+                  }
+                },
+                {
+                  "name": "set_task_spec",
+                  "ok": true,
+                  "error": null
+                },
+                {
+                  "name": "plan_analysis",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "SCHEMA $.steps: array length must be between 1 and 4; expected array. Use the expected type/enum/bounds without coercion; preserve user interval, basis and side. If unavailable, request clarification.",
+                    "issue": {
+                      "version": "2.0.0",
+                      "kind": "bounds",
+                      "path": "$.steps",
+                      "expected": "array",
+                      "suggestion": "Use the expected type/enum/bounds without coercion; preserve user interval, basis and side. If unavailable, request clarification."
+                    }
+                  }
+                },
+                {
+                  "name": "plan_analysis",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "SCHEMA $.steps: array length must be between 1 and 4; expected array. Use the expected type/enum/bounds without coercion; preserve user interval, basis and side. If unavailable, request clarification.",
+                    "issue": {
+                      "version": "2.0.0",
+                      "kind": "bounds",
+                      "path": "$.steps",
+                      "expected": "array",
+                      "suggestion": "Use the expected type/enum/bounds without coercion; preserve user interval, basis and side. If unavailable, request clarification."
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "quality",
+          "assessment": {
+            "passed": false,
+            "failures": [
+              "turn:1:status:limit",
+              "turn:1:missing_delivery_evidence:get_quality_summary"
+            ],
+            "turns": [
+              {
+                "passed": false,
+                "failures": [
+                  "status:limit",
+                  "missing_delivery_evidence:get_quality_summary"
+                ],
+                "calls": 7,
+                "elapsedMs": 23289,
+                "usage": {
+                  "inputTokens": 22221,
+                  "outputTokens": 1016,
+                  "reportedRequests": 7
+                }
+              }
+            ],
+            "calls": 7,
+            "rounds": 7,
+            "requests": 7,
+            "maxRequestBytes": 14083,
+            "elapsedMs": 23289,
+            "reportedUsage": {
+              "inputTokens": 22221,
+              "outputTokens": 1016,
+              "inputTurns": 1,
+              "outputTurns": 1,
+              "totalTurns": 1
+            },
+            "usage": {
+              "inputTokens": 22221,
+              "outputTokens": 1016,
+              "reportedRequests": 7
+            }
+          },
+          "turns": [
+            {
+              "status": "limit",
+              "message": "RECOVERY_LIMIT",
+              "rounds": 7,
+              "calls": [
+                {
+                  "name": "set_task_spec",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "TASK_SPEC_SOURCE_REQUIRED:metrics：缺少来源的全部字段 [\"metrics\",\"deliveries.report\"]；为这些字段声明用户来源，同源可用父字段覆盖，false 也需来源。保留业务要求，不猜来源。",
+                    "missingSources": [
+                      "metrics",
+                      "deliveries.report"
+                    ]
+                  }
+                },
+                {
+                  "name": "set_task_spec",
+                  "ok": true,
+                  "error": null
+                },
+                {
+                  "name": "get_quality_summary",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "CONFLICTING_PARAMETER:sessionId"
+                  }
+                },
+                {
+                  "name": "get_quality_summary",
+                  "ok": true,
+                  "error": null
+                },
+                {
+                  "name": "plan_analysis",
+                  "ok": true,
+                  "error": null
+                },
+                {
+                  "name": "seek_to_time",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "CONFLICTING_PARAMETER:time"
+                  }
+                },
+                {
+                  "name": "seek_to_time",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "CONFLICTING_PARAMETER:time"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": ".qa/fresh-review-20261029/agent-multi-turn.json",
+      "status": "cancelled",
+      "error": "business_time_budget",
+      "summary": {
+        "planned": 1,
+        "started": 1,
+        "executed": 1,
+        "passed": 0,
+        "failed": 1,
+        "incomplete": 0,
+        "unexecuted": 0,
+        "successRate": 0,
+        "calls": 6,
+        "rounds": 6,
+        "requests": 7,
+        "maxRequestBytes": 13493,
+        "elapsedMs": 89967,
+        "reportedUsage": {
+          "inputTokens": 19943,
+          "outputTokens": 4907,
+          "inputTurns": 1,
+          "outputTurns": 1,
+          "totalTurns": 2
+        },
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "reportedRequests": 6
+        },
+        "groups": {
+          "business": {
+            "planned": 1,
+            "started": 1,
+            "executed": 1,
+            "passed": 0,
+            "failed": 1,
+            "incomplete": 0,
+            "unexecuted": 0,
+            "successRate": 0,
+            "calls": 6,
+            "rounds": 6,
+            "requests": 7,
+            "maxRequestBytes": 13493,
+            "elapsedMs": 89967,
+            "reportedUsage": {
+              "inputTokens": 19943,
+              "outputTokens": 4907,
+              "inputTurns": 1,
+              "outputTurns": 1,
+              "totalTurns": 2
+            },
+            "usage": {
+              "inputTokens": null,
+              "outputTokens": null,
+              "reportedRequests": 6
+            }
+          },
+          "boundary": {
+            "planned": 0,
+            "started": 0,
+            "executed": 0,
+            "passed": 0,
+            "failed": 0,
+            "incomplete": 0,
+            "unexecuted": 0,
+            "successRate": null,
+            "calls": 0,
+            "rounds": null,
+            "requests": null,
+            "maxRequestBytes": null,
+            "elapsedMs": 0,
+            "reportedUsage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "inputTurns": 0,
+              "outputTurns": 0,
+              "totalTurns": 0
+            },
+            "usage": {
+              "inputTokens": null,
+              "outputTokens": null,
+              "reportedRequests": 0
+            }
+          },
+          "protection": {
+            "planned": 0,
+            "started": 0,
+            "executed": 0,
+            "passed": 0,
+            "failed": 0,
+            "incomplete": 0,
+            "unexecuted": 0,
+            "successRate": null,
+            "calls": 0,
+            "rounds": null,
+            "requests": null,
+            "maxRequestBytes": null,
+            "elapsedMs": 0,
+            "reportedUsage": {
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "inputTurns": 0,
+              "outputTurns": 0,
+              "totalTurns": 0
+            },
+            "usage": {
+              "inputTokens": null,
+              "outputTokens": null,
+              "reportedRequests": 0
+            }
+          }
+        }
+      },
+      "cases": [
+        {
+          "caseId": "multi_turn",
+          "assessment": {
+            "passed": false,
+            "failures": [
+              "turn:1:status:limit",
+              "turn:1:missing_tool_or_parameters:compare_intervals",
+              "turn:1:final_delivery:compare_intervals",
+              "turn:1:missing_delivery_evidence:compare_intervals",
+              "turn:1:missing_tool_or_parameters:set_chart_view",
+              "turn:1:final_delivery:set_chart_view",
+              "turn:1:missing_delivery_evidence:set_chart_view",
+              "turn:2:status:cancelled",
+              "turn:2:missing_tool_or_parameters:compare_intervals",
+              "turn:2:final_delivery:compare_intervals",
+              "turn:2:missing_delivery_evidence:compare_intervals",
+              "turn:2:missing_tool_or_parameters:set_chart_view",
+              "turn:2:final_delivery:set_chart_view",
+              "turn:2:missing_delivery_evidence:set_chart_view"
+            ],
+            "turns": [
+              {
+                "passed": false,
+                "failures": [
+                  "status:limit",
+                  "missing_tool_or_parameters:compare_intervals",
+                  "final_delivery:compare_intervals",
+                  "missing_delivery_evidence:compare_intervals",
+                  "missing_tool_or_parameters:set_chart_view",
+                  "final_delivery:set_chart_view",
+                  "missing_delivery_evidence:set_chart_view"
+                ],
+                "calls": 4,
+                "elapsedMs": 63486,
+                "usage": {
+                  "inputTokens": 14204,
+                  "outputTokens": 3364,
+                  "reportedRequests": 4
+                }
+              },
+              {
+                "passed": false,
+                "failures": [
+                  "status:cancelled",
+                  "missing_tool_or_parameters:compare_intervals",
+                  "final_delivery:compare_intervals",
+                  "missing_delivery_evidence:compare_intervals",
+                  "missing_tool_or_parameters:set_chart_view",
+                  "final_delivery:set_chart_view",
+                  "missing_delivery_evidence:set_chart_view"
+                ],
+                "calls": 2,
+                "elapsedMs": 26481,
+                "usage": {
+                  "inputTokens": null,
+                  "outputTokens": null,
+                  "reportedRequests": 2
+                }
+              }
+            ],
+            "calls": 6,
+            "rounds": 6,
+            "requests": 7,
+            "maxRequestBytes": 13493,
+            "elapsedMs": 89967,
+            "reportedUsage": {
+              "inputTokens": 19943,
+              "outputTokens": 4907,
+              "inputTurns": 1,
+              "outputTurns": 1,
+              "totalTurns": 2
+            },
+            "usage": {
+              "inputTokens": null,
+              "outputTokens": null,
+              "reportedRequests": 6
+            }
+          },
+          "turns": [
+            {
+              "status": "limit",
+              "message": "RECOVERY_LIMIT",
+              "rounds": 4,
+              "calls": [
+                {
+                  "name": "set_task_spec",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "TASK_SPEC_SOURCE_OVERLAP:comparison:comparison.second：sources 不得同时包含父字段和子字段；同源选父字段，混合来源只选互不重叠的子字段。保留业务要求，重新声明来源。"
+                  }
+                },
+                {
+                  "name": "set_task_spec",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "TASK_SPEC_SOURCE_OVERLAP:deliveries.export:deliveries.export.interval：sources 不得同时包含父字段和子字段；同源选父字段，混合来源只选互不重叠的子字段。保留业务要求，重新声明来源。"
+                  }
+                },
+                {
+                  "name": "set_task_spec",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "TASK_SPEC_SOURCE_OVERLAP:deliveries.export:deliveries.export.interval：sources 不得同时包含父字段和子字段；同源选父字段，混合来源只选互不重叠的子字段。保留业务要求，重新声明来源。"
+                  }
+                },
+                {
+                  "name": "set_task_spec",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "TASK_SPEC_SOURCE_OVERLAP:deliveries.export:deliveries.export.interval：sources 不得同时包含父字段和子字段；同源选父字段，混合来源只选互不重叠的子字段。保留业务要求，重新声明来源。"
+                  }
+                }
+              ]
+            },
+            {
+              "status": "cancelled",
+              "message": "已取消；未生成完成结论。",
+              "rounds": 2,
+              "calls": [
+                {
+                  "name": "set_task_spec",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "TASK_SPEC_SOURCE_OVERLAP:deliveries.view:deliveries.view.joint：sources 不得同时包含父字段和子字段；同源选父字段，混合来源只选互不重叠的子字段。保留业务要求，重新声明来源。"
+                  }
+                },
+                {
+                  "name": "set_task_spec",
+                  "ok": false,
+                  "error": {
+                    "code": "VALIDATION",
+                    "message": "TASK_SPEC_SOURCE_OVERLAP:deliveries.view:deliveries.view.joint：sources 不得同时包含父字段和子字段；同源选父字段，混合来源只选互不重叠的子字段。保留业务要求，重新声明来源。"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "comparisonAspectReproduction": {
+    "input": "same physical coordinates represented in aspect 1 and aspect 2 images",
+    "distance": 0.2420369938646184,
+    "expectedForAspectCorrectedIdenticalPose": 0
+  },
+  "cleanup": {
+    "historicalEvidenceFiles": 2105,
+    "historicalEvidenceBytes": 4730541358,
+    "temporaryFiles": 1171,
+    "temporaryBytes": 1009036369,
+    "historicalDocuments": 29,
+    "obsoleteScripts": 4,
+    "technicalGuidesRewritten": 12
+  },
+  "sha256": {
+    "package.json": "f5a14456b9d8d46d78b4d924975f2ee42dc573f320d961a1a92bdbfa93e904b7",
+    "pnpm-lock.yaml": "c586de9597db9e2e91b64aba8e70e9e61a14ca225928dc0ebf429457414254f3",
+    "src/App.vue": "800a07fe09c7ccce0d05808ef7e1f25d13859fdc092228cfeaf032c5f743a5f1",
+    "src/components/PoseCompare.vue": "2967ae51c8bfefe71a3e2da6fc6e58985c7cce1a6d0070ff37cee332f2bd8afb",
+    "src/agent/runtime.ts": "72991608a8c2f601cb870b30e6a6a7c586d5227e2b637b6e34db6d5be4830f45",
+    "src/agent/modelProtocol.ts": "9df339d75a1178429f4014fb791fb74df254a6f37f38653e43123f6d5f9cec7c",
+    "tests/browser/flows.spec.ts": "48ca2c1b41d930038a43effa6a256d163531c75d3f555ae2bf94ff430e88c195"
+  },
+  "limitations": [
+    "synthetic geometry and color-bar browser fixtures",
+    "one local model, bounded evaluation",
+    "no real camera or human movement video validation",
+    "no native save-dialog, mobile or cross-browser proof",
+    "remote CI not checked"
+  ]
+}

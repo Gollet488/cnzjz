@@ -1,84 +1,73 @@
+# Kinetic Pose Lab
 
-# Kinetic 动观 · 人体姿态量化分析 Demo
+浏览器端通用人体姿态分析应用，使用 Vue 3、TypeScript、MediaPipe、ECharts 和 Element Plus。支持单人摄像头采集、本地 MP4 逐帧分析、时序指标、姿态对比、CSV/PNG 导出，以及 Ollama / DeepSeek Agent。
 
-按同目录 `requiremen.md` 实现的纯前端项目。使用 Vue 3 组合式 API / `<script setup>`、TypeScript、Vite、Element Plus、ECharts 和 MediaPipe Pose Landmarker。没有后端，不上传视频或帧。
+当前阶段已暂停功能开发，先保留可运行版本，供手动上传 GitHub。启动、上传方式、本轮检查结果和已知限制见 [构建与交付](docs/delivery.md)，技术资料见 [文档索引](docs/README.md)，目标需求见 [requirement.md](requirement.md)。
+
+后续如需恢复开发，沿用 [核心功能执行计划](docs/core-execution-plan.md)；其中旧的下一条指令暂不执行。
 
 ## 启动
 
-需要 Node.js 22.18+（推荐 Node.js 24）及 pnpm 或 npm。
+项目固定 Node 24.22.1、pnpm 11.25.0。
 
-当前机器的依赖与模型已准备好，双击 `启动Demo.cmd` 即可启动后台服务并自动打开 `http://127.0.0.1:5173/`。重复启动会复用已有服务；关闭浏览器或启动窗口不会结束服务。需要结束时双击 `停止Demo.cmd`。脚本在系统 Node 不可用时会使用这台机器已有的 Codex Node 运行时，日志保存在 `.demo/server.log`。
-
-```sh
-pnpm install
+```powershell
+pnpm install --frozen-lockfile
 pnpm prepare:assets
 pnpm dev
 ```
 
-也可以使用 `npm install`、`npm run prepare:assets`、`npm run dev`。打开终端打印的 localhost 地址。摄像头只在 localhost / HTTPS 下可用，并需要浏览器权限。
+访问终端显示的本机地址。Windows 也可使用“启动Demo.cmd”和“停止Demo.cmd”。启动脚本验证项目进程身份；端口被其他程序占用时会报错。
 
-本目录已准备 MediaPipe WASM 与 Lite 模型，`prepare:assets` 重复执行会跳过已有模型。首次准备需要访问 Google 官方模型下载地址；之后模型、WASM、页面、推理都在本机提供，不依赖 CDN。模型来源见下文。
+`prepare:assets` 将锁定版本的 MediaPipe 运行文件和固定哈希的 Lite 模型放入 public，模型缺失时需要联网下载。已有资源可以用 `pnpm check:assets` 校验。
 
-## 体验路径
+## 使用
 
-1. 默认打开**演示模式**：使用明确标记的合成 33 点序列，模拟通用关节运动；画布中的人形为程序绘制示意，不是真实视频或模型输出。无需摄像头即可体验图表、打点、截取与导出。
-2. **实时摄像头**：点击开始分析授权摄像头，MediaPipe 在浏览器中推理。支持单人，建议全身入镜，避免遮挡。
-3. **上传视频**：选择或拖入本地 MP4 / WebM（最大 500 MB），读取到浏览器内，逐个已解码播放帧推理。当前实现按约 20 FPS 采样，实际取决于硬件；它不是穷尽源视频每一帧的离线批处理器。暂停后拖动时间轴查看已分析帧，继续时保留已有记录，跳过重复时间戳。
-4. **手动打点**记录当前时刻；导出页可以重命名、删除节点。**截取片段**第一次记起点，第二次记终点。暂停时也能拖动时间轴选择两端。截取影响图表和导出，不删除原始采集数据。
-5. **时序可视化**：选择关节，滚轮缩放或拖动底部区间滑块；查看左右角度、活动幅度、角速度热力图、重心时序和轨迹。
-6. **姿态对比**：自行上传参考与待测视频，两路从头同步播放，本地双模型推理，显示当前帧归一化欧氏距离。距离小表示几何姿态更接近，不代表正确。请自行对齐起始时刻、拍摄比例和视角；当前没有动态时间规整或动作阶段匹配。
-7. **导出**：CSV 包含时间、33 点 x/y/z/visibility、左右角度、角速度、近似重心、不对称、肩髋膝高度差、稳定性方差、手动标记。PNG 包含当前画布、时长、平均不对称、重心纵向范围、各关节活动幅度和峰值角速度。
+1. 默认页面使用明确标记的合成姿态演示数据。
+2. 摄像头模式需要浏览器授权；保证单人、全身入镜。
+3. 本地视频的完整分析使用 MP4Box、WebCodecs 和 Worker，支持范围受容器、编码和浏览器能力限制。
+4. 分析页可选关节、raw/filtered、区间与关键点，查看角度、速度、轨迹和左右差异。
+5. 导出页保存 CSV 或 PNG；CSV 支持取消和进度，支持原生文件写入时使用文件流，否则使用内存 Blob。
+6. Agent 页选择模型服务，先“验证并连接”，再提交目标。Ollama 使用本机地址和已安装且支持 tools 的模型；DeepSeek 使用本项目的本机开发/预览代理和 Node 环境中的 `DEEPSEEK_API_KEY`。
 
-## 计算定义与边界
+视频、画面、关键点推理和数值计算留在浏览器。Agent 会向所选模型发送指令和必要的有界工具反馈；选择 DeepSeek 时，这些文本和分析反馈会经本机代理发送到官方 API，密钥只由 Node 读取。页面不接收密钥；不要将密钥写入源码。Ollama 需允许页面来源跨域访问；Node 连接成功不代表浏览器 CORS 已通过。
 
-- 默认 5 帧滑动平均，窗口与置信阈值可配置；阈值默认 0.5。低置信度点标红，相关角度留空，不制造可靠读数。
-- 没有检测到人体的采样帧仍保留时间戳，置信度为 0，关键点与相关指标为空；滤波窗口会清空，避免缺失数据污染后续坐标。
-- 关节：肩、肘、髋、膝、踝、腕与脊柱。三点向量夹角 0–180°，已按视频宽高比修正。脊柱用肩中点 / 髋中点 / 踝中点形成的中线角定义；腕角用肘 / 腕 / 食指。都是可复现的几何代理量，不是临床关节定义。
-- **原始关键点**（未滤波）与**滤波后用于计算的关键点**分别保留。CSV 的 `raw_*` 字段为模型原始值，`filtered_*` 字段为计算输入。
-- 角速度 = 相邻有效帧角差 / 实际时间差，单位 °/s。有符号，热力图使用绝对值。缺失角度或零间隔不会生成速度。
-- 近似重心 = 左右髋的置信度加权坐标。不是人体质量分段模型。
-- 不对称系数 = 6 组双侧关节绝对角差 / 180° 的平均百分比。中线脊柱不计入；另存肩、髋、膝的归一化高度差。
-- 稳定性 = 滑动窗口内可靠关键点 x/y 坐标方差之和的逐点平均。主动运动也会使方差增加；不将其解释为动作质量。
-- 单目 2D 投影不是真实三维角度，不等同专业动捕；只支持单人。光照、遮挡与视角会影响结果。
-- 不识别运动种类、不内置专项规则、不评分、不判动作对错；没有运动类型枚举、YOLO、3D 重建或本地大模型。
-- 默认分析最多 18,000 帧，达到后暂停，提示导出。刷新清空内存。设置变更影响后续数据，需要统一口径时请重置会话后重录。
-- 可选 LLM 辅助解读未启用。核心功能完全不依赖 LLM。
+DeepSeek 代理只在此项目的本机 Vite 开发服务或生产预览服务中可用，纯静态托管不包含代理。本项目不会自动安装或下载 Ollama 模型。
 
-## 项目结构
+## 检查
 
-```text
-src/
-  App.vue                    会话、采集、指标面板、设置与导出界面
-  components/PoseStage.vue    摄像头 / FileReader 文件、视频帧推理循环
-  components/TimeChart.vue    ECharts 时序、重心与热力图
-  components/PoseCompare.vue 双视频同步与本地姿态距离
-  utils/poseMath.ts           向量夹角、滤波、重心、方差、距离
-  utils/poseEngine.ts         本地 WASM / 单人推理模型初始化
-  utils/renderer.ts           Canvas 骨骼、关键点、角度、轨迹绘制
-  utils/demo.ts               明确标注的合成演示序列
-  utils/export.ts             逐帧 CSV、PNG 图片报告
-  config.ts                  可调默认值、关节、颜色与骨骼连接
-  types.ts                   帧、关键点、标记与设置结构
-public/mediapipe/             本地模型与 WASM 资源
-tests/poseMath.test.ts        几何与时序计算边界测试
-scripts/prepare-assets.mjs    从已安装包复制 WASM，下载官方 Lite 模型
-```
-
-## 验证与构建
-
-```sh
+```powershell
+pnpm format:check
+pnpm lint
 pnpm test
 pnpm build
-pnpm preview
+pnpm test:browser
 ```
 
-生产构建输出到 `dist/`，可部署到任意静态托管。导出值使用归一化坐标；CSV 缺失值留空。摄像头真实采集需要使用者自行授权和完成实机测试。
+浏览器回归需要 Playwright Chromium 或已安装的 Chrome。在 PowerShell 中可选择已有 Chrome：
 
-MediaPipe 官方文档：https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker/web_js
+```powershell
+$env:BROWSER_CHANNEL='chrome'
+pnpm test:browser
+```
 
-Lite 模型：https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task
+真实模型检查独立运行；会使用已安装的模型和明确标记的合成姿态输入：
 
-MediaPipe Tasks Vision 按其 Apache-2.0 许可使用。其余依赖保留各自许可。
+```powershell
+node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case compare,quality,multi_turn --output .qa/my-evaluation.json
+```
 
+本轮自动回归使用合成视频和脚本化模型响应。真实设备、人体输入和真实模型的历史实测记录与当前未测项见交付说明，不能把自动回归解释为人体精度或真实模型成功率。
 
+## 目录
 
+- `src/analysis`：会话、版本、区间索引、本地工具与校验。
+- `src/agent`：模型适配、任务规格、执行循环、证据、审计和评测。
+- `src/video`：MP4 索引、离线解码和 Worker。
+- `src/components`、`src/composables`：采集、图表、工作台与 UI 发布。
+- `src/utils`：几何计算、绘制和导出。
+- `tests`：单元、协议与浏览器回归；`tests/fixtures` 是必要测试素材。
+- `scripts`：资源准备、启停、回归、基准和交付工具。
+- `docs`：使用与交付、数据契约、视频和 Agent 技术说明。
+- `.github/workflows`：Windows / Linux 的基础 CI 检查。
+
+当前最多保留 18,000 帧。二维投影、遮挡、视角和置信度会影响指标；系统不识别运动种类、不评分、不判断动作对错。双视频对比目前是预览功能，参数跟随与跨画幅比例修正仍待完成，距离不能用于严格序列相似度结论。静态部署使用根路径 HTTP 服务；本项目未配置子路径资源前缀，上传源码到 GitHub 不会自动上线网站。
