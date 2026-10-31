@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { readFile, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -21,12 +21,13 @@ import {
 import { taskForActions, withTaskSpecs, evidenceRef } from './agentFixtures.ts';
 
 const temporaryDirectories: string[] = [];
+const scratchRoot = resolve('.qa');
 const controlledEvidence: any[] = [];
 const capture = (name: string, input: any, result: any) =>
   controlledEvidence.push(structuredClone({ name, input, result }));
 after(async () => {
   for (const directory of temporaryDirectories) {
-    const child = relative(resolve('.qa'), resolve(directory));
+    const child = relative(scratchRoot, resolve(directory));
     assert.ok(!child.startsWith('..') && !isAbsolute(child) && child.startsWith('h1-efficiency-'));
     await rm(directory, { recursive: true });
   }
@@ -482,7 +483,8 @@ test('page gate counts three independent complete sessions, rejects wrong delive
 });
 
 test('CLI is offline and read-only, missing input/failure/unmeasured all return nonzero', async () => {
-  const directory = await mkdtemp(resolve('.qa/h1-efficiency-'));
+  await mkdir(scratchRoot, { recursive: true });
+  const directory = await mkdtemp(join(scratchRoot, 'h1-efficiency-'));
   temporaryDirectories.push(directory);
   const path = join(directory, 'missing.json');
   await writeFile(path, JSON.stringify({ efficiencyScopes: ['local'] }));

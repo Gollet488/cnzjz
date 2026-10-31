@@ -1,6 +1,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { promisify } from 'node:util';
 import {
   mkdtemp,
@@ -16,6 +17,7 @@ import {
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { processIdentity } from '../scripts/demo-process.mjs';
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -102,8 +104,26 @@ test(
       await writeFile(record, JSON.stringify({ ...original, pid: process.pid }));
       await assert.rejects(run(folder, 'stop'), /PID does not belong/);
       assert.equal((await fetch(original.url)).status, 200);
+      const reused = { ...original, created: 'not-the-recorded-creation-time' };
+      await writeFile(record, JSON.stringify(reused));
+      await assert.rejects(
+        run(folder, 'start', '--no-open', '--port', port),
+        /PID does not belong/,
+      );
+      await assert.rejects(run(folder, 'stop'), /PID does not belong/);
+      assert.deepEqual(JSON.parse(await readFile(record, 'utf8')), reused);
+      assert.equal((await fetch(original.url)).status, 200);
       await writeFile(record, JSON.stringify(original));
       await run(folder, 'stop');
+      await run(folder, 'stop');
+      await assert.rejects(readFile(record), { code: 'ENOENT' });
+      await assert.rejects(fetch(original.url));
+      // An old record for the exited process must be replaced, not reused.
+      await writeFile(record, JSON.stringify(original));
+      await run(folder, 'start', '--no-open', '--port', port);
+      const restarted = JSON.parse(await readFile(record, 'utf8'));
+      assert.notEqual(restarted.token, original.token);
+      original = restarted;
       await run(folder, 'stop');
       await assert.rejects(fetch(original.url));
     } finally {
@@ -114,6 +134,30 @@ test(
     }
   },
 );
+test('a foreign process with the exact Vite path in a later argument is never stopped', async () => {
+  const folder = await fixture(false);
+  const vite = path.join(folder, 'node_modules', 'vite', 'bin', 'vite.js');
+  const foreign = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', vite], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  const exited = once(foreign, 'exit');
+  try {
+    await once(foreign, 'spawn');
+    const identity = processIdentity(foreign.pid);
+    assert.ok(identity);
+    const state = { pid: foreign.pid, vite, created: identity.created };
+    await mkdir(path.join(folder, '.demo'));
+    const record = path.join(folder, '.demo', 'server.json');
+    await writeFile(record, JSON.stringify(state));
+    await assert.rejects(run(folder, 'stop'), /PID does not belong/);
+    assert.equal(foreign.exitCode, null);
+    assert.deepEqual(JSON.parse(await readFile(record, 'utf8')), state);
+  } finally {
+    foreign.kill();
+    await exited;
+  }
+});
 test('occupied unmanaged port is preserved; missing dependencies explain frozen pnpm install', async () => {
   const folder = await fixture();
   const server = createServer((socket) =>
