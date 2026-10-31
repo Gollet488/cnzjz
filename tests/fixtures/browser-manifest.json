@@ -47,6 +47,51 @@
       "name": "fragmented.mp4",
       "bytes": 4726,
       "sha256": "292f771036d7611307fb0b8fecd59f07c7c8e6feea259a4ffb7a19fcd3b6e579"
+    },
+    {
+      "name": "format.mkv",
+      "bytes": 4339,
+      "sha256": "065ab2acd170b9ea5d3521a29632b3a36eb1050aa56b6be7e7619eea61639700"
+    },
+    {
+      "name": "format.mov",
+      "bytes": 4475,
+      "sha256": "44f4a0b0c39cbf524e470df3972a07a1271785cd3a23e7614e120c26d6d32be4"
+    },
+    {
+      "name": "format.avi",
+      "bytes": 14264,
+      "sha256": "8cbae7c624aa13edb55830fcab7cccb600f378a78404633dd0bc642abb094c3a"
+    },
+    {
+      "name": "format.webm",
+      "bytes": 2779,
+      "sha256": "2011d5a90d70c420ef439d58dab2376d285db89973600ad78e9540aae5608c12"
+    },
+    {
+      "name": "format.flv",
+      "bytes": 10323,
+      "sha256": "c6ce55a526ca66089dd15f441f8565b1a9b42577a7a7bbb3c5e17a3ce57d783d"
+    },
+    {
+      "name": "format.wmv",
+      "bytes": 10487,
+      "sha256": "0571f2e86baabf76c1440bc63fce2713ad1842e0f59e3d77257b3a9a43c0d42a"
+    },
+    {
+      "name": "format.m2ts",
+      "bytes": 12408,
+      "sha256": "8444de0ef8aadbc83e937c761af1cdead76bb4cf8c9cdd6315799f43aaeffcb6"
+    },
+    {
+      "name": "format-hevc.mp4",
+      "bytes": 5145,
+      "sha256": "b61445b5bad13ad5b62f7216c74eb9c5506d88af37ef224c0218089a9615096d"
+    },
+    {
+      "name": "format-vfr.mkv",
+      "bytes": 4412,
+      "sha256": "0ee0b81368a372dcc262ba4fd6bd62f25a8d0a179c6e490cba5e57cda8720221"
     }
   ]
 }

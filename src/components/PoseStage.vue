@@ -6,6 +6,7 @@ import { demoPose } from '../utils/demo';
 import { renderPose } from '../utils/renderer';
 import { getPoseEngine } from '../utils/poseEngine';
 import { OfflineVideoJob } from '../video/job';
+import { prepareVideo, VIDEO_ACCEPT } from '../video/prepare';
 import type { OfflineMetadata, OfflineState } from '../video/protocol';
 import { MAX_FRAMES } from '../config';
 import { DEMO_SIZE, stageSize } from '../utils/dimensions';
@@ -47,6 +48,8 @@ let pausedDemoPaint:
   | undefined;
 const processed = ref(0);
 let file: File | undefined;
+let filePreparation: AbortController | undefined;
+let transcoded = false;
 let job: OfflineVideoJob | undefined;
 let preview: ImageBitmap | undefined;
 let reviewing = false;
@@ -152,7 +155,7 @@ async function start() {
   if (props.source === 'demo') return;
   if (props.source === 'file') {
     if (!file) {
-      emit('status', '请先选择 H.264 MP4 视频。');
+      emit('status', '请先选择本地视频。');
       emit('ended');
       return;
     }
@@ -177,8 +180,8 @@ async function start() {
       job = new OfflineVideoJob(file, MAX_FRAMES, {
         metadata(value) {
           if (current()) {
-            offlineMetadata.value = value;
-            emit('offline', offlineState.value, value);
+            offlineMetadata.value = { ...value, transcoded };
+            emit('offline', offlineState.value, offlineMetadata.value);
           }
         },
         frame(value) {
@@ -224,7 +227,9 @@ async function start() {
             emit(
               'status',
               value === 'completed'
-                ? '已核对全部呈现帧及源 PTS，逐帧分析完成。'
+                ? transcoded
+                  ? '转换后视频的全部呈现帧已分析完成；时间轴与帧数以转换结果为准。'
+                  : '已核对全部呈现帧及源 PTS，逐帧分析完成。'
                 : value === 'truncated'
                   ? `达到 ${MAX_FRAMES.toLocaleString()} 帧上限，结果已截断，未分析完整视频。`
                   : value === 'cancelled'
@@ -327,19 +332,31 @@ async function loadFile(selected?: File) {
     emit('status', '视频超过 500 MB，请先截取较短片段。');
     return;
   }
-  if (!/\.mp4$/i.test(selected.name)) {
-    emit('status', '逐帧分析仅支持 H.264 MP4；WebM/MOV 暂不支持，不进行播放采样降级。');
-    return;
-  }
   stop();
-  file = selected;
+  file = undefined;
+  filename.value = '';
   emit('ended');
   stream?.getTracks().forEach((t) => t.stop());
   stream = undefined;
   video.value!.srcObject = null;
+  const controller = new AbortController();
+  filePreparation = controller;
+  loading.value = true;
+  emit('busy', true);
   try {
+    const prepared = await prepareVideo(selected, controller.signal, (message) =>
+      emit('status', message),
+    );
+    if (controller.signal.aborted) return;
+    // ready resets the parent session synchronously, so finish preparation
+    // before emitting it; the prepared file survives a same-source reset.
+    filePreparation = undefined;
+    loading.value = false;
+    emit('busy', false);
+    file = prepared.file;
+    transcoded = prepared.transcoded;
     if (objectURL) URL.revokeObjectURL(objectURL);
-    objectURL = URL.createObjectURL(selected);
+    objectURL = URL.createObjectURL(file);
     filename.value = selected.name;
     video.value!.src = objectURL;
     video.value!.load();
@@ -350,9 +367,21 @@ async function loadFile(selected?: File) {
     processed.value = 0;
     offlineState.value = 'idle';
     emit('ready', selected.name);
-    emit('status', '文件已选择，点击「开始分析」验证容器和编码并逐帧解码。');
-  } catch {
-    emit('status', '本地文件读取失败。');
+    emit(
+      'status',
+      transcoded
+        ? '视频已在本机转换，点击「开始分析」；时间轴与帧数以转换后视频为准。'
+        : '文件已选择，点击「开始分析」逐帧解码。',
+    );
+  } catch (error) {
+    if (!controller.signal.aborted)
+      emit('status', error instanceof Error ? error.message : '本地文件读取失败。');
+  } finally {
+    if (filePreparation === controller) {
+      filePreparation = undefined;
+      loading.value = false;
+      emit('busy', false);
+    }
   }
 }
 function fileChange(event: Event) {
@@ -365,6 +394,8 @@ function drop(event: DragEvent) {
 }
 function stop() {
   generation++;
+  filePreparation?.abort();
+  filePreparation = undefined;
   if (cameraRequest) {
     cameraRequest.expired = true;
     clearTimeout(cameraRequest.timer);
@@ -610,9 +641,9 @@ defineExpose({
       ref="video"
       playsinline
       muted
-      @error="emit('status', '视频预览不可用；离线分析将独立检查 H.264 MP4 解码支持。')"
+      @error="emit('status', '视频预览不可用，请重新选择视频；离线分析会独立检查解码支持。')"
     />
-    <input ref="input" type="file" accept="video/mp4,.mp4" hidden @change="fileChange" />
+    <input ref="input" type="file" :accept="VIDEO_ACCEPT" hidden @change="fileChange" />
     <div class="stage-top"
       ><span class="stage-chip"
         ><i :class="{ live: playing }" />{{
@@ -635,13 +666,27 @@ defineExpose({
       ><component :is="source === 'camera' ? Video : UploadCloud" :size="38" /><h3>{{
         source === 'camera' ? '连接你的摄像头' : '将视频拖到这里'
       }}</h3
-      ><p>{{ source === 'camera' ? cameraHint : filename || '逐帧分析：H.264 MP4，最大 500 MB' }}</p
+      ><p>{{
+        source === 'camera'
+          ? cameraHint
+          : filename || '支持 MP4、MOV、MKV、AVI、WebM 等视频，最大 500 MB'
+      }}</p
       ><el-button v-if="source === 'file'" @click="input?.click()">{{
         filename ? '重新选择视频' : '选择本地视频'
       }}</el-button></div
     >
     <div v-if="loading" class="model-loading"
-      ><ScanLine class="spin" :size="24" /><span>正在准备本地推理引擎…</span></div
+      ><ScanLine class="spin" :size="24" /><span>{{
+        source === 'file' ? '正在检查并准备本地视频…' : '正在准备本地推理引擎…'
+      }}</span
+      ><button
+        v-if="source === 'file'"
+        @click="
+          stop();
+          emit('status', '已取消视频准备，请重新选择视频。');
+        "
+        >取消准备</button
+      ></div
     >
     <div v-if="source === 'file' && filename" class="offline-progress" role="status">
       <button @click="input?.click()">更换视频</button>

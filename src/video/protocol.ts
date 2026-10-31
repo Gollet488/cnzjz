@@ -1,5 +1,6 @@
 import type { Landmark } from '../types';
 export interface OfflineMetadata {
+  transcoded?: boolean;
   codec: string;
   total: number;
   firstTime: number;

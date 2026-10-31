@@ -13,9 +13,11 @@
 .prettierignore text eol=lf
 .node-version text eol=lf
 .gitattributes text eol=lf
+.env.example text eol=lf
 *.cmd text eol=crlf
 # Preserve upstream bytes for pinned resource hashes on every platform.
 public/mediapipe/** -text
+public/ffmpeg/** -text
 # Immutable evidence and fixture hashes must survive a fresh checkout unchanged.
 docs/evidence/** -text
 tests/fixtures/** -text

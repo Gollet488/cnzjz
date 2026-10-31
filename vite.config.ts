@@ -9,9 +9,9 @@ export default defineConfig({
     watch: { ignored: ['**/.qa/**', '**/.delivery/**', '**/test-results/**'] },
   },
   preview: { host: '127.0.0.1' },
-  // The worker-only MP4 import must be prebundled before the first upload.
+  // Prebundle worker-only MP4 and lazy FFmpeg imports before the first upload.
   // Limit discovery to the real entry; ignored historical QA pages are not inputs.
-  optimizeDeps: { entries: ['index.html'], include: ['mp4box'] },
+  optimizeDeps: { entries: ['index.html'], include: ['mp4box', '@ffmpeg/ffmpeg'] },
   build: {
     rollupOptions: {
       output: {

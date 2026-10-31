@@ -1,4 +1,6 @@
-# 任务 4 的合成 MP4 固件
+# 合成视频测试素材
+
+`format.*`、`format-hevc.mp4` 和 `format-vfr.mkv` 由同目录的合成色块素材转换而来，不含真人。使用 `node scripts/generate-video-formats.mjs <ffmpeg路径>` 生成并更新哈希清单。覆盖 MOV/H.264、MKV/H.264、AVI/MPEG-4、WebM/VP9、FLV/FLV1、WMV/WMV2、MPEG-TS/H.264、MP4/HEVC 和可变帧率 MKV；浏览器测试使用真实本地转换器及姿态 Worker 验证完整导入、帧数、时间顺序与转换标记。`fragmented.mp4` 在底层索引读取器中仍会拒绝，由导入层自动转换后分析。
 
 这些微型视频由 FFmpeg 7.1/libx264 的 `testsrc2` 生成，只有合成色块，不含个人视频或第三方图片。JSON 中的 `ptsSeconds` 来自 FFmpeg `showinfo` 的真实解码输出，是 MP4Box 之外的独立 oracle。默认编码包含 B 帧、尾部 moov；不能把解码顺序当呈现顺序。
 

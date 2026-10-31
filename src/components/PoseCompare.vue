@@ -6,6 +6,7 @@ import { renderPose } from '../utils/renderer';
 import { poseDistance } from '../utils/poseMath';
 import type { Settings, Landmark } from '../types';
 import { stageSize } from '../utils/dimensions';
+import { prepareVideo, VIDEO_ACCEPT } from '../video/prepare';
 defineProps<{ settings: Settings }>();
 const emit = defineEmits<{ error: [message: string] }>();
 const videos: HTMLVideoElement[] = [];
@@ -19,18 +20,46 @@ const names = ref(['', '']),
 const sizes = ref([stageSize(), stageSize()]);
 const models: PoseLandmarker[] = [];
 const urls: string[] = [];
+const preparations: (AbortController | undefined)[] = [];
+const preparing = ref([false, false]);
+const hints = ref(['', '']);
 let raf = 0,
   last = 0,
   disposed = false;
 async function load(index: number, event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0];
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
   if (!file) return;
   pause();
-  if (urls[index]) URL.revokeObjectURL(urls[index]);
-  urls[index] = URL.createObjectURL(file);
-  videos[index].src = urls[index];
-  names.value[index] = file.name;
+  preparations[index]?.abort();
+  const controller = new AbortController();
+  preparations[index] = controller;
+  preparing.value[index] = true;
+  names.value[index] = '';
   distance.value = null;
+  try {
+    const prepared = await prepareVideo(file, controller.signal, (message) => {
+      hints.value[index] = message;
+    });
+    if (disposed || controller.signal.aborted) return;
+    if (urls[index]) URL.revokeObjectURL(urls[index]);
+    urls[index] = URL.createObjectURL(prepared.file);
+    videos[index].src = urls[index];
+    videos[index].load();
+    names.value[index] = file.name;
+    hints.value[index] = prepared.transcoded ? '已在本机转换，使用转换后时间轴。' : '';
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      hints.value[index] = error instanceof Error ? error.message : '视频读取失败。';
+      emit('error', hints.value[index]);
+    }
+  } finally {
+    if (preparations[index] === controller) {
+      preparations[index] = undefined;
+      preparing.value[index] = false;
+    }
+  }
 }
 function pause() {
   running.value = false;
@@ -67,7 +96,7 @@ async function play() {
     running.value = true;
     raf = requestAnimationFrame(tick);
   } catch {
-    emit('error', '对比模型或视频加载失败，请检查模型资源并使用浏览器支持的 MP4 文件。');
+    emit('error', '对比模型或视频加载失败，请检查模型资源或重新选择视频。');
     pause();
   } finally {
     busy.value = false;
@@ -113,6 +142,7 @@ function tick(now: number) {
 }
 onBeforeUnmount(() => {
   disposed = true;
+  preparations.forEach((controller) => controller?.abort());
   pause();
   models.forEach((m) => m.close());
   urls.forEach((u) => URL.revokeObjectURL(u));
@@ -163,16 +193,21 @@ onBeforeUnmount(() => {
             }
           "
           type="file"
-          accept="video/mp4,video/webm"
+          :accept="VIDEO_ACCEPT"
           hidden
           @change="load(index, $event)"
         /><el-button @click="files[index].click()">{{
-          names[index] ? '更换视频' : '上传 MP4'
-        }}</el-button></div
+          names[index] || preparing[index] ? '更换视频' : '上传视频'
+        }}</el-button
+        ><p v-if="hints[index]" role="status">{{ hints[index] }}</p></div
       ></div
     >
     <div class="compare-controls"
-      ><el-button type="primary" :disabled="!names.every(Boolean)" :loading="busy" @click="play"
+      ><el-button
+        type="primary"
+        :disabled="!names.every(Boolean) || preparing.some(Boolean)"
+        :loading="busy"
+        @click="play"
         ><component :is="running ? Pause : Play" :size="15" />{{
           running ? '暂停对比' : '从头同步分析'
         }}</el-button

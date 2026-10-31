@@ -4,7 +4,7 @@ import { LandmarkFilter, measureFrame } from '../utils/poseMath.ts';
 export const METRIC_VERSION = '2.0' as const;
 export type SessionReference = { sessionId: string; revision: number };
 export interface Acquisition {
-  mode: 'webcodecs';
+  mode: 'webcodecs' | 'webcodecs-transcoded';
   status: 'preparing' | 'running' | 'paused' | 'completed' | 'cancelled' | 'truncated' | 'failed';
   expectedFrames: number | null;
   processedFrames: number;

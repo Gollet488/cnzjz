@@ -9,6 +9,7 @@ export default ts.config(
       'node_modules/**',
       'dist/**',
       'public/mediapipe/**',
+      'public/ffmpeg/**',
       '.qa/**',
       '.delivery/**',
       'docs/evidence/**',

@@ -300,6 +300,121 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole('button', { name: '暂停分析', exact: true }).click();
 });
 
+for (const fixture of [
+  'format.mkv',
+  'format.mov',
+  'format.avi',
+  'format.webm',
+  'format.flv',
+  'format.wmv',
+  'format.m2ts',
+  'format-hevc.mp4',
+  'format-vfr.mkv',
+  'fragmented.mp4',
+]) {
+  test(`video formats: ${fixture} imports and completes real frame analysis`, async ({
+    page,
+  }, info) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.getByRole('button', { name: '上传视频', exact: true }).click();
+    await page.getByRole('checkbox', { name: '生成/合成视频素材（synthetic）' }).check();
+    await page
+      .locator('.pose-stage input[type=file]')
+      .setInputFiles(resolve(`tests/fixtures/${fixture}`));
+    await expect(page.locator('.status-message')).toContainText(/文件已选择|视频已在本机转换/, {
+      timeout: 60_000,
+    });
+    await page.getByRole('button', { name: '开始分析', exact: true }).click();
+    await expect(page.locator('.offline-progress')).toContainText('全部完成', { timeout: 60_000 });
+    const rows = await fullCSV(page, info, `${fixture}.csv`);
+    expect(rows.length).toBe(30);
+    expect(rows[0].acquisition_mode).toBe(
+      fixture === 'format.mov' ? 'webcodecs' : 'webcodecs-transcoded',
+    );
+    expect(rows.at(-1)!.acquisition_status).toBe('completed');
+    expect(
+      rows.every(
+        (row, index) => index === 0 || Number(row.time_s) > Number(rows[index - 1].time_s),
+      ),
+    ).toBe(true);
+    if (fixture === 'format-vfr.mkv') {
+      const gaps = rows
+        .slice(1)
+        .map((row, index) => Number(row.time_s) - Number(rows[index].time_s));
+      expect(Math.max(...gaps) / Math.min(...gaps)).toBeGreaterThan(1.8);
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
+test('video formats: comparison accepts two converted formats and plays both', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
+  const inputs = page.locator('.comparison-panel input[type=file]');
+  await inputs.nth(0).setInputFiles(resolve('tests/fixtures/format.avi'));
+  await inputs.nth(1).setInputFiles(resolve('tests/fixtures/format.webm'));
+  await expect(page.locator('.comparison-panel [role=status]')).toHaveText(
+    ['已在本机转换，使用转换后时间轴。', '已在本机转换，使用转换后时间轴。'],
+    { timeout: 60_000 },
+  );
+  const videos = page.locator('.comparison-panel video');
+  await expect(videos.nth(0)).toHaveJSProperty('videoWidth', 64);
+  await expect(videos.nth(1)).toHaveJSProperty('videoWidth', 64);
+  await page.getByRole('button', { name: '从头同步分析', exact: true }).click();
+  await expect
+    .poll(() => videos.nth(0).evaluate((v: HTMLVideoElement) => v.currentTime))
+    .toBeGreaterThan(0.1);
+  await expect
+    .poll(() => videos.nth(1).evaluate((v: HTMLVideoElement) => v.currentTime))
+    .toBeGreaterThan(0.1);
+  expect(errors).toEqual([]);
+});
+
+test('video formats: cancel preparation and replace file without late writes', async ({ page }) => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/ffmpeg/ffmpeg-core.wasm', async (route) => {
+    await held;
+    await route.continue().catch(() => {});
+  });
+  await page.getByRole('button', { name: '上传视频', exact: true }).click();
+  const loadingConverter = page.waitForRequest('**/ffmpeg/ffmpeg-core.wasm');
+  await page
+    .locator('.pose-stage input[type=file]')
+    .setInputFiles(resolve('tests/fixtures/format.avi'));
+  await loadingConverter;
+  await expect(page.getByRole('button', { name: '取消准备', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '取消准备', exact: true }).click();
+  await page
+    .locator('.pose-stage input[type=file]')
+    .setInputFiles(resolve('tests/fixtures/30fps.mp4'));
+  release();
+  await expect(page.locator('.status-message')).toContainText('文件已选择');
+  await page.getByRole('button', { name: '开始分析', exact: true }).click();
+  await expect(page.locator('.offline-progress')).toContainText('全部完成');
+  await expect(page.locator('.offline-progress')).toContainText('30 / 30 帧');
+});
+
+test('video formats: corrupt input reports error and allows retry', async ({ page }) => {
+  await page.getByRole('button', { name: '上传视频', exact: true }).click();
+  await page
+    .locator('.pose-stage input[type=file]')
+    .setInputFiles({ name: 'broken.mkv', mimeType: '', buffer: Buffer.from('not a video') });
+  await expect(page.locator('.status-message')).toContainText('视频转换失败', { timeout: 60_000 });
+  await page.locator('.pose-stage input[type=file]').setInputFiles({
+    name: 'no-extension',
+    mimeType: '',
+    buffer: await readFile(resolve('tests/fixtures/30fps.mp4')),
+  });
+  await expect(page.locator('.status-message')).toContainText('文件已选择');
+  await page.getByRole('button', { name: '开始分析', exact: true }).click();
+  await expect(page.locator('.offline-progress')).toContainText('全部完成');
+});
+
 test('camera startup diagnostic: pending permission is visible and times out without duplicate requests', async ({
   page,
 }) => {

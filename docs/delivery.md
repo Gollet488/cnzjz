@@ -1,8 +1,14 @@
 # 构建与交付
 
-更新日期：2026-10-30（Asia/Shanghai）。当前按用户要求暂时停在本阶段，保留可运行源码，供用户自行上传 GitHub；未创建提交、推送或远程发布。
+更新日期：2026-10-31（Asia/Shanghai）。按参赛要求补齐代码仓库资料，由用户自行上传 GitHub。本次不创建提交、不推送，保留当前仓库和原有开发历史。
 
-## 本轮检查
+## 当前仓库整理
+
+本次新增 [系统架构](architecture.md)、[环境配置](environment.md)、根目录 `.env.example`、明确加载本机配置的 `dev:env` / `preview:env` 脚本及 [仓库提交清单](submission-checklist.md)。README 已补充架构与“CN终结者，3 人”团队信息，按用户要求不列成员姓名和分工。交付清单工具已包含安全的环境模板，实际密钥文件仍排除。浏览器检查发现并修复了首次导入 FFmpeg 时的开发依赖预打包问题。
+
+当前检查结果和上传前待办统一记录在 [仓库提交清单](submission-checklist.md)。下方 2026-10-30 的结果保留为历史记录，不代替本次检查。
+
+## 2026-10-30 历史检查
 
 | 检查 | 结果 |
 | --- | --- |
@@ -39,33 +45,40 @@ node scripts/start-demo.mjs --production
 
 已有资源可直接校验，不需要重复下载模型。缺失时，`pnpm prepare:assets` 会从固定官方地址准备资源。
 
+需要从文件加载 DeepSeek 密钥时，先复制 `.env.example` 为 `.env` 并在本机填写，再使用 `pnpm dev:env` 或构建后的 `pnpm preview:env`。普通启动命令及 Windows 双击脚本使用进程环境或 Windows 用户环境；详细变量说明见 [环境配置](environment.md)。
+
 浏览器回归在安装 Playwright Chromium 后运行 `pnpm test:browser`；已有 Chrome 时可在 PowerShell 中先设置 `$env:BROWSER_CHANNEL='chrome'`。真实模型测试为独立可选检查，本轮没有发起真实模型请求。
 
 ## 手动上传 GitHub
 
-整理后的文件位于原项目的 `.delivery/` 内：
+参赛要求保留完整 Git 提交历史，应从**当前项目根目录**提交和推送。本地目前有 13 条可达提交（本次检查时），远程已配置为 `https://github.com/Gollet488/cnzjz.git`。不要在副本中重新 `git init`，也不要只通过网页上传文件或 ZIP 来替代现有历史。
 
-- `kinetic-pose-lab/`：干净源码副本，可直接作为新仓库目录使用。
-- `kinetic-pose-lab-source.zip`：同一副本的压缩包，解压后使用。
-- `package-info.json`：本机文件数量、字节数与 SHA-256 校验记录。
-
-副本保留 `src/`、`public/`、`scripts/`、`tests/`、`docs/`、`.github/`、锁文件、配置及 Windows 启停脚本。模型、WASM、Worker 和必要的微型合成测试素材均保留，便于在新电脑上复现。
-
-副本排除 `.git/`、`node_modules/`、`dist/`、`.qa/`、`.demo/`、`test-results/`、Playwright 报告、缓存、日志、`.env*`、构建增量文件及上传包本身。私人摄像头 CSV 和人体视频未打包；原项目的历史材料仍保留在本机。
-
-你可以用 GitHub Desktop 将 `kinetic-pose-lab/` 创建为仓库后发布，或在该副本内执行以下命令。先在 GitHub 创建一个空仓库，再替换下方远程地址：
+先检查即将提交的改动：
 
 ```powershell
-git init -b main
-git add .
-git commit -m "Initial project snapshot"
-git remote add origin https://github.com/YOUR_NAME/YOUR_REPOSITORY.git
-git push -u origin main
+git status --short
+git diff --stat
+git remote -v
+git branch --show-current
 ```
 
-如果通过 GitHub 网页上传，上传解压后的源码与隐藏配置文件；只上传 ZIP 会将其保存为压缩附件。`.github/` 与 `.gitignore` 等文件也需要上传。原工作区已有 Git 历史和未提交修改，本轮没有重置、暂存或改动其提交记录。
+确认改动中包含当前功能源码、测试素材、本次文档和 `public/ffmpeg/` 运行资源，再提交。`.gitignore` 会排除依赖、构建、日志、私人配置和本地交付产物；只有无密钥的 `.env.example` 允许入库。
 
-上传后 GitHub Actions 会执行 Windows/Linux 的格式、lint、单元测试和构建；远程 CI 结果以仓库实际运行结果为准。本轮未执行远程 CI。
+```powershell
+git add .
+git diff --cached --stat
+git diff --cached --check
+git commit -m "Complete video support and competition repository documentation"
+git push -u origin HEAD
+```
+
+上述提交会包含当前尚未提交的多格式视频功能与本次仓库完善内容，提交前请按暂存差异核对。若推送提示远程已更新，先获取并检查远程改动、合并解决冲突后再推送；保留两侧历史，不使用强制覆盖。若改用另一个空仓库，通过修改当前仓库的远程地址继续推送即可保留历史，无需重新初始化。
+
+GitHub Desktop 也可直接添加当前本地仓库，检查 Changes、创建提交后 Push origin。不要选择 `.delivery/kinetic-pose-lab/`：`.delivery/` 中的目录、ZIP 和校验清单是 2026-10-30 的旧快照，不含本次修改，也不包含 `.git/` 历史。
+
+发布后确认仓库设为 Public，或已给予评审访问权限；确认 README、`.env.example`、`.github/`、必要模型/WASM/测试素材及提交历史都可访问。仓库可见性、评审权限和远程分支状态需由上传者最终确认，本次未访问远程账户设置。
+
+上传后现有 GitHub Actions 会执行 Windows/Linux 的格式、lint、单元测试和构建；远程 CI 结果以仓库实际运行结果为准。本次未执行远程 CI。
 
 ## 网站部署与模型连接
 

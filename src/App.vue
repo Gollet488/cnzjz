@@ -390,7 +390,7 @@ function ready(name: string) {
 function offlineStatus(state: OfflineState, metadata: OfflineMetadata | null) {
   if (source.value !== 'file' || state === 'idle') return;
   session.setAcquisition({
-    mode: 'webcodecs',
+    mode: metadata?.transcoded ? 'webcodecs-transcoded' : 'webcodecs',
     status: state,
     expectedFrames: metadata?.total ?? null,
     processedFrames: session.frames.length,
