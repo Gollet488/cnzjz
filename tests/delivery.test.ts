@@ -28,6 +28,7 @@ async function deliveryFixture() {
     'scripts/verify-delivery.mjs',
     'docs/architecture.md',
     'docs/evidence/selected.json',
+    '.env.example',
     '.gitattributes',
     '.gitignore',
     '.node-version',
@@ -77,6 +78,8 @@ test('delivery selection rejects traversal, dependency copies, build outputs and
     'test-results/results.json',
     '.env',
     'src/.env.local',
+    'src/.env.example',
+    '.env.example.local',
     'tsconfig.tsbuildinfo',
   ])
     assert.throws(() => snapshotPath(name), /Invalid or excluded delivery path/);
@@ -85,6 +88,7 @@ test('delivery selection rejects traversal, dependency copies, build outputs and
     'docs/evidence/phase-h5/result.json',
   );
   assert.equal(snapshotPath('启动Demo.cmd'), '启动Demo.cmd');
+  assert.equal(snapshotPath('.env.example'), '.env.example');
 });
 
 test('delivery verification detects a changed byte, duplicate entries and missing hash metadata', async () => {
@@ -145,6 +149,7 @@ test('manifest includes source, configuration and assets while evidence remains 
     'scripts/verify-delivery.mjs',
     'requirement.md',
     'docs/architecture.md',
+    '.env.example',
   ])
     assert.ok(sources.has(expected), `Missing delivery input: ${expected}`);
   assert.ok(

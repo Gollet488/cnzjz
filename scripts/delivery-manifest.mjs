@@ -23,7 +23,7 @@ export function snapshotPath(value) {
     value.includes(':') ||
     value.split('/').some((part) => !part || part === '.' || part === '..') ||
     value.split('/').some((part) => excludedSegments.has(part.toLowerCase())) ||
-    /(?:^|\/)\.env(?:\.|$)/i.test(value) ||
+    (value !== '.env.example' && /(?:^|\/)\.env(?:\.|$)/i.test(value)) ||
     /\.tsbuildinfo$/i.test(value)
   )
     throw new Error(`Invalid or excluded delivery path: ${String(value)}`);
@@ -84,6 +84,7 @@ export async function verifyManifest(root, manifest) {
 
 const sourceRoots = ['.github', 'public', 'scripts', 'src', 'tests'];
 const rootFiles = [
+  '.env.example',
   '.gitattributes',
   '.gitignore',
   '.node-version',

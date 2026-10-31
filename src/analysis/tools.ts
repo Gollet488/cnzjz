@@ -28,7 +28,7 @@ const parametersSchema = object({
 const reference = { sessionId: string, revision: integer };
 const acquisitionSchema = nullable(
   object({
-    mode: enumeration('webcodecs'),
+    mode: enumeration('webcodecs', 'webcodecs-transcoded'),
     status: enumeration(
       'preparing',
       'running',
@@ -294,6 +294,11 @@ function evidence(session: AnalysisSession, interval: Interval, basis: Basis, fr
     sampledRange: frames.length ? [frames[0].time, frames.at(-1)!.time] : null,
     limitations: [
       ...LIMITATIONS,
+      ...(info.acquisition?.mode === 'webcodecs-transcoded'
+        ? [
+            '视频已在本机转换；帧数、时间轴和完整性核对以转换后视频为准，不能视为原文件逐帧无损审计。',
+          ]
+        : []),
       ...(info.acquisition && info.acquisition.status !== 'completed'
         ? [`离线视频状态为 ${info.acquisition.status}；当前数据是已分析前缀，不能代表完整源视频。`]
         : []),

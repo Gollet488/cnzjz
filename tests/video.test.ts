@@ -157,6 +157,39 @@ class FakeWorker {
     this.onmessage?.({ data });
   }
 }
+
+test('converted video provenance survives tool validation and CSV with a source audit limitation', () => {
+  const session = new AnalysisSession('file', {
+    threshold: 0.5,
+    window: 5,
+    aspect: 4 / 3,
+    metricVersion: '2.0',
+  });
+  session.setAcquisition({
+    mode: 'webcodecs-transcoded',
+    status: 'completed',
+    expectedFrames: 2,
+    processedFrames: 0,
+    codec: 'avc1.42c01e',
+    rotation: 0,
+    mediaTimeOffset: 0,
+  });
+  session.append([], 0);
+  session.append([], 0.04);
+  const registry = createToolRegistry(session);
+  const info = session.info();
+  const output = registry.execute('get_quality_summary', {
+    sessionId: info.sessionId,
+    revision: info.revision,
+    interval: [0, 0.04],
+  });
+  assert.equal(output.ok, true);
+  const evidence = (output as any).result.evidence;
+  registry.validateEvidence(evidence);
+  assert.equal(evidence.acquisition.mode, 'webcodecs-transcoded');
+  assert.ok(evidence.limitations.some((text: string) => text.includes('转换后视频')));
+  assert.ok(serializeCSV(session.frames, [], info).includes('"webcodecs-transcoded"'));
+});
 test('offline client holds one unacknowledged frame on pause, resumes once, closes cancelled and late previews', () => {
   const previous = globalThis.Worker;
   globalThis.Worker = FakeWorker as unknown as typeof Worker;

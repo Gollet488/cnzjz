@@ -3,6 +3,17 @@ import { createHash } from 'node:crypto';
 import { modelSHA256 } from './asset-policy.mjs';
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const read = (path) => readFile(new URL('../' + path, import.meta.url));
+for (const [pkg, names] of [
+  ['ffmpeg', ['worker.js', 'const.js', 'errors.js']],
+  ['core', ['ffmpeg-core.js', 'ffmpeg-core.wasm']],
+]) {
+  for (const name of names)
+    if (
+      digest(await read(`node_modules/@ffmpeg/${pkg}/dist/esm/${name}`)) !==
+      digest(await read(`public/ffmpeg/${name}`))
+    )
+      throw new Error(`Video converter asset mismatch: ${name}. Run pnpm prepare:assets.`);
+}
 const pkg = JSON.parse(await read('node_modules/@mediapipe/tasks-vision/package.json'));
 if (pkg.version !== '0.10.32')
   throw new Error('Unexpected MediaPipe version; review assets before updating.');

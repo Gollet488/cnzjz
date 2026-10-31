@@ -1,6 +1,20 @@
 import { mkdir, cp, readFile, writeFile, rename } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { modelURL, modelSHA256 } from './asset-policy.mjs';
+// Serve the single-thread converter from the same origin, including on static
+// hosts. No CDN, video upload or SharedArrayBuffer headers are required.
+const videoFolder = new URL('../public/ffmpeg/', import.meta.url);
+await mkdir(videoFolder, { recursive: true });
+for (const name of ['worker.js', 'const.js', 'errors.js'])
+  await cp(
+    new URL('../node_modules/@ffmpeg/ffmpeg/dist/esm/' + name, import.meta.url),
+    new URL(name, videoFolder),
+  );
+for (const name of ['ffmpeg-core.js', 'ffmpeg-core.wasm'])
+  await cp(
+    new URL('../node_modules/@ffmpeg/core/dist/esm/' + name, import.meta.url),
+    new URL(name, videoFolder),
+  );
 const folder = new URL('../public/mediapipe/', import.meta.url);
 await mkdir(folder, { recursive: true });
 await cp(
