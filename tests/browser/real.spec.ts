@@ -3,14 +3,24 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { cpus, totalmem, release } from 'node:os';
 import { evaluationFingerprints } from '../../scripts/evaluate-agent.mjs';
-import { fullCSV, downloadFile, verifyAudit, parseCSV, rom, numericEqual } from './files.ts';
+import { resolveCitation } from '../../src/agent/runtime.ts';
+import {
+  fullCSV,
+  downloadFile,
+  verifyAudit,
+  parseCSV,
+  rom,
+  numericEqual,
+  realAgentBudget,
+} from './files.ts';
 
 test('REAL MODEL demonstration: compare → right/second interval → evidence/view → report/CSV', async ({
   page,
   request,
 }, info) => {
-  const inventory = await (await request.get('http://127.0.0.1:11434/api/tags')).json();
-  const version = await (await request.get('http://127.0.0.1:11434/api/version')).json();
+  const address = process.env.OLLAMA_ADDRESS ?? 'http://127.0.0.1:11434';
+  const inventory = await (await request.get(`${address}/api/tags`)).json();
+  const version = await (await request.get(`${address}/api/version`)).json();
   const model = process.env.OLLAMA_MODEL ?? inventory.models[0]?.name;
   expect(
     model,
@@ -47,6 +57,7 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
   };
   await persist();
   await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
+  await page.getByLabel('本地 Ollama 地址', { exact: true }).fill(address);
   await page.getByLabel('模型名', { exact: true }).fill(model);
   await page.getByRole('button', { name: '验证并连接', exact: true }).click();
   await expect(page.locator('.connection-status')).toHaveText('模型已连接', { timeout: 70_000 });
@@ -84,68 +95,108 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
   summary.fingerprints.material = createHash('sha256')
     .update(await readFile(info.outputPath('real-session.csv')))
     .digest('hex');
-  for (const [index, goal] of goals.entries()) {
-    await page.getByRole('textbox', { name: '分析目标或后续修改' }).fill(goal);
-    const submitted = performance.now();
-    await page.getByRole('button', { name: '执行目标', exact: true }).click();
-    const panel = page.locator('.run-panel').first();
-    await expect(panel.locator('h3').first()).toHaveText(goal);
-    await expect(panel.locator('.run-status')).not.toHaveText('执行中', { timeout: 250_000 });
-    const turn: any = {
-      goal,
-      status: await panel.locator('.run-status').innerText(),
-      nodeChecked: [],
-    };
-    await expect(
-      panel.getByRole('button', { name: '保存完整本地审计', exact: true }),
-    ).toBeVisible();
-    turn.observedWaitMs = performance.now() - submitted;
-    const audit = JSON.parse(
-      (
-        await downloadFile(
-          page,
-          info,
-          panel.getByRole('button', { name: '保存完整本地审计', exact: true }),
-          `real-turn-${index + 1}-audit.json`,
-        )
-      ).bytes.toString(),
-    );
-    try {
-      turn.nodeChecked = verifyAudit(rows, audit);
-      turn.nodeConsistent = turn.nodeChecked.length ? true : null;
-      turn.nodeNote = turn.nodeChecked.length
-        ? 'successful tools independently replayed'
-        : 'no successful local tool result; numerical agreement unverified';
-    } catch (error) {
-      turn.nodeConsistent = false;
-      turn.nodeError = String(error);
+  const budget = realAgentBudget(() => {
+    void page
+      .getByRole('button', { name: '取消任务', exact: true })
+      .click({ timeout: 2000 })
+      .catch(() => {});
+  });
+  await page.route(`${address}/api/chat`, (route) =>
+    budget.beforeRequest() ? route.continue() : route.abort(),
+  );
+  try {
+    for (const [index, goal] of goals.entries()) {
+      await page.getByRole('textbox', { name: '分析目标或后续修改' }).fill(goal);
+      const submitted = performance.now();
+      budget.startTarget();
+      await page.getByRole('button', { name: '执行目标', exact: true }).click();
+      const panel = page.locator('.run-panel').first();
+      await expect(panel.locator('h3').first()).toHaveText(goal);
+      await expect(panel.locator('.run-status')).not.toHaveText('执行中', { timeout: 250_000 });
+      const turn: any = {
+        goal,
+        status: await panel.locator('.run-status').innerText(),
+        nodeChecked: [],
+      };
+      await expect(
+        panel.getByRole('button', { name: '保存完整本地审计', exact: true }),
+      ).toBeVisible();
+      turn.observedWaitMs = performance.now() - submitted;
+      const audit = JSON.parse(
+        (
+          await downloadFile(
+            page,
+            info,
+            panel.getByRole('button', { name: '保存完整本地审计', exact: true }),
+            `real-turn-${index + 1}-audit.json`,
+          )
+        ).bytes.toString(),
+      );
+      try {
+        turn.nodeChecked = verifyAudit(rows, audit);
+        turn.nodeConsistent = turn.nodeChecked.length ? true : null;
+        turn.nodeNote = turn.nodeChecked.length
+          ? 'successful tools independently replayed'
+          : 'no successful local tool result; numerical agreement unverified';
+      } catch (error) {
+        turn.nodeConsistent = false;
+        turn.nodeError = String(error);
+      }
+      turn.run = audit.run;
+      turn.citationsCorrect =
+        audit.run.citations.length > 0 &&
+        audit.run.citations.every((citation: any) => {
+          const call = audit.run.calls.find((c: any) => c.id === citation.callId);
+          if (!call?.output.ok) return false;
+          try {
+            numericEqual(resolveCitation(call.output.result, citation.path), citation.value);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+      turn.finalView = await page.locator('#agent-chart-view').innerText();
+      const comparison = audit.run.calls.findLast(
+        (c: any) => c.name === 'compare_intervals' && c.output.ok,
+      );
+      turn.businessCorrect =
+        comparison?.arguments.joint === 'knee' &&
+        comparison.arguments.basis === 'filtered' &&
+        comparison.arguments.first.join() === '0,5' &&
+        comparison.arguments.second.join() === (index ? '12,17' : '15,20') &&
+        comparison.arguments.channels.join() === (index ? 'right' : 'left,right') &&
+        turn.finalView.includes(index ? '0–17 s' : '0–20 s') &&
+        (!index || !turn.finalView.includes('左侧'));
+      summary.turns.push(turn);
+      // Exercise evidence location on a real returned comparison, even if the
+      // model fails its completion gate. This does not change the recorded status.
+      const evidence = panel
+        .locator(':scope > .evidence-card')
+        .filter({ hasText: '区间比较' })
+        .first();
+      if (await evidence.count()) {
+        await evidence.getByRole('button', { name: '定位后段', exact: true }).click();
+        turn.evidenceView = await page.locator('#agent-chart-view').innerText();
+      }
+      await page.screenshot({
+        path: info.outputPath(`real-turn-${index + 1}.png`),
+        fullPage: true,
+      });
+      summary.budget = budget.snapshot();
+      await persist();
+      budget.finishTarget();
+      expect(turn.status, 'Stop on the first failed model target').toBe('已完成');
+      expect(turn.nodeConsistent).toBe(true);
+      expect(turn.businessCorrect).toBe(true);
+      expect(turn.citationsCorrect).toBe(true);
+      expect(audit.run.completion.missing).toEqual([]);
+      expect(audit.run.reference.sessionId).toBe(summary.reference.sessionId);
+      expect(audit.run.reference.revision).toBe(summary.reference.revision);
     }
-    turn.run = audit.run;
-    turn.finalView = await page.locator('#agent-chart-view').innerText();
-    const comparison = audit.run.calls.findLast(
-      (c: any) => c.name === 'compare_intervals' && c.output.ok,
-    );
-    turn.businessCorrect =
-      comparison?.arguments.joint === 'knee' &&
-      comparison.arguments.basis === 'filtered' &&
-      comparison.arguments.first.join() === '0,5' &&
-      comparison.arguments.second.join() === (index ? '12,17' : '15,20') &&
-      comparison.arguments.channels.join() === (index ? 'right' : 'left,right') &&
-      turn.finalView.includes(index ? '0–17 s' : '0–20 s') &&
-      (!index || !turn.finalView.includes('左侧'));
-    summary.turns.push(turn);
-    // Exercise evidence location on a real returned comparison, even if the
-    // model fails its completion gate. This does not change the recorded status.
-    const evidence = panel
-      .locator(':scope > .evidence-card')
-      .filter({ hasText: '区间比较' })
-      .first();
-    if (await evidence.count()) {
-      await evidence.getByRole('button', { name: '定位后段', exact: true }).click();
-      turn.evidenceView = await page.locator('#agent-chart-view').innerText();
-    }
-    await page.screenshot({ path: info.outputPath(`real-turn-${index + 1}.png`), fullPage: true });
+  } finally {
+    summary.budget = budget.snapshot();
     await persist();
+    budget.close();
   }
   const panel = page.locator('.run-panel').first();
   const reportButton = panel.getByRole('button', { name: '保存报告 JSON', exact: true }).last();
@@ -181,6 +232,13 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
       JSON.stringify(exported) === JSON.stringify(rows.filter((r) => Number(r.time_s) <= 17));
   }
   summary.finalView = await page.locator('#agent-chart-view').innerText();
+  await page.locator('nav').getByRole('button', { name: '采集与分析' }).click();
+  await page.getByRole('button', { name: '重算指标', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
+  await expect(panel.locator('.run-status')).toContainText('已过期');
+  await expect(reportButton).toBeDisabled();
+  await expect(csvButton).toBeDisabled();
+  summary.staleDeliveryDisabled = true;
   summary.completed =
     summary.turns.every(
       (t: any) => t.status === '已完成' && t.nodeConsistent && t.businessCorrect,

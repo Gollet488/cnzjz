@@ -180,6 +180,18 @@ test('DeepSeek refuses truncated output, invalid JSON arguments and oversized bo
   await assert.rejects(oversized.complete(input()), /RESPONSE_LIMIT/);
 });
 
+test('DeepSeek classifies null messages or tool call entries as malformed replies', async () => {
+  for (const [message, expected] of [
+    [null, /INVALID_RESPONSE/],
+    [{ role: 'assistant', tool_calls: [null] }, /INVALID_CALL/],
+  ] as const) {
+    const provider = new DeepSeekProvider(key, 'deepseek-flash', async () =>
+      json(wireReply([], { choices: [{ finish_reason: 'tool_calls', message }] })),
+    );
+    await assert.rejects(provider.complete(input()), expected);
+  }
+});
+
 test('DeepSeek probe requires the actual native echo call; free text cannot pass', async () => {
   const provider = new DeepSeekProvider(key, 'deepseek-flash', async () => json(wireReply()));
   await assert.rejects(provider.probe(new AbortController().signal), /TOOL_PROBE_FAILED/);
@@ -278,7 +290,15 @@ for (const scenario of ['compare', 'quality']) {
                 citations: user.availableEvidence
                   .filter((e: any) => selected.includes(e.tool))
                   .flatMap((e: any) =>
-                    e.entries.map((entry: any) => ({ evidenceId: entry.evidenceId })),
+                    e.entries
+                      .filter((entry: any) =>
+                        e.tool === 'compare_intervals'
+                          ? /^differences\.\d+\.rom$/.test(entry.label)
+                          : e.tool === 'set_chart_view'
+                            ? entry.label === 'view.basis'
+                            : entry.label === 'missingSamples',
+                      )
+                      .map((entry: any) => ({ evidenceId: entry.evidenceId })),
                   ),
               },
             },

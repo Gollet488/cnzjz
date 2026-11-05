@@ -90,6 +90,7 @@ export class FrameSummaryIndex {
       }
     }
     return {
+      sampleCount: Math.max(0, end - start),
       meanAsym: result.asymCount ? result.asymSum / result.asymCount : null,
       centerRange: result.center.count ? result.center.max - result.center.min : null,
       maxVelocity: result.speed.count ? result.speed.max : null,
@@ -98,6 +99,8 @@ export class FrameSummaryIndex {
           const i = slots.findIndex((s) => s.joint === j.key && s.side === side);
           const e = i < 0 ? extent() : result.angles[i];
           return {
+            sampleCount: e.count,
+            coverage: end > start ? e.count / (end - start) : null,
             min: e.count ? e.min : null,
             max: e.count ? e.max : null,
             rom: e.count >= 2 ? e.max - e.min : null,

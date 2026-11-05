@@ -34,7 +34,9 @@ const joints: Record<string, string> = {
             : call.name === 'query_metrics'
               ? '指标查询'
               : '采样质量'
-        }}<template v-if="call.name !== 'get_quality_summary'">
+        }}<template v-if="call.name === 'get_quality_summary' && result(call).selection">
+          · {{ joints[result(call).selection.joint] }}</template
+        ><template v-else-if="call.name !== 'get_quality_summary'">
           · {{ joints[metric(call).joint] }}</template
         ></strong
       >
@@ -119,8 +121,69 @@ const joints: Record<string, string> = {
         {{ n(result(call).coordinateVariance.windows.mean, 8) }} normalized_coordinate² ·
         {{ result(call).coordinateVariance.windows.sampleCount }} 个有效窗口</p
       >
+      <p v-for="row in result(call).channels" :key="`events-${row.channel}`">
+        {{ channel(row.channel) }}角度极值（并列取首个源时间）：
+        <template v-for="(event, kind) in row.events" :key="kind">
+          <button
+            v-if="event"
+            :disabled="disabled"
+            @click="emit('locate', call, false, [event.time, event.time])"
+            >{{ kind === 'minimum' ? '最小' : '最大' }} {{ n(event.value) }} deg ·
+            {{ n(event.time, 6) }} s · 定位</button
+          >
+        </template>
+      </p>
     </template>
     <template v-else>
+      <template v-if="result(call).selection">
+        <p>选中关节角度可用性 · {{ result(call).selection.basis }} · 分母为区间全部已采样帧</p>
+        <div class="evidence-table">
+          <table>
+            <thead
+              ><tr
+                ><th>侧别</th><th>有效 / 全部</th><th>帧覆盖率</th><th>未检出</th
+                ><th>检出但角度无效</th></tr
+              ></thead
+            >
+            <tbody
+              ><tr v-for="row in result(call).selection.channels" :key="row.channel">
+                <td>{{ channel(row.channel) }}</td
+                ><td>{{ row.validSamples }} / {{ evidence(call).sampleCount }}</td>
+                <td>{{ n(row.coverage * 100, 1) }}%</td><td>{{ row.notDetectedSamples }}</td
+                ><td>{{ row.unusableSamples }}</td>
+              </tr></tbody
+            >
+          </table>
+        </div>
+        <div v-for="row in result(call).selection.channels" :key="`ranges-${row.channel}`">
+          <p>{{ channel(row.channel) }}连续段（按源时间跨度优先；每类最多 5 段）</p>
+          <p v-for="group in row.missingIntervals" :key="`missing-${group.interval[0]}`">
+            缺失
+            <button :disabled="disabled" @click="emit('locate', call, false, group.interval)"
+              >{{ interval(group.interval) }} · 定位</button
+            >
+            · {{ group.samples }} 帧
+          </p>
+          <p v-if="!row.missingIntervalCount">无选中角度缺失采样。</p>
+          <p v-for="group in row.validIntervals" :key="`valid-${group.interval[0]}`">
+            有效
+            <button :disabled="disabled" @click="emit('locate', call, false, group.interval)"
+              >{{ interval(group.interval) }} · 定位</button
+            >
+            · {{ group.samples }} 帧
+          </p>
+          <p v-if="row.omittedMissingIntervals || row.omittedValidIntervals"
+            >另省略缺失 {{ row.omittedMissingIntervals }} 段、有效
+            {{ row.omittedValidIntervals }} 段；缩小查询区间可核对。</p
+          >
+        </div>
+        <p
+          >连续段仅连接相邻有效采样；采样间隔大于
+          {{ n(result(call).timing.continuityGapSeconds, 6) }} s
+          时拆段。帧覆盖率不代表持续时间覆盖、人体精度或同一人物身份追踪。</p
+        >
+        <p>“检出但角度无效”可含局部置信不足或几何退化，不能仅凭该计数判断遮挡原因。</p>
+      </template>
       <div class="quality-values"
         ><div
           ><b>{{ n(result(call).effectiveRate * 100, 1) }}%</b><span>全点可靠采样率</span></div
@@ -154,6 +217,16 @@ const joints: Record<string, string> = {
       <p v-else>查询区间内没有全点低置信或缺失的采样段。</p>
       <p v-if="result(call).omittedIntervals"
         >另有 {{ result(call).omittedIntervals }} 段未展示。</p
+      >
+      <p v-for="gap in result(call).timing?.gapIntervals ?? []" :key="`gap-${gap.interval[0]}`">
+        采样中断
+        <button :disabled="disabled" @click="emit('locate', call, false, gap.interval)"
+          >{{ interval(gap.interval) }} · 定位</button
+        >
+        · 间隔 {{ n(gap.seconds, 6) }} s（不证明中间有追踪数据）
+      </p>
+      <p v-if="result(call).timing?.omittedGapIntervals"
+        >另省略 {{ result(call).timing.omittedGapIntervals }} 个采样中断。</p
       >
     </template>
     <footer>

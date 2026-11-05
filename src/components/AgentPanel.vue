@@ -25,6 +25,8 @@ const address = ref('http://127.0.0.1:11434'),
   model = ref(''),
   models = ref<string[]>([]);
 const providerKind = ref<'ollama' | 'deepseek'>('ollama');
+const pageOrigin = window.location.origin;
+const localPage = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
 const probeResponse = ref<{ model: string; systemFingerprint: string | null } | null>(null);
 const connected = ref(false),
   connecting = ref(false),
@@ -73,17 +75,18 @@ function locate(call: CallRecord, second = false, interval?: [number, number]) {
   const metric =
     call.name === 'compare_intervals' ? (second ? result.second : result.first) : result;
   const ev = metric.evidence;
+  const selection = call.name === 'get_quality_summary' ? metric.selection : metric;
   const input = { sessionId: ev.sessionId, revision: ev.revision };
   const selectedInterval = interval ?? ev.interval;
   const outputs = [props.tools.execute('seek_to_time', { ...input, time: selectedInterval[0] })];
-  if (metric.joint)
+  if (selection?.joint)
     outputs.push(
       props.tools.execute('set_chart_view', {
         ...input,
         interval: selectedInterval,
         basis: ev.basis,
-        joint: metric.joint,
-        channels: metric.channels.map((c: any) => c.channel),
+        joint: selection.joint,
+        channels: selection.channels.map((c: any) => c.channel),
       }),
     );
   const failed = outputs.find((o) => !o.ok);
@@ -237,7 +240,7 @@ onBeforeUnmount(() => {
             :disabled="connecting || running"
           >
             <option value="ollama">Ollama（本地）</option>
-            <option value="deepseek">DeepSeek 官方 API（本机代理）</option>
+            <option value="deepseek" :disabled="!localPage">DeepSeek 官方 API（本机代理）</option>
           </select></label
         >
         <p v-if="providerKind === 'deepseek'"
@@ -287,10 +290,17 @@ onBeforeUnmount(() => {
       <details
         ><summary>连接要求</summary
         ><p
-          >DeepSeek 需使用此项目的本机开发或生产预览服务，并在 Windows 用户环境或 Node 进程配置
-          DEEPSEEK_API_KEY；页面不接收密钥。静态托管不包含代理。 Ollama
-          服务需在此电脑运行，并声明模型 tools 能力。跨域受限时，在 Ollama 的 OLLAMA_ORIGINS
-          中允许当前页面的精确来源后重启服务。连接验证只发送测试文本，不发送会话数据；本页不自动安装或下载模型。</p
+          >在此电脑启动仅监听回环的 Ollama，选择支持 tools 的本地模型。设置 OLLAMA_ORIGINS 包含
+          <code>{{ pageOrigin }}</code> 后重启 Ollama。在 Chrome
+          请求回环网络权限时选择允许，再读取模型并验证连接。</p
+        ><p
+          >连接失败时，先访问 <code>http://127.0.0.1:11434/api/tags</code> 确认服务在线，再检查
+          Chrome 的站点权限和 Ollama
+          的来源配置。浏览器无法开放回环访问时，可运行本项目的本机生产预览， 从
+          <code>http://127.0.0.1:4173/</code> 进入 Agent。</p
+        ><p
+          >DeepSeek 使用本机开发或生产预览代理，从 Node 环境读取 DEEPSEEK_API_KEY。
+          连接验证仅发送测试文本。请在终端安装模型，并在浏览器选择模型名。</p
         ></details
       >
     </div>
@@ -314,6 +324,13 @@ onBeforeUnmount(() => {
           :disabled="running"
           @click="goal = '哪些区间不适合比较？请查询整个已采样区间的质量与缺失情况'"
           >查询区间质量</button
+        ><button
+          :disabled="running"
+          @click="
+            goal =
+              '查询整个已采样区间左右膝 filtered 角度的可用样本、覆盖率、连续缺失与可用时间段，保留限制'
+          "
+          >查询双膝可用性</button
         ><button :disabled="running" @click="goal = '只看右侧，第二段改成 12–17 秒'"
           >接续修改区间</button
         ><button

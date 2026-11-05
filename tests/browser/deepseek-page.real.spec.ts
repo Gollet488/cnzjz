@@ -176,8 +176,8 @@ test('REAL DeepSeek page: independent compare/quality then fixed configuration 3
       expect(run.requests.length).toBe(record.businessRequests);
       expect(run.status).toBe('completed');
       expect(run.protocolVersion).toBe('2.0.0');
-      expect(run.modelProtocolVersion).toBe('3.10.0');
-      expect(MODEL_INSTRUCTION_VERSION).toBe('core-protocol-missing-boundary');
+      expect(run.modelProtocolVersion).toBe('3.12.0');
+      expect(MODEL_INSTRUCTION_VERSION).toBe('core-submission-evidence');
       expect(audit.requests[0].messages[0]).toEqual({
         role: 'system',
         content: MODEL_SYSTEM_PROMPT,

@@ -15,8 +15,8 @@ import { same, taskSpecSchema } from './taskSpec.ts';
 import type { TaskUnderstanding } from './taskSpec.ts';
 import { taskPatchSchema, jsonBytes, CONTEXT_LIMITS } from './taskContext.ts';
 
-export const MODEL_PROTOCOL_VERSION = '3.10.0';
-export const MODEL_INSTRUCTION_VERSION = 'core-source-coverage';
+export const MODEL_PROTOCOL_VERSION = '3.12.0';
+export const MODEL_INSTRUCTION_VERSION = 'core-submission-evidence';
 
 // A malformed model call is an adapter error, not evidence of missing user
 // intent. Preserve the validator's exact path/kind/expected and rejection.
@@ -32,10 +32,11 @@ export const MODEL_SYSTEM_PROMPT = `你是通用人体姿态分析 Agent。模�
 读取会话，用 set_task_spec 或已有规格的 set_task_patch 表达理解。只包含用户要求，缺参数用 null/空数组及 unresolved，不猜侧别或 raw/filtered。前后段按实际采样 range 推导，derived 仍选用户原文 ID。sources 每项 field/origin/sourceId；从 userSources 选择本轮 explicit/derived 或历史 inherited。同源指相同 sourceId，不要求各值的推导方式相同；整份任务同源时只用一项 field="task"（含交付与否），任一子字段有推导则该父来源用 origin="derived"，不要再加派生子字段来源。不同用户出处或继承关系才拆分为互不重叠字段；父字段覆盖所有后代，父子不得同时出现。拆分时所有非 null、非空数组的业务叶字段都需来源，布尔 false 也需覆盖，包括 deliveries.report=false；null 和空数组不要求来源。被拒时核对整份来源覆盖及重叠，不只追加报错字段；missingSources 列出该声明全部缺来源字段，不是用户业务缺参。来源证明用户出处，不证明语义；删除或改变要求也需当前来源。patch 只列改变字段，其他要求完整继承。
 工具由运行状态提供，每轮动态选择。业务工具只传 taskRef=bindings.taskRef，引用你已声明并接受的全部业务参数；不要重复传 sessionId/revision/区间/关节。本地冻结绑定，不跨轮次使用 taskRef/来源/证据 ID。换源后旧意图需用户重新声明。
 interval 只表示统计/报告前段，comparison.second 是统计/报告后段，方向 second_minus_first。相对采样范围用 {anchor:"start"或"end",seconds:时长}，全部已采样用 "sampled"，具体边界见 rangeOptions；绝对时间用 [起秒,止秒]。本地按冻结 range 精确展开，不裁剪，来源必须 derived。deliveries.view.interval 是最后图表范围，必须覆盖两段，可显式选 "comparison" 表示你声明的两段包络；deliveries.export.interval 只表示 CSV 范围，这些字段互不覆盖。已有比较只改侧别或后段时用 patch 保留前段、关节、口径、指标和比较意图；同时声明用户要求的视图派生改变。
-先逐项选择用户实际要求：goalTypes 的 metrics/comparison/quality 三个布尔值分别决定是否要求独立单段统计、两段差值分析、数据质量；仅比较 ROM 不另外启用 metrics。定位只用 time；图表、报告、CSV 分别在 deliveries 独立声明。仅展示差异时选择 view，report=false、export=null；要求报告或 CSV 时才分别启用，混合要求全部保留。无定位 time=null，无分析时三个选择均为 false。单纯质量/缺失/限制查询用 comparison/joint/channels/basis=null、metrics=[]、interval="sampled"。比较分析声明 comparison=true 和两段，比较报告也可用 report=true 和两段；图表可选 view.interval="comparison"。unresolved 只填已要求且确实缺少的必要参数；未启用的 comparison、报告、导出及已有值都不是缺项。内部矛盾被拒时规格尚未锁定，应核对用户原意并重新声明；不要把自加目标转成用户缺参。
+先逐项选择用户实际要求：goalTypes 的 metrics/comparison/quality 三个布尔值分别决定是否要求独立单段统计、两段差值分析、数据质量；仅比较 ROM 不另外启用 metrics。定位只用 time；图表、报告、CSV 分别在 deliveries 独立声明。仅展示差异时选择 view，report=false、export=null；要求报告或 CSV 时才分别启用，混合要求全部保留。无定位 time=null，无分析时三个选择均为 false。全局质量/缺失/限制查询用 comparison/joint/channels/basis=null、metrics=[]；局部质量查询保留用户明确要求的 joint/channels/basis，三项必须齐全，不猜侧别或口径；interval 使用用户区间，只有要求全部采样时用 "sampled"。比较分析声明 comparison=true 和两段，比较报告也可用 report=true 和两段；图表可选 view.interval="comparison"。unresolved 只填已要求且确实缺少的必要参数；未启用的 comparison、报告、导出及已有值都不是缺项。内部矛盾被拒时规格尚未锁定，应核对用户原意并重新声明；不要把自加目标转成用户缺参。
 plan_analysis 是可选展示，steps 只能选 1–4 个代码，不影响实际工具顺序。不要为计划反复调用工具。按真实反馈自行选择下一步和引用。
 反馈省略重复 metadata 和大列表，omitted 表示不完整，必要事实可用 inspect_result 的 callId/path 查询；path 是反馈字段路径，如 /first/channels，空串为根。rejection 保留相同参数和错误的拒绝次数，重复提交不会修复错误；scopeReview 只核对声明范围关系。inspectedPages 是已读页，duplicate=true/newFacts=false 表示重读无新事实。completion 尚未带最终引用，missing 可能只因未提交引用；已有工具事实时应从 availableEvidence 选择引用交给 finish_analysis 核验，不能仅凭 missing 重复读取。prerequisites 列出未满足前提，必须实际执行。目录不完整时可查 /evidenceCatalog；仍须自行核对数值、可比性和限制。
-finish_analysis 必须单独调用，从 availableEvidence 跨工具选择证明全部目标的 evidenceId；图表引用不能替代比较引用。不复制数值，不造结论。成果目录 kind=artifact_handle 的 value 是 handle，仅 evidenceId 可用于 citations。缺证据用 partial，缺参数 needs_input，不可比 not_comparable，失败 failed。完成检查核对最终实际视图与可用成果，不能删要求逃避。准备不等于下载。未采样范围不能静默裁剪。
+finish_analysis 必须单独调用，从 availableEvidence 跨工具选择证明全部目标的 evidenceId；图表引用不能替代比较引用。局部质量须引用每个所选侧的有效样本、覆盖或缺失事实，全点可靠率不能代替局部关节可用性。连续有效/缺失段为源时间的采样段，timing 标识大采样间隔；不跨缺失补值，不把帧覆盖率当时间覆盖率。关键角度极值 events 的 time 可回看原视频，但二维投影变化不证明动作质量或精度。真实比较不可比时引用 comparable=false 或 reasons 的真实理由，不能把已观测子集的差值解释为完整动作比较；仍可交付含这些限制的有效报告、图表和CSV，比较要求保持未满足。不复制数值，不造结论。成果目录 kind=artifact_handle 的 value 是 handle，仅 evidenceId 可用于 citations。缺证据用 partial，缺参数 needs_input，不可比 not_comparable，失败 failed。完成检查核对最终实际视图与可用成果，不能删要求逃避。准备不等于下载。未采样范围不能静默裁剪。
+ROM 比较时 metrics 只填用户要比较的指标；极值源时间直接从两段 events 引用，无需将 minAngle/maxAngle 加进比较指标。图表范围已明确时直接声明绝对秒区间。最终提交若返回 submissionGaps，按 tool 和 labels 从已有目录补引，保留已正确选择的证据与结论，同一轮再次调用 finish_analysis。
 仅单人单目二维几何，不识别运动、不评分、不判断对错、不做医学结论。不输出内部思维、自由数值说明、代码或 URL。`;
 
 interface UserSource {
@@ -515,7 +516,10 @@ export class ModelProtocolAdapter {
       const s = run.task.spec;
       const selection = { joint: s.joint, channels: s.channels, basis: s.basis };
       const parameters: Record<string, unknown> = {
-        get_quality_summary: { interval: s.interval },
+        get_quality_summary: {
+          interval: s.interval,
+          ...(s.joint && s.channels?.length && s.basis ? { selection } : {}),
+        },
         query_metrics: { ...selection, interval: s.interval },
         compare_intervals: { ...selection, first: s.interval, second: s.comparison?.second },
         seek_to_time: { time: s.time },
@@ -733,6 +737,30 @@ function projectFacts(value: any, depth = 0): any {
 }
 export function taskCatalog(record: CallRecord, run: AgentRun) {
   const spec = run.task?.spec;
+  const localQuality =
+    record.name === 'get_quality_summary' &&
+    record.output.ok &&
+    !!(record.output.result as any)?.selection;
+  const localFields = [
+    'validSamples',
+    'coverage',
+    'invalidSamples',
+    'notDetectedSamples',
+    'unusableSamples',
+    'longestMissingInterval.interval.0',
+    'longestMissingInterval.interval.1',
+    'longestMissingInterval.samples',
+    'validIntervals.0.interval.0',
+    'validIntervals.0.interval.1',
+  ];
+  const localRank = (label: string) => {
+    const match = /^selection\.channels\.(\d+)\.(.+)$/.exec(label);
+    if (!match) return Infinity;
+    const field = localFields.indexOf(match[2]!);
+    // Keep each side's gap endpoints and count together in the compact catalog.
+    if (field >= 5 && field <= 7) return 10 + Number(match[1]) * 3 + field - 5;
+    return field * 2 + Number(match[1]);
+  };
   const requestedMetrics: Record<string, string> = {
     rom: 'rom',
     meanAngle: 'angle.mean',
@@ -747,12 +775,29 @@ export function taskCatalog(record: CallRecord, run: AgentRun) {
   };
   const wanted = (label: string) => {
     if (record.name === 'get_quality_summary')
-      return /^(effectiveRate|meanConfidence|missingSamples|detectedSamples|fullyReliableSamples|maxSampleGapSeconds)$/.test(
-        label,
-      );
+      return localQuality
+        ? /^selection\.channels\.\d+\./.test(label) &&
+            localFields.some((field) => label.endsWith(`.${field}`))
+        : /^(effectiveRate|meanConfidence|missingSamples|detectedSamples|fullyReliableSamples|maxSampleGapSeconds)$/.test(
+            label,
+          );
     if (record.name === 'set_chart_view') return label === 'view.basis';
     if (record.name === 'seek_to_time') return label === 'appliedTime';
     if (record.name.startsWith('prepare_')) return label === 'handle';
+    if (record.name === 'compare_intervals' && /^(comparable|reasons\.\d+)$/.test(label))
+      return true;
+    if (
+      record.name === 'compare_intervals' &&
+      /^(first|second)\.(units\.angle|channels\.\d+\.angle\.sampleCount|evidence\.limitations\.0)$/.test(
+        label,
+      )
+    )
+      return true;
+    if (
+      ['query_metrics', 'compare_intervals'].includes(record.name) &&
+      /(?:^|\.)channels\.\d+\.events\.(minimum|maximum)\.time$/.test(label)
+    )
+      return true;
     return (spec?.metrics ?? []).some(
       (m) => label.endsWith(`.${requestedMetrics[m]}`) || label === requestedMetrics[m],
     );
@@ -760,7 +805,8 @@ export function taskCatalog(record: CallRecord, run: AgentRun) {
   const entries =
     record.evidenceCatalog?.entries
       .filter((e) => wanted(e.label))
-      .slice(0, 16)
+      .sort((a, b) => (localQuality ? localRank(a.label) - localRank(b.label) : 0))
+      .slice(0, record.name === 'compare_intervals' ? 24 : 16)
       .map(({ path: _, ...e }) => e) ?? [];
   return {
     version: MODEL_PROTOCOL_VERSION,

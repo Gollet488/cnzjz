@@ -27,6 +27,7 @@ import {
 } from '../src/agent/evaluation.ts';
 import { csvHeader } from '../src/utils/csv.ts';
 import { evidenceRef, taskFixture, taskForActions, withTaskSpecs } from './agentFixtures.ts';
+import { realAgentBudget } from './browser/files.ts';
 // Freeze historical scripted v2 fixtures; v3 has independent protocol coverage.
 const runEvaluation = (options: any, dependencies: any = {}) =>
   evaluateProtocol(options, { ...dependencies, modelProtocol: 'legacy-v2' });
@@ -922,7 +923,7 @@ test('evaluation wall budget aborts an in-flight request and retains its unknown
       '--model',
       'not-real',
       '--max-business-ms',
-      '25',
+      '1000',
       '--output',
       await outputPath(),
     ]),
@@ -968,4 +969,98 @@ test('unexpected interruption preserves completed turns and exits with failure',
   assert.equal(saved.summary.incomplete, 1);
   assert.equal(saved.summary.passed, 0);
   assert.equal(saved.summary.successRate, null);
+});
+
+test('real page admission stops before a thirteenth target request', () => {
+  let stops = 0;
+  const budget = realAgentBudget(() => stops++);
+  try {
+    budget.startTarget();
+    for (let i = 0; i < 12; i++) assert.equal(budget.beforeRequest(), true);
+    assert.equal(budget.beforeRequest(), false);
+    assert.equal(budget.beforeRequest(), false);
+    assert.equal(stops, 1);
+    assert.deepEqual(budget.snapshot(), {
+      requests: 12,
+      targetRequests: 12,
+      stoppedBy: 'target_request_budget',
+    });
+  } finally {
+    budget.close();
+  }
+});
+
+test('real page admission resets target counts and stops before a thirty-seventh chain request', () => {
+  let stops = 0;
+  const budget = realAgentBudget(() => stops++);
+  try {
+    for (let turn = 0; turn < 3; turn++) {
+      budget.startTarget();
+      for (let i = 0; i < 12; i++) assert.equal(budget.beforeRequest(), true);
+      budget.finishTarget();
+    }
+    budget.startTarget();
+    assert.equal(budget.beforeRequest(), false);
+    assert.equal(stops, 1);
+    assert.equal(budget.snapshot().requests, 36);
+    assert.equal(budget.snapshot().stoppedBy, 'session_request_budget');
+  } finally {
+    budget.close();
+  }
+});
+
+for (const scope of ['target', 'session'] as const) {
+  test(`real page ${scope} deadline aborts in-flight work without waiting for another request`, async () => {
+    let stopped!: () => void;
+    const aborted = new Promise<void>((resolve) => (stopped = resolve));
+    const budget = realAgentBudget(stopped, {
+      targetRequests: 12,
+      targetMs: scope === 'target' ? 20 : 1000,
+      sessionRequests: 36,
+      sessionMs: scope === 'session' ? 20 : 1000,
+    });
+    try {
+      budget.startTarget();
+      assert.equal(budget.beforeRequest(), true);
+      await aborted;
+      assert.equal(budget.beforeRequest(), false);
+      assert.equal(budget.snapshot().requests, 1);
+      assert.equal(budget.snapshot().stoppedBy, `${scope}_time_budget`);
+      assert.throws(() => budget.finishTarget(), new RegExp(`${scope}_time_budget`));
+    } finally {
+      budget.close();
+    }
+  });
+}
+
+test('real delivery evaluation stops the chain after twelve unproductive requests in its first target', async () => {
+  const provider = protocolProvider();
+  let sent = 0;
+  provider.complete = async () => {
+    sent++;
+    return { calls: [{ name: 'get_session_info', arguments: {} }] };
+  };
+  const { record, exitCode } = await runEvaluation(
+    parseEvaluationArgs([
+      '--case',
+      'multi_turn_delivery',
+      '--repeat',
+      '1',
+      '--model',
+      'not-real',
+      '--max-business-requests',
+      '36',
+      '--max-business-ms',
+      '360000',
+      '--output',
+      await outputPath(),
+    ]),
+    { provider },
+  );
+  assert.equal(exitCode, 1);
+  assert.equal(sent, 12);
+  assert.equal(record.runs[0].turns.length, 1);
+  assert.equal(record.runs[0].turns[0].run.status, 'limit');
+  assert.equal(record.runs[0].assessment.passed, false);
+  assert.equal(record.auditFiles.length, 1);
 });

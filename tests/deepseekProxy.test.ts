@@ -231,22 +231,80 @@ test('proxy reuses official adapter, fixes inference, preserves actual model/nul
   }
 });
 
-test('proxy never returns upstream diagnostics or echoed key and does not retry', async () => {
-  let calls = 0;
-  const f = await fixture({
-    providerFactory: () =>
-      new DeepSeekProvider(fakeKey, 'deepseek-flash', async () => {
-        calls++;
-        return new Response(fakeKey, { status: 401 });
+test('probe classifies failures once and exposes only fixed codes and HTTP status', async (t) => {
+  const sensitive = new Error('DEEPSEEK_FETCH_FAILED', { cause: fakeKey });
+  sensitive.stack = fakeKey;
+  const interrupted = (status: number) =>
+    new Response(
+      new ReadableStream({
+        start(stream) {
+          stream.error(sensitive);
+        },
       }),
-  });
-  try {
-    const r = await post(f.origin);
-    assert.equal(r.status, 502);
-    assert.deepEqual(await r.json(), { error: 'DEEPSEEK_PROXY_REQUEST_FAILED' });
-    assert.equal(calls, 1);
-  } finally {
-    await f.close();
+      { status },
+    );
+  const cases = [
+    { code: 'CONFIGURATION', factory: () => new DeepSeekProvider('') },
+    {
+      code: 'CONFIGURATION',
+      factory: () => {
+        throw sensitive;
+      },
+    },
+    {
+      code: 'TRANSPORT',
+      upstream: () => {
+        throw sensitive;
+      },
+    },
+    { code: 'TRANSPORT', upstream: () => interrupted(200) },
+    { code: 'UPSTREAM_HTTP_401', upstream: () => new Response(fakeKey, { status: 401 }) },
+    { code: 'UPSTREAM_HTTP_429', upstream: () => interrupted(429) },
+    { code: 'RESPONSE_PROTOCOL', upstream: () => new Response(fakeKey) },
+    { code: 'RESPONSE_PROTOCOL', upstream: () => new Response('null') },
+    {
+      code: 'TOOL_PROBE_PROTOCOL',
+      upstream: () =>
+        Response.json({
+          id: 'probe',
+          model: 'deepseek-flash',
+          choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: fakeKey } }],
+        }),
+    },
+    {
+      code: 'UNKNOWN',
+      factory: () => ({
+        probe() {
+          throw sensitive;
+        },
+      }),
+    },
+  ];
+  for (const { code, factory, upstream } of cases) {
+    await t.test(code, async () => {
+      let calls = 0;
+      const f = await fixture({
+        providerFactory:
+          factory ??
+          (() =>
+            new DeepSeekProvider(fakeKey, 'deepseek-flash', async () => {
+              calls++;
+              return upstream!();
+            })),
+      });
+      try {
+        const r = await fetch(f.origin + '/__deepseek/probe', {
+          method: 'POST',
+          headers: { Origin: f.origin, 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        assert.equal(r.status, 502);
+        assert.deepEqual(await r.json(), { error: `DEEPSEEK_PROXY_${code}` });
+        assert.equal(calls, upstream ? 1 : 0);
+      } finally {
+        await f.close();
+      }
+    });
   }
 });
 
@@ -287,9 +345,74 @@ test('proxy aborts upstream on timeout, browser disconnect and service close', a
         new Promise((_, reject) => setTimeout(() => reject(Error('abort missing')), 2000)),
       ]);
       const r = await pending;
-      if (mode === 'timeout' && r) assert.equal(r.status, 504);
+      if (mode === 'timeout') {
+        assert.equal(r?.status, 504);
+        assert.deepEqual(await r.json(), { error: 'DEEPSEEK_PROXY_TIMEOUT' });
+      }
+      if (mode === 'close') {
+        assert.equal(r?.status, 503);
+        assert.deepEqual(await r.json(), { error: 'DEEPSEEK_PROXY_CANCELLED' });
+      }
     } finally {
       await f.close();
     }
+  }
+});
+
+test('proxy classifies invalid tool history before any upstream request', async () => {
+  let calls = 0;
+  const f = await fixture({
+    providerFactory: () =>
+      new DeepSeekProvider(fakeKey, 'deepseek-flash', async () => {
+        calls++;
+        return Response.json({});
+      }),
+  });
+  try {
+    const r = await post(f.origin, {
+      ...valid,
+      messages: [{ role: 'tool', toolName: 'orphan', content: '{}' }],
+    });
+    assert.equal(r.status, 502);
+    assert.deepEqual(await r.json(), { error: 'DEEPSEEK_PROXY_REQUEST_PROTOCOL' });
+    assert.equal(calls, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('proxy returns a 504 for a stalled upload without initializing the provider', async () => {
+  let initialized = false;
+  const f = await fixture({
+    timeoutMs: 40,
+    providerFactory: () => {
+      initialized = true;
+    },
+  });
+  try {
+    const status = await new Promise((resolve, reject) => {
+      const req = request(
+        f.origin + '/__deepseek/complete',
+        {
+          method: 'POST',
+          headers: {
+            Origin: f.origin,
+            'Content-Type': 'application/json',
+            'Content-Length': '100',
+          },
+        },
+        (res) => {
+          res.resume();
+          res.once('end', () => resolve(res.statusCode));
+        },
+      );
+      req.on('error', reject);
+      req.setTimeout(2000, () => req.destroy(new Error('missing timeout response')));
+      req.write('{');
+    });
+    assert.equal(status, 504);
+    assert.equal(initialized, false);
+  } finally {
+    await f.close();
   }
 });

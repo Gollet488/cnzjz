@@ -87,6 +87,11 @@ export interface Citation {
   path: string;
   value: string | number | boolean | null;
 }
+export interface SubmissionEvidenceGap {
+  tool: string;
+  labels: string[];
+  reason: 'missing_tool_or_scope' | 'fact_mismatch' | 'missing_citation';
+}
 export interface AgentRun {
   protocolVersion?: typeof AGENT_PROTOCOL_VERSION;
   modelProtocolVersion?: string;
@@ -115,6 +120,8 @@ export interface AgentRun {
   conversationId?: string;
   auditStatus?: 'saved' | 'failed' | 'caller_owned';
 }
+
+export const MAX_FINAL_CITATIONS = 20;
 
 const CONTROL_TOOLS: ToolDefinition[] = [
   {
@@ -148,8 +155,7 @@ const CONTROL_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'finish_analysis',
-    description:
-      '控制协议 v2：交付结果或必要澄清。选择 messageCode，由本地渲染中文；citations 至多十二项，只选择证明当前目标所需的少量 evidenceId，不复制整个目录。仅选择本轮成功工具反馈 evidenceCatalog.entries 中已有的 evidenceId（通过 label/value 选择任务所需指标、比较、质量、定位、视图或成果）。不手写 callId/path，不复制数值。无数据用 needs_input，越界用 limited 或 needs_input；可空引用但不能冒称 completed。',
+    description: `控制协议 v2：交付结果或必要澄清。选择 messageCode，由本地渲染中文；citations 至多 ${MAX_FINAL_CITATIONS} 项，只选择证明当前目标所需的 evidenceId。仅选择本轮成功工具反馈 evidenceCatalog.entries 中已有的 evidenceId（通过 label/value 选择任务所需指标、比较、质量、定位、视图或成果）。不手写 callId/path，不复制数值。无数据用 needs_input，越界用 limited 或 needs_input；可空引用但不能冒称 completed。`,
     inputSchema: object({
       outcome: enumeration(
         'completed',
@@ -160,17 +166,17 @@ const CONTROL_TOOLS: ToolDefinition[] = [
         'failed',
       ),
       messageCode: messageCodeSchema,
-      citations: array(object({ evidenceId: { type: 'string' } }), 0, 12),
+      citations: array(object({ evidenceId: { type: 'string' } }), 0, MAX_FINAL_CITATIONS),
     }),
     outputSchema: object({ accepted: boolean }),
   },
 ];
 
-export const AGENT_INSTRUCTION_VERSION = 'E.2';
+export const AGENT_INSTRUCTION_VERSION = 'E.3';
 export const AGENT_SYSTEM_PROMPT = `你是通用人体姿态分析 Agent，使用控制协议 v2.0.0。模型负责选择工具，本地工具计算所有数值。
 读取会话后用 set_task_spec（已有 previousTask 的修改用 set_task_patch）记录当前目标及交付要求。相对区间依据当前实际采样 range 推导，不能凭空选择相邻区间。规格被拒绝就修正后重新提交 set_task_spec；没有 previousTask 时禁止使用 patch。goalTypes 只包含用户实际请求的 metrics/comparison/quality/seek/view/report/export，不增加目标。interval 为统计前段，comparison.second 为后段，direction=second_minus_first；metrics 记录用户要求的统计项。view 明确关节、侧别、口径、区间；单纯定位、视图、报告、导出无需额外调用所有分析工具。
 sources 的 text 是用户原文逐字片段，保留空格、大小写、标点；不能写参数值的 JSON、英文翻译、true/false 或自编解释。derived 仍需引用原文中触发推导的片段。无混合来源可用一个顶层来源覆盖其子字段；false 也需来源。currentSession 只是当前会话，不能当作 inherited 来源；inherited 必须来自 previousTask 或 pendingUserIntents 的有效 runId。sources.field 只声明 TaskSpec 参数字段，不声明 sessionId、revision、source 或 unresolved。
-未请求报告时 deliveries.report=false，未请求导出时 deliveries.export=null；这两个值不能从 schema 猜成 true 或对象。单纯质量查询不需要关节、侧别、raw/filtered、定位或视图，相关值为 null，metrics=[]，不把无关字段列 unresolved。单纯导出也不需要关节、侧别、口径或报告。不要在错误恢复时改做无关目标。
+未请求报告时 deliveries.report=false，未请求导出时 deliveries.export=null；这两个值不能从 schema 猜成 true 或对象。全局质量查询不需要关节、侧别、raw/filtered，相关值为 null；用户指定局部质量时保留关节、侧别、口径，三项必须齐全，缺项不猜。质量查询 metrics=[]，不自行添加定位或视图。局部质量须引用每个所选侧的样本、覆盖或缺失事实，全点可靠率不能代替局部可用性。单纯导出也不需要关节、侧别、口径或报告。不要在错误恢复时改做无关目标。
 用户未给定且无可追溯继承的字段保留 null/空数组并列 unresolved，使用 needs_input 澄清。不要默认 raw/filtered 或侧别。previousTask 是之前受结构校验的模型理解，继承需列来源，并非已证实语义正确。pendingUserIntents 是此前规格接受前失败/取消/过期的原始用户要求；恢复这些要求时 sources 可用 inherited、其 runId 和原文片段。这些只证明用户来源，不证明语言理解。任务规格与原文都将在工作台展示；局部校验不能证明任意复杂自然语言理解。
 最后用匹配当前规格的有效统计证据、最后实际视图、可用成果交付。质量不能替代比较，视图不能替代统计；缺失交付用 partial，不可比用 not_comparable，需澄清用 needs_input，执行失败用 failed。completed 被拒绝后按结构化 missing/satisfied 反馈补齐，不删改规格逃避检查。
 只接受单人单目平面几何；不识别运动类型、不评分、不判断动作对错、不做医学结论。
@@ -225,6 +231,7 @@ function checkEvidence(registry: ReturnType<typeof createToolRegistry>, output: 
     if (output.tool === 'prepare_report') {
       registry.validateEvidence(result.facts.evidence);
       registry.validateEvidence(result.quality.evidence);
+      if (result.comparisonQuality) registry.validateEvidence(result.comparisonQuality.evidence);
       if (result.comparison) {
         registry.validateEvidence(result.comparison.first.evidence);
         registry.validateEvidence(result.comparison.second.evidence);
@@ -261,6 +268,10 @@ export class AgentRuntime {
   private readonly onAudit?: (audit: RunAudit) => void | Promise<void>;
   private readonly onReady?: (run: AgentRun) => void | Promise<void>;
   private readonly beforeRequest?: () => void;
+  private readonly submissionEvidence?: (
+    run: AgentRun,
+    citations: Citation[],
+  ) => SubmissionEvidenceGap[];
   private readonly limits: {
     rounds: number;
     calls: number;
@@ -279,6 +290,7 @@ export class AgentRuntime {
     onAudit?: (audit: RunAudit) => void | Promise<void>;
     onReady?: (run: AgentRun) => void | Promise<void>;
     beforeRequest?: () => void;
+    submissionEvidence?: AgentRuntime['submissionEvidence'];
     limits?: Partial<AgentRuntime['limits']>;
   }) {
     this.legacy = options.modelProtocol === 'legacy-v2';
@@ -289,6 +301,7 @@ export class AgentRuntime {
     this.onAudit = options.onAudit;
     this.onReady = options.onReady;
     this.beforeRequest = options.beforeRequest;
+    this.submissionEvidence = options.submissionEvidence;
     this.limits = {
       rounds: 12,
       calls: 24,
@@ -415,6 +428,7 @@ export class AgentRuntime {
       }
     }, 50);
     let recoveries = 0,
+      submissionRecoveries = 0,
       callCount = 0;
     try {
       emit();
@@ -541,6 +555,10 @@ export class AgentRuntime {
           run.phase = `正在校验并执行 ${call.name}`;
           emit();
           let output: ToolResult;
+          let submissionGaps: SubmissionEvidenceGap[] | undefined;
+          let submissionBudget:
+            | { submitted: number; maximum: number; minimumReplacements: number }
+            | undefined;
           const toolStarted = performance.now();
           try {
             if (adapter)
@@ -629,6 +647,25 @@ export class AgentRuntime {
               for (const record of run.calls)
                 if (record.output.ok) checkEvidence(this.registry, record.output);
               run.completion = checkCompletion(run, citations, this.registry);
+              if (['completed', 'not_comparable', 'limited'].includes(p.outcome)) {
+                submissionGaps = this.submissionEvidence?.(run, citations);
+                if (submissionGaps?.length) {
+                  const missingCitations = submissionGaps.filter(
+                    (gap) => gap.reason === 'missing_citation',
+                  ).length;
+                  submissionBudget = {
+                    submitted: citations.length,
+                    maximum: MAX_FINAL_CITATIONS,
+                    minimumReplacements: Math.max(
+                      0,
+                      citations.length + missingCitations - MAX_FINAL_CITATIONS,
+                    ),
+                  };
+                  throw new Error(
+                    'SUBMISSION_EVIDENCE_REQUIRED：按 submissionGaps 补齐。missing_citation 表示事实已存在，从 availableEvidence 选对应 evidenceId。minimumReplacements 大于零时，先移除至少该数量的重复或非必需引用，给缺项留出位置。保留证明其他必需项的引用与正确结论，再提交更新后的完整列表。',
+                  );
+                }
+              }
               if (p.outcome === 'completed' && run.completion.state !== 'ready')
                 throw new Error(
                   `${run.completion.state === 'not_comparable' ? 'NOT_COMPARABLE' : 'EVIDENCE_REQUIRED'}：${JSON.stringify(run.completion)}`,
@@ -676,6 +713,7 @@ export class AgentRuntime {
                 ...(error instanceof TaskSpecSourceError
                   ? { missingSources: error.missingSources }
                   : {}),
+                ...(submissionGaps?.length ? { submissionGaps, submissionBudget } : {}),
                 ...(adapter && modelCall.name === 'inspect_result'
                   ? { inspection: adapter.inspectionHelp(modelCall.arguments, run) }
                   : {}),
@@ -710,7 +748,11 @@ export class AgentRuntime {
             ? `${call.name} 已完成，结果将反馈模型`
             : `${call.name} 被拒绝，正在反馈错误`;
           emit();
-          if (!output.ok && ++recoveries > this.limits.recoveries)
+          if (
+            !output.ok &&
+            (submissionGaps?.length ? ++submissionRecoveries : ++recoveries) >
+              this.limits.recoveries
+          )
             throw new Error('RECOVERY_LIMIT');
           if (run.status !== 'running') break;
         }
