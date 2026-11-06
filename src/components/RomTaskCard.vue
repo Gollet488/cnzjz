@@ -347,7 +347,9 @@ onBeforeUnmount(() => cancelDraft());
     <form v-if="open || freeCard" class="card-form" @submit.prevent="confirm">
       <p>{{
         freeCard
-          ? '自由目标 · 请核对或编辑模型声明后确认'
+          ? freeReview?.parameterSource === 'local'
+            ? '自由目标 · 请核对或编辑本地绑定参数后确认'
+            : '自由目标 · 请核对或编辑模型声明后确认'
           : entry === 'model-draft'
             ? '模型草稿 · 请核对或编辑后确认'
             : '手动填写 · 请核对后确认'

@@ -3,7 +3,8 @@ import { modelGoalTypes } from '../../src/agent/modelProtocol.ts';
 import { taskFixture } from '../agentFixtures.ts';
 
 export const goals = [
-  '比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表',
+  // Exercise the general declaration path, including explicit source rejection.
+  '请比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表',
   '只看右侧，第二段改成 12–17 秒',
   '准备当前右膝 filtered 0–5 秒与 12–17 秒比较报告，并准备 0–17 秒 CSV，保留图表',
 ];

@@ -19,6 +19,7 @@ export interface FreeRomInput extends RomCardInput {
 
 export interface FreeRomReview {
   goal: string;
+  parameterSource?: 'local';
   reference: SessionReference;
   proposed: TaskSpec;
   input: FreeRomInput;
@@ -149,7 +150,9 @@ export function confirmedFreeRomSpec(
 ) {
   if (
     confirmation.reviewed.sessionId !== review.reference.sessionId ||
-    confirmation.reviewed.revision !== review.reference.revision
+    confirmation.reviewed.revision !== review.reference.revision ||
+    info.sessionId !== review.reference.sessionId ||
+    info.revision !== review.reference.revision
   )
     throw new Error('STALE_SESSION');
   const { input } = confirmation;

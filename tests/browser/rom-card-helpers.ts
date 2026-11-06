@@ -210,7 +210,7 @@ export async function finishRomDelivery(
 // Capture a rejected proposal via the normal cancelled-run audit.
 export async function reviewExpectedFreeGoal(page: Page, turn: number) {
   const card = romCard(page);
-  const pending = card.getByText('自由目标 · 请核对或编辑模型声明后确认');
+  const pending = card.getByText(/自由目标 · 请核对或编辑(?:模型声明|本地绑定参数)后确认/);
   const status = latestRom(page).locator('.run-status');
   await expect
     .poll(
