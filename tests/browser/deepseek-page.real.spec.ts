@@ -1,3 +1,4 @@
+import { reviewExpectedFreeGoal } from './rom-card-helpers.ts';
 // Opt-in real API acceptance. No HTTP mock, data injection or parallel executor.
 // First independent compare/quality must both pass before repetitions 2 and 3.
 import { test, expect } from '@playwright/test';
@@ -143,6 +144,7 @@ test('REAL DeepSeek page: independent compare/quality then fixed configuration 3
       businessStarted = performance.now();
       await page.getByRole('button', { name: '执行目标', exact: true }).click();
       const panel = page.locator('.run-panel').first();
+      if (kind === 'compare') await reviewExpectedFreeGoal(page, 0);
       await expect(panel.locator('.run-status')).not.toHaveText('执行中', { timeout: 125000 });
       record.observedBusinessMs = performance.now() - businessStarted;
       record.status = await panel.locator('.run-status').innerText();
@@ -176,8 +178,8 @@ test('REAL DeepSeek page: independent compare/quality then fixed configuration 3
       expect(run.requests.length).toBe(record.businessRequests);
       expect(run.status).toBe('completed');
       expect(run.protocolVersion).toBe('2.0.0');
-      expect(run.modelProtocolVersion).toBe('3.10.0');
-      expect(MODEL_INSTRUCTION_VERSION).toBe('core-protocol-missing-boundary');
+      expect(run.modelProtocolVersion).toBe('3.12.0');
+      expect(MODEL_INSTRUCTION_VERSION).toBe('rom-review-local-evidence');
       expect(audit.requests[0].messages[0]).toEqual({
         role: 'system',
         content: MODEL_SYSTEM_PROMPT,

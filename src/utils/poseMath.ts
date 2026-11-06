@@ -213,28 +213,41 @@ export function measureFrame(
 }
 // Translation/scale normalized mean Euclidean distance. Similarity is descriptive,
 // never a correctness score; reference selection belongs to the user.
-export function poseDistance(a: Landmark[], b: Landmark[], threshold = 0.5): number | null {
+export function poseDistance(
+  a: Landmark[],
+  b: Landmark[],
+  threshold = 0.5,
+  aspectA = 1,
+  aspectB = 1,
+): number | null {
   if (
+    !Number.isFinite(threshold) ||
+    threshold < 0 ||
+    threshold > 1 ||
+    ![aspectA, aspectB].every((v) => Number.isFinite(v) && v > 0) ||
     a.length !== 33 ||
     b.length !== 33 ||
-    [a, b].some((p) => [11, 12, 23, 24].some((i) => p[i].visibility < threshold))
+    [a, b].some((p) => [11, 12, 23, 24].some((i) => !reliable(p[i], threshold)))
   )
     return null;
-  const normalize = (p: Landmark[]) => {
+  // Source-height units make x and y commensurate before torso normalization.
+  // Canvas dimensions are rounded display sizes, not measurement geometry.
+  const normalize = (p: Landmark[], aspect: number) => {
     const c = midpoint(p[23], p[24]),
       s = midpoint(p[11], p[12]),
-      scale = Math.hypot(s.x - c.x, s.y - c.y);
-    return scale < 1e-8
+      scale = Math.hypot((s.x - c.x) * aspect, s.y - c.y);
+    return !Number.isFinite(scale) || scale < 1e-8
       ? null
-      : p.map((v) => ({ ...v, x: (v.x - c.x) / scale, y: (v.y - c.y) / scale }));
+      : p.map((v) => ({ ...v, x: ((v.x - c.x) * aspect) / scale, y: (v.y - c.y) / scale }));
   };
-  const na = normalize(a),
-    nb = normalize(b);
+  const na = normalize(a, aspectA),
+    nb = normalize(b, aspectB);
   if (!na || !nb) return null;
   const distances = na.flatMap((p, i) =>
-    p.visibility >= threshold && nb[i].visibility >= threshold
+    reliable(p, threshold) && reliable(nb[i], threshold)
       ? [Math.hypot(p.x - nb[i].x, p.y - nb[i].y)]
       : [],
   );
-  return distances.length ? distances.reduce((s, v) => s + v, 0) / distances.length : null;
+  const mean = distances.length ? distances.reduce((s, v) => s + v, 0) / distances.length : null;
+  return mean !== null && Number.isFinite(mean) ? mean : null;
 }

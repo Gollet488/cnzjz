@@ -6,6 +6,74 @@ import { POINT_NAMES } from '../../src/config.ts';
 import { createToolRegistry } from '../../src/analysis/tools.ts';
 import { serializeCSV } from '../../src/utils/csv.ts';
 
+// Admission/abort guard for the existing real-page test. It never supplies a
+// response: admitted requests reach the real proxy; a limit closes the context
+// and aborts in-flight fetches before another paid request can be forwarded.
+export function realAgentBudget(
+  stop: () => void,
+  limits = { targetRequests: 12, targetMs: 120000, sessionRequests: 36, sessionMs: 360000 },
+) {
+  let sessionStarted: number | null = null;
+  let targetStarted: number | null = null;
+  let sessionTimer: ReturnType<typeof setTimeout> | undefined;
+  let targetTimer: ReturnType<typeof setTimeout> | undefined;
+  let requests = 0;
+  let targetRequests = 0;
+  let stoppedBy: string | null = null;
+  const halt = (reason: string) => {
+    if (stoppedBy) return;
+    stoppedBy = reason;
+    clearTimeout(targetTimer);
+    clearTimeout(sessionTimer);
+    stop();
+  };
+  const check = () => {
+    if (stoppedBy) return false;
+    const now = performance.now();
+    if (sessionStarted !== null && now - sessionStarted >= limits.sessionMs)
+      halt('session_time_budget');
+    else if (targetStarted !== null && now - targetStarted >= limits.targetMs)
+      halt('target_time_budget');
+    return stoppedBy === null;
+  };
+  return {
+    startTarget() {
+      if (!check()) throw new Error(stoppedBy!);
+      if (targetStarted !== null) throw new Error('TARGET_ALREADY_ACTIVE');
+      if (sessionStarted === null) {
+        sessionStarted = performance.now();
+        sessionTimer = setTimeout(() => halt('session_time_budget'), limits.sessionMs);
+      }
+      targetStarted = performance.now();
+      targetRequests = 0;
+      targetTimer = setTimeout(() => halt('target_time_budget'), limits.targetMs);
+    },
+    beforeRequest() {
+      if (!check()) return false;
+      if (targetStarted === null) halt('request_outside_target');
+      else if (requests >= limits.sessionRequests) halt('session_request_budget');
+      else if (targetRequests >= limits.targetRequests) halt('target_request_budget');
+      if (stoppedBy) return false;
+      requests++;
+      targetRequests++;
+      return true;
+    },
+    finishTarget() {
+      check();
+      clearTimeout(targetTimer);
+      targetStarted = null;
+      if (stoppedBy) throw new Error(stoppedBy);
+    },
+    snapshot() {
+      return { requests, targetRequests, stoppedBy };
+    },
+    close() {
+      clearTimeout(targetTimer);
+      clearTimeout(sessionTimer);
+    },
+  };
+}
+
 // Independent CSV parser: handles quoted delimiters, doubled quotes and CRLF.
 export function parseCSV(bytes: Buffer) {
   assert.deepEqual([...bytes.subarray(0, 3)], [239, 187, 191]);

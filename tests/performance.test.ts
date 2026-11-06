@@ -393,6 +393,12 @@ test('time index and incremental block summaries match direct scans for clips, m
   ] as [number, number][]) {
     const frames = s.frames.filter((f) => f.time >= interval[0] && f.time <= interval[1]);
     const result = index.query(interval);
+    assert.equal(result.sampleCount, frames.length);
+    const centerY = frames.flatMap((f) => (f.center ? [f.center.y] : []));
+    assert.equal(
+      result.centerRange,
+      centerY.length ? Math.max(...centerY) - Math.min(...centerY) : null,
+    );
     const asym = frames.flatMap((f) => (f.asymmetry === null ? [] : [f.asymmetry]));
     assert.ok(
       result.meanAsym === null
@@ -417,6 +423,12 @@ test('time index and incremental block summaries match direct scans for clips, m
         j.left.rom,
         values.length < 2 ? null : Math.max(...values) - Math.min(...values),
       );
+      for (const side of ['left', 'right'] as const) {
+        const channel = j.key === 'spine' ? (side === 'left' ? 'midline' : 'right') : side;
+        const count = frames.filter((f) => angleValue(f.angles, j.key, channel) !== null).length;
+        assert.equal(j[side].sampleCount, count);
+        assert.equal(j[side].coverage, frames.length ? count / frames.length : null);
+      }
     }
   }
   const old = index.query().joints[3].left.rom;
@@ -430,6 +442,31 @@ test('time index and incremental block summaries match direct scans for clips, m
   s.reset();
   index.update(s.frames);
   assert.equal(index.query().centerRange, null);
+});
+
+test('joint coverage separates an occluded side, missing detection, clips and empty intervals', () => {
+  const s = new AnalysisSession('demo', { ...parameters, window: 1 });
+  for (let i = 0; i < 4; i++) {
+    const p = demoPose(i).map((p) => ({ ...p, visibility: 1 }));
+    if (i < 2) p[26].visibility = 0.1;
+    s.append(i === 2 ? [] : p, i);
+  }
+  const index = new FrameSummaryIndex();
+  index.update(s.frames);
+  const full = index.query();
+  const knee = full.joints.find((j) => j.key === 'knee')!;
+  assert.equal(full.sampleCount, 4);
+  assert.equal(knee.left.sampleCount, 3);
+  assert.equal(knee.left.coverage, 0.75);
+  assert.equal(knee.right.sampleCount, 1);
+  assert.equal(knee.right.coverage, 0.25);
+  assert.equal(knee.right.rom, null);
+  const missing = index.query([2, 2]);
+  assert.equal(missing.sampleCount, 1);
+  assert.equal(missing.joints.find((j) => j.key === 'knee')!.left.coverage, 0);
+  const empty = index.query([10, 11]);
+  assert.equal(empty.sampleCount, 0);
+  assert.equal(empty.joints[0].left.coverage, null);
 });
 
 test('query cache protects returned objects and invalidates append, parameters, acquisition and reset', () => {

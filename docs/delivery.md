@@ -1,6 +1,26 @@
 # 构建与交付
 
+## 2026-11-05 HTTPS 发布候选
+
+仓库为 [Gollet488/cnzjz](https://github.com/Gollet488/cnzjz)，目标地址为 [Kinetic Pose Lab](https://gollet488.github.io/cnzjz/)。候选构建使用固定依赖和 `/cnzjz/` 路径。仓库管理员可在 [Settings → Pages](https://github.com/Gollet488/cnzjz/settings/pages) 将 Source 设为 GitHub Actions。候选分支的发布作业通过 [Actions](https://github.com/Gollet488/cnzjz/actions) 查看和重跑。提交合入 main 后，由同一工作流构建和发布。
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build --base /cnzjz/
+```
+
+工作流上传 `dist/`。该目录包括应用、合成演示代码、模型、WASM 和 Worker。真实人体素材、私人审计、环境密钥、本机证据与旧压缩包保存在发布目录之外。评审可直接打开 HTTPS 站点使用本地分析功能。最终验收包括 Chrome 上传、模型及 Worker 请求、图表与片段、354 列 CSV 和 PNG 下载，以及实际摄像头轨道。
+
+Agent 的 Ollama 安装、精确来源配置、回环权限和本机回退地址见 [环境配置](environment.md#ollama)。DeepSeek 入口在回环 Web 页面可选，使用用户自己的密钥和现有 Node 代理。
+
+以下保留首次交付的历史检查与工具说明。
+
 更新日期：2026-10-31（Asia/Shanghai）。按参赛要求补齐代码仓库资料，由用户自行上传 GitHub。本次不创建提交、不推送，保留当前仓库和原有开发历史。
+
+2026-11-03 补充：本文保留当时的交付检查；当前完成度及后续任务以 [统一执行计划](core-execution-plan.md) 为准，历史未提交状态、服务 PID 和测试结果不能当作当前实况。
 
 ## 当前仓库整理
 
@@ -49,7 +69,7 @@ node scripts/start-demo.mjs --production
 
 浏览器回归在安装 Playwright Chromium 后运行 `pnpm test:browser`；已有 Chrome 时可在 PowerShell 中先设置 `$env:BROWSER_CHANNEL='chrome'`。真实模型测试为独立可选检查，本轮没有发起真实模型请求。
 
-## 手动上传 GitHub
+## 2026-10-31 历史手动上传说明
 
 参赛要求保留完整 Git 提交历史，应从**当前项目根目录**提交和推送。本地目前有 13 条可达提交（本次检查时），远程已配置为 `https://github.com/Gollet488/cnzjz.git`。不要在副本中重新 `git init`，也不要只通过网页上传文件或 ZIP 来替代现有历史。
 
@@ -80,7 +100,7 @@ GitHub Desktop 也可直接添加当前本地仓库，检查 Changes、创建提
 
 上传后现有 GitHub Actions 会执行 Windows/Linux 的格式、lint、单元测试和构建；远程 CI 结果以仓库实际运行结果为准。本次未执行远程 CI。
 
-## 网站部署与模型连接
+## 2026-10-31 历史部署与模型连接
 
 生成的 `dist/` 可通过根路径 HTTP 静态服务访问，不要双击 `index.html` 用 `file://` 运行。MediaPipe 模型、WASM 与推理 Worker 一同分发，资源校验固定版本、模型 SHA-256 和依赖包分发字节。摄像头需要浏览器许可与安全上下文，本机使用 localhost/127.0.0.1。
 
@@ -97,10 +117,10 @@ Agent 的两种连接方式：
 
 - 本轮未重新采集真实摄像头、未运行真实人体视频，也未调用真实 Ollama/DeepSeek。历史真人视频、人工摄像头 CSV 与真实 DeepSeek 多轮结果保留在统一计划和本机审计中，不能等同于本轮重测。
 - 工具自动操作真实摄像头媒体时钟/轨道、Windows 原生保存选择器及设备性能仍待实测；人工操作反馈与模拟用例分别保留。
-- 双视频姿态对比仍使用固定阈值/窗口，未统一不同画幅比例，约 10 Hz 预览不等于严格逐帧序列配准。主分析链路可用，对比距离暂不用于严格相似度结论。
+- 2026-11-03 V1 已接入双视频分析与显示设置、独立滤波窗口及各视频源宽高比校正；约 10 Hz 预览不等于严格逐帧序列配准，对比距离不用于严格相似度结论。
 - 单目二维投影、遮挡、视角和置信度影响指标；最多保留 18,000 帧，不识别运动类型、不评分、不判断动作对错。
 
-恢复开发时使用 [统一执行计划](core-execution-plan.md)，当前不继续其中旧的下一条指令。
+后续开发使用 [统一执行计划](core-execution-plan.md) 中最新的“当前下一条指令”；旧的设备单项等待队列已由 2026-11-03 的条件队列替代。
 
 ## 现有交付工具
 

@@ -8,9 +8,10 @@ export function renderPose(
   canvas: HTMLCanvasElement,
   points: Landmark[],
   settings: Settings,
-  video?: HTMLVideoElement | ImageBitmap,
+  video?: HTMLVideoElement | HTMLCanvasElement | ImageBitmap,
   trail: ({ x: number; y: number } | null)[] = [],
   sourceAspect?: number,
+  synthetic = !video,
 ) {
   const ctx = canvas.getContext('2d')!;
   const w = canvas.width,
@@ -70,7 +71,7 @@ export function renderPose(
   }
   const xy = (p: { x: number; y: number }) => ({ x: ox + p.x * dw, y: oy + p.y * dh });
   if (points.length !== 33) return;
-  if (!video) {
+  if (synthetic) {
     // Stylized mannequin is explicitly synthetic; never presented as a real video.
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';

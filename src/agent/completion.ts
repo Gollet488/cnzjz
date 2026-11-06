@@ -10,13 +10,21 @@ export interface CompletionCheck {
   missing: string[];
   limitations: string[];
 }
+type ApplicationTool = 'set_chart_view' | 'prepare_report' | 'prepare_export';
+export class WorkspaceApplicationError extends Error {
+  readonly tool: ApplicationTool;
+  constructor(tool: ApplicationTool, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.tool = tool;
+  }
+}
 export const completionSchema = object({
   state: enumeration('ready', 'partial', 'not_comparable', 'needs_input'),
   satisfied: array(string),
   missing: array(string),
   limitations: array(string),
 });
-const metricPaths: Record<Metric, string> = {
+export const metricPaths: Record<Metric, string> = {
   rom: 'rom',
   meanAngle: 'angle/mean',
   peakAbsoluteVelocity: 'peakAbsoluteVelocity',
@@ -31,7 +39,7 @@ const metricPaths: Record<Metric, string> = {
 function at(value: any, path: string): unknown {
   return path.split('/').reduce((v, key) => v?.[key], value);
 }
-function sameView(a: ChartView | null | undefined, b: ChartView) {
+export function sameView(a: ChartView | null | undefined, b: ChartView) {
   return (
     !!a &&
     a.joint === b.joint &&
@@ -51,7 +59,8 @@ export function checkCompletion(
   const missing = missingTaskFields(spec);
   if (missing.length) return { ...check, state: 'needs_input', missing };
   const calls = run.calls.filter(
-    (c): c is CallRecord & { output: { ok: true; tool: string; result: any } } => c.output.ok,
+    (c): c is CallRecord & { output: { ok: true; tool: string; result: any } } =>
+      c.output.ok && !c.reusedCallId,
   );
   const cited = (c: CallRecord, path: (p: string) => boolean) =>
     citations.some((x) => x.callId === c.id && path(x.path));
@@ -87,6 +96,7 @@ export function checkCompletion(
   const reports = calls.filter(
     (c) =>
       c.name === 'prepare_report' &&
+      c.output.result.state === 'ready' &&
       fact(c.output.result.facts, spec.interval) &&
       (spec.comparison
         ? matchComparison(c.output.result.comparison)
@@ -107,6 +117,31 @@ export function checkCompletion(
   const usableReports = reports.filter(
     (c) => available(c, 'report') && cited(c, (p) => p === '/handle'),
   );
+  const localQuality = !!(spec.joint && spec.channels?.length && spec.basis);
+  const qualityMatches = (v: any) =>
+    same(v?.evidence?.interval, spec.interval) &&
+    (!localQuality ||
+      (v?.selection?.joint === spec.joint &&
+        v.selection.basis === spec.basis &&
+        v.evidence.basis === spec.basis &&
+        sameChannels(
+          v.selection.channels.map((c: any) => c.channel),
+          spec.channels!,
+        )));
+  const qualityCited = (c: CallRecord, value: any, prefix = '') =>
+    localQuality
+      ? value.selection.channels.every((_: any, i: number) =>
+          cited(c, (p) =>
+            new RegExp(
+              `^${prefix}/selection/channels/${i}/(validSamples|invalidSamples|coverage|notDetectedSamples|unusableSamples)$`,
+            ).test(p),
+          ),
+        )
+      : cited(c, (p) =>
+          new RegExp(
+            `^${prefix}/(effectiveRate|meanConfidence|missingSamples|detectedSamples|fullyReliableSamples|maxSampleGapSeconds)$`,
+          ).test(p),
+        );
   const require = (name: string, ok: boolean) => (ok ? check.satisfied : check.missing).push(name);
   if (spec.goalTypes.includes('metrics'))
     require('metrics', calls.some(
@@ -120,13 +155,14 @@ export function checkCompletion(
     require('quality', calls.some(
       (c) =>
         c.name === 'get_quality_summary' &&
-        same(c.output.result.evidence.interval, spec.interval) &&
-        cited(c, (p) =>
-          /^\/(effectiveRate|meanConfidence|missingSamples|detectedSamples|fullyReliableSamples|maxSampleGapSeconds)$/.test(
-            p,
-          ),
-        ),
-    ) || usableReports.length > 0);
+        qualityMatches(c.output.result) &&
+        qualityCited(c, c.output.result),
+    ) ||
+      usableReports.some(
+        (c) =>
+          qualityMatches(c.output.result.quality) &&
+          (!localQuality || qualityCited(c, c.output.result.quality, '/quality')),
+      ));
   if (spec.goalTypes.includes('comparison') || spec.comparison) {
     const comparisons = calls.filter(
       (c) => c.name === 'compare_intervals' && matchComparison(c.output.result),
@@ -134,7 +170,12 @@ export function checkCompletion(
     const candidates = [
       ...comparisons
         .filter((c) =>
-          cited(c, (p) => spec.metrics.some((m) => new RegExp(`^/differences/\\d+/${m}$`).test(p))),
+          cited(
+            c,
+            (p) =>
+              spec.metrics.some((m) => new RegExp(`^/differences/\\d+/${m}$`).test(p)) ||
+              (c.output.result.comparable === false && /^\/(comparable|reasons\/\d+)$/.test(p)),
+          ),
         )
         .map((c) => c.output.result),
       ...usableReports.map((c) => c.output.result.comparison).filter(Boolean),
@@ -172,7 +213,13 @@ export function checkCompletion(
     require('report', usableReports.some(
       (c) =>
         numericMetrics(c.output.result.facts) &&
-        (!spec.comparison || c.output.result.comparison.comparable),
+        (!spec.comparison ||
+          c.output.result.comparison.comparable ||
+          (c.output.result.comparison.comparable === false &&
+            c.output.result.comparison.reasons.length > 0 &&
+            c.output.result.comparison.reasons.every((reason: string) =>
+              c.output.result.limitations.includes(reason),
+            ))),
     ));
   const exported = spec.deliveries.export;
   if (exported)

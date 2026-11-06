@@ -56,9 +56,51 @@ pnpm preview:env
 
 ## Ollama
 
-Ollama 是可选的本机服务，不属于 pnpm 依赖。自行准备已安装且支持 tools 的本地模型，在 Agent 页填写本机根地址（默认 `http://127.0.0.1:11434`）、选择模型并“验证并连接”。模型下载由用户自行完成，本项目不会自动下载。
+1. 安装 [Ollama for Windows](https://docs.ollama.com/windows)。退出系统托盘中已运行的 Ollama，再从 PowerShell 启动回环服务。当前候选的 Pages 来源为 `https://gollet488.github.io`，本机生产预览来源为 `http://127.0.0.1:4173`。
 
-若浏览器提示跨域错误，需在 Ollama 服务的启动环境设置 `OLLAMA_ORIGINS` 为页面实际来源，例如 `http://127.0.0.1:5173`，重启 Ollama 后重试。地址中的 localhost / 127.0.0.1、协议和端口应与页面来源一致。`OLLAMA_ORIGINS` 由 Ollama 进程读取，写入本项目 `.env` 不会替外部服务配置它。
+   ```powershell
+   $env:OLLAMA_HOST='127.0.0.1:11434'
+   $env:OLLAMA_ORIGINS='https://gollet488.github.io,http://127.0.0.1:4173'
+   $env:OLLAMA_NO_CLOUD='1'
+   ollama serve
+   ```
+
+   将实际页面的协议、主机和端口填入 `OLLAMA_ORIGINS`，不带 `/cnzjz/` 或末尾斜线。使用开发服务时可改为 `http://127.0.0.1:5173`。变量由 Ollama 启动进程读取。每次修改后重新启动该进程。
+
+2. 在另一终端确认已安装 Qwen2.5-7B-Instruct-1M Q4_K_M。已有匹配权重和标签 `qwen2.5:7b-instruct` 时可直接使用。首次安装时核对 GGUF 的 SHA-256，再创建本机标签。模型清单中的 tools 标记用于初筛，页面连接仍需真实结构化探测。[模型文件](https://huggingface.co/second-state/Qwen2.5-7B-Instruct-1M-GGUF/blob/main/Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf)
+
+   ```powershell
+   $file = 'Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf'
+   $expected = '6dba997502a27b5f0c840346f45d9d62c0a04e6eb3cf72adc6c7ceb18804f380'
+   if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $expected) {
+     throw 'GGUF SHA-256 mismatch'
+   }
+   @"
+   FROM ./$file
+   TEMPLATE {{ .Prompt }}
+   PARAMETER temperature 0.7
+   PARAMETER num_ctx 16384
+   "@ | Set-Content -Encoding utf8 Modelfile
+   ollama create qwen2.5:7b-instruct -f Modelfile
+   ```
+
+   本轮连接实测使用 Ollama 0.40.13。运行 `ollama list` 可核对标签。安装约需 4.7 GB 模型文件及足够的可用内存。
+
+3. 安装项目依赖后执行 `pnpm build` 和 `pnpm preview --port 4173 --strictPort`。从 `http://127.0.0.1:4173/` 进入「AI Agent 分析」，地址填 `http://127.0.0.1:11434`，点击「读取模型」，选中标签后点击「验证并连接」。Chrome 请求访问回环网络时选择允许。拒绝后可在地址栏的站点设置中重新允许。
+
+4. 用合成演示验证时，先采集到足够时间再暂停分析。提交目标后核对任务规格中的关节、侧别、口径和前后段，确认实际图表与证据一致，再保存报告或 CSV。任务失败时可在该轮点「保存完整本地审计」，保留实际工具参数和拒绝原因。
+
+2026-11-05 的本机 Chrome 生产预览中，上述固定 Qwen2.5 通过了结构化连接探测和首轮来源声明，并执行了比较和图表工具。首轮把用户给出的绝对后段当成采样末尾 5 秒，未完成引用提交。该配置的三轮报告与 CSV 交付仍待验收。
+
+| 现象 | 检查 |
+| --- | --- |
+| 服务离线 | 在本机访问 `http://127.0.0.1:11434/api/tags`。若连接被拒绝，检查 Ollama 终端是否仍在运行及地址端口是否一致 |
+| 页面无法读取模型，但终端可以 | 确认浏览器回环权限和启动进程中的精确 `OLLAMA_ORIGINS`，重新加载页面 |
+| 模型不显示或探测失败 | 用 `ollama list` 核对标签。选择实际支持 tools 的本地模型，查看 Ollama 终端错误和内存状况 |
+
+浏览器通过回环向 Ollama 发送指令和有界工具反馈。Chrome 的回环权限和 Ollama 的 CORS 是两道独立检查。[Chrome Local Network Access](https://developer.chrome.com/docs/modern-web-guidance/guides/security/local-network-access)
+
+完整三轮任务已通过本机 Web 与 DeepSeek 的回环代理验证。按本页「环境变量模板与加载」配置自己的 `DEEPSEEK_API_KEY`，执行 `pnpm build` 与 `pnpm preview:env --port 4173 --strictPort`。从 `http://127.0.0.1:4173/` 进入「AI Agent 分析」，选择 DeepSeek 并验证连接。指令和有界工具反馈由本机代理发送到 DeepSeek 官方 API，密钥由本机 Node 进程读取。
 
 ## 验证与排错
 

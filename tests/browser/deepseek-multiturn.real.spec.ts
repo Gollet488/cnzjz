@@ -1,6 +1,7 @@
+import { reviewExpectedFreeGoal } from './rom-card-helpers.ts';
 // Real production UI + official API; no request mocking or session injection.
 import { test, expect } from '@playwright/test';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { evaluationFingerprints } from '../../scripts/evaluate-agent.mjs';
@@ -10,6 +11,8 @@ import {
   assessDeliveryScope,
 } from '../../src/agent/evaluation.ts';
 import { resolveCitation } from '../../src/agent/runtime.ts';
+import { MODEL_INSTRUCTION_VERSION, MODEL_SYSTEM_PROMPT } from '../../src/agent/modelProtocol.ts';
+import { DEEPSEEK_ADDRESS, DEEPSEEK_INFERENCE } from '../../src/agent/providers/deepseek.ts';
 import {
   fullCSV,
   downloadFile,
@@ -18,10 +21,11 @@ import {
   numericEqual,
   parseCSV,
   rom,
+  realAgentBudget,
 } from './files.ts';
 
 const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
-test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three sessions', async ({
+test('REAL DeepSeek three turns and saved report/CSV, bounded fixed configuration sessions', async ({
   browser,
 }, info) => {
   expect(process.env.REAL_AGENT_PROVIDER).toBe('deepseek');
@@ -37,10 +41,21 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
     synthetic: true,
     startedAt: new Date().toISOString(),
     goals: DELIVERY_GOALS,
+    endpoint: DEEPSEEK_ADDRESS,
+    inference: DEEPSEEK_INFERENCE,
+    modelInstructionVersion: MODEL_INSTRUCTION_VERSION,
     limits: { targetRequests: 12, targetMs: 120000, sessionRequests: 36, sessionMs: 360000 },
     nativeSave: 'not_tested; Blob downloads only, native picker disabled by QA',
     plannedSessions,
     fingerprints: await evaluationFingerprints({ scenario }),
+    additionalSources: await Promise.all(
+      [
+        'vite.config.ts',
+        'playwright.real.config.ts',
+        'tests/browser/deepseek-multiturn.real.spec.ts',
+        'tests/browser/files.ts',
+      ].map(async (path) => ({ path, sha256: sha(await readFile(path)) })),
+    ),
     sessions: [],
   };
   const persist = () =>
@@ -53,6 +68,7 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
       repetition,
       passed: false,
       businessRequests: 0,
+      businessAttempts: 0,
       probes: 0,
       turns: [],
       http: [],
@@ -64,10 +80,17 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
       acceptDownloads: true,
     });
     const page = await context.newPage();
+    const budget = realAgentBudget(() => void context.close().catch(() => {}));
+    // This only admits/aborts; successful traffic and responses are unmodified.
+    await context.route('**/__deepseek/complete', async (route) => {
+      if (!budget.beforeRequest()) return route.abort().catch(() => {});
+      record.businessRequests++;
+      await route.continue();
+    });
     let downloads = 0;
     page.on('download', () => downloads++);
     page.on('request', (req) => {
-      if (new URL(req.url()).pathname === '/__deepseek/complete') record.businessRequests++;
+      if (new URL(req.url()).pathname === '/__deepseek/complete') record.businessAttempts++;
       if (new URL(req.url()).pathname === '/__deepseek/probe') record.probes++;
     });
     page.on('response', (res) => {
@@ -130,9 +153,11 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
         record.turns.push(turn);
         await persist();
         await page.getByRole('textbox', { name: '分析目标或后续修改' }).fill(goal);
+        budget.startTarget();
         await page.getByRole('button', { name: '执行目标', exact: true }).click();
         const panel = page.locator('.run-panel').first();
         await expect(panel.locator('h3').first()).toHaveText(goal);
+        await reviewExpectedFreeGoal(page, index);
         await expect(panel.locator('.run-status')).not.toHaveText('执行中', { timeout: 125000 });
         await expect(
           panel.getByRole('button', { name: '保存完整本地审计', exact: true }),
@@ -146,6 +171,7 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
         );
         const audit = JSON.parse(auditFile.bytes.toString());
         const run = audit.run;
+        budget.finishTarget();
         turn.audit = {
           file: `${label}-turn-${index + 1}.audit.json`,
           sha256: sha(auditFile.bytes),
@@ -154,7 +180,10 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
         turn.requests = record.businessRequests - requestsBefore;
         turn.elapsedMs = run.elapsedMs;
         turn.usage = run.usage;
-        turn.responses = audit.requests.map((r: any) => r.reply?.response ?? null);
+        turn.responses = audit.requests.map((r: any) => ({
+          model: r.reply?.response?.model ?? null,
+          systemFingerprint: r.reply?.response?.systemFingerprint ?? null,
+        }));
         turn.rejections = run.calls
           .filter((c: any) => !c.output.ok)
           .map((c: any) => ({
@@ -174,7 +203,11 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
         expect(turn.requests).toBeLessThanOrEqual(12);
         expect(run.elapsedMs).toBeLessThanOrEqual(120000);
         expect(run.status).toBe('completed');
-        expect(run.modelProtocolVersion).toBe('3.10.0');
+        expect(run.modelProtocolVersion).toBe('3.12.0');
+        expect(audit.requests[0].messages[0]).toEqual({
+          role: 'system',
+          content: MODEL_SYSTEM_PROMPT,
+        });
         expect(run.timing.application).toBe('ready');
         expect(run.timing.audit).toBe('saved');
         expect(run.completion.missing).toEqual([]);
@@ -203,6 +236,7 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
         turn.passed = true;
         await persist();
       }
+      budget.close();
       const panel = page.locator('.run-panel').first();
       const reportFile = await downloadFile(
         page,
@@ -215,6 +249,17 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
         second = rom(rows, [12, 17], 'right');
       expect(report.reference.sessionId).toBe(rows[0].session_id);
       expect(report.reference.revision).toBe(Number(rows[0].session_revision));
+      expect(report.reference.source).toBe('demo');
+      expect(report.reference.synthetic).toBe(true);
+      expect(report.reference.parameters).toEqual(session.info().parameters);
+      for (const facts of [report.result.facts, report.result.comparison.second]) {
+        expect(facts.evidence.source).toBe('demo');
+        expect(facts.evidence.synthetic).toBe(true);
+        expect(facts.evidence.parameters).toEqual(session.info().parameters);
+        expect(facts.evidence.sessionId).toBe(rows[0].session_id);
+        expect(facts.evidence.revision).toBe(Number(rows[0].session_revision));
+        expect(facts.units.angle).toBe('deg');
+      }
       expect(report.result.facts.channels.map((c: any) => c.channel)).toEqual(['right']);
       expect(report.result.facts.joint).toBe('knee');
       expect(report.result.facts.evidence.basis).toBe('filtered');
@@ -278,6 +323,8 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
         .screenshot({ path: info.outputPath(`session-${repetition}-failure.png`) })
         .catch(() => {});
     } finally {
+      budget.close();
+      record.budget = budget.snapshot();
       await context.close();
       await persist();
     }
@@ -294,6 +341,9 @@ test('REAL DeepSeek three turns and saved report/CSV, fixed configuration three 
     unknownCostTurns: summary.sessions
       .flatMap((s: any) => s.turns)
       .filter((t: any) => t.elapsedMs == null).length,
+    retries: 0,
+    retryPolicy:
+      'no automatic HTTP or failed-chain retries; model corrections stay in target budget',
   };
   await persist();
   expect(summary.completed, 'Stop on the first failed chain; no automatic reruns').toBe(true);

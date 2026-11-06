@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, reactive, watch, nextTick } from 'vue';
+import { computed, ref, shallowRef, reactive, watch, nextTick } from 'vue';
 import {
   Activity,
   LayoutDashboard,
@@ -43,6 +43,7 @@ import TimeChart from './components/TimeChart.vue';
 import MarkerTimeline from './components/MarkerTimeline.vue';
 import PoseCompare from './components/PoseCompare.vue';
 import AgentPanel from './components/AgentPanel.vue';
+import { WorkspaceApplicationError } from './agent/completion.ts';
 import type { AgentRun } from './agent/runtime.ts';
 import { DEFAULT_SETTINGS, JOINTS, MAX_FRAMES, POINT_NAMES } from './config';
 import { DEMO_SIZE } from './utils/dimensions';
@@ -100,17 +101,35 @@ const { session, frames, sessionInfo, summaryIndex, publishSession, publication 
     metricVersion: METRIC_VERSION,
   },
 );
-const agentChart = ref<ChartView | null>(null);
+// Replace the whole view and keep it cloneable for workspace observation.
+const agentChart = shallowRef<ChartView | null>(null);
+const agentSelection = computed<Omit<ChartView, 'interval'>>(
+  () =>
+    agentChart.value ?? {
+      joint: joint.value,
+      channels: joint.value === 'spine' ? ['midline'] : ['left', 'right'],
+      basis: 'filtered',
+    },
+);
 const agentTimeChart = ref<InstanceType<typeof TimeChart>>();
 async function waitForAgentApplication(run: AgentRun) {
   await nextTick();
   if (run.calls.some((c) => c.name === 'set_chart_view' && c.output.ok)) {
-    if (!agentTimeChart.value) throw new Error('AGENT_CHART_NOT_MOUNTED');
-    await agentTimeChart.value.waitUntilRendered();
+    try {
+      if (!agentTimeChart.value) throw new Error('AGENT_CHART_NOT_MOUNTED');
+      await agentTimeChart.value.waitUntilRendered();
+    } catch (error) {
+      throw new WorkspaceApplicationError('set_chart_view', error);
+    }
   }
   for (const call of run.calls) {
-    if (call.output.ok && ['prepare_report', 'prepare_export'].includes(call.name))
-      analysisTools.getArtifact((call.output.result as { handle: string }).handle);
+    if (call.output.ok && (call.name === 'prepare_report' || call.name === 'prepare_export')) {
+      try {
+        analysisTools.getArtifact((call.output.result as { handle: string }).handle);
+      } catch (error) {
+        throw new WorkspaceApplicationError(call.name, error);
+      }
+    }
   }
 }
 const syntheticFile = ref(false);
@@ -122,14 +141,7 @@ function fileProvenance() {
 const analysisTools = createToolRegistry(session, {
   readWorkspace() {
     return {
-      chart: agentChart.value
-        ? {
-            joint: joint.value,
-            channels: [...agentChart.value.channels],
-            basis: agentChart.value.basis,
-            interval: [...agentChart.value.interval] as [number, number],
-          }
-        : null,
+      chart: agentChart.value,
       time: latest.value?.time ?? null,
     };
   },
@@ -197,18 +209,25 @@ const formatTime = (s: number) =>
     .padStart(2, '0')}`;
 const display = (n: number | null | undefined, digits = 1) =>
   n === null || n === undefined ? '—' : n.toFixed(digits);
-const visibleSummary = computed(() => {
-  void frames.value;
-  return clipRange.value ? summaryIndex.query(clipRange.value) : wholeSummary.value;
+const selectedInterval = computed<[number, number] | null>(() => {
+  if (!range.value || !clipRange.value) return range.value ?? clipRange.value;
+  return [
+    Math.max(range.value[0], clipRange.value[0]),
+    Math.min(range.value[1], clipRange.value[1]),
+  ];
 });
 const selectedSummary = computed(() => {
   void frames.value;
-  if (!range.value) return visibleSummary.value;
-  const a = Math.max(range.value[0], clipRange.value?.[0] ?? -Infinity);
-  const b = Math.min(range.value[1], clipRange.value?.[1] ?? Infinity);
-  return summaryIndex.query([a, b]);
+  return selectedInterval.value ? summaryIndex.query(selectedInterval.value) : wholeSummary.value;
 });
-const centerRange = computed(() => visibleSummary.value.centerRange);
+const centerScope = computed(() => {
+  const interval = selectedInterval.value;
+  if (!interval) return '完整会话';
+  const [start, end] = interval;
+  if (start > end) return '图表区间与当前片段无交集';
+  const scope = range.value ? (clipRange.value ? '图表区间（片段内）' : '图表区间') : '当前片段';
+  return `${scope} ${start.toFixed(2)}–${end.toFixed(2)} s`;
+});
 const fps = computed(() => {
   const last = frames.value.slice(-20);
   return last.length > 1 ? (last.length - 1) / (last.at(-1)!.time - last[0].time) : 0;
@@ -233,9 +252,9 @@ function capture(
   time: number,
   aspect: number,
   frameSource: Source,
-  accept?: (value: boolean) => void,
+  accept?: (sampleTime?: number) => void,
 ) {
-  let accepted = false;
+  let acceptedTime: number | undefined;
   try {
     if (!playing.value || frameSource !== source.value) return;
     if (source.value === 'camera') {
@@ -257,7 +276,7 @@ function capture(
     }
     try {
       if (!session.append(points, time)) return;
-      accepted = true;
+      acceptedTime = time;
     } catch (error) {
       playing.value = false;
       ElMessage.error(`样本未写入：${error instanceof Error ? error.message : '未知错误'}`);
@@ -270,7 +289,7 @@ function capture(
       ElMessage.warning('已达到 18,000 帧上限，请导出或重置后继续。');
     }
   } finally {
-    accept?.(accepted);
+    accept?.(acceptedTime);
   }
 }
 function changeSource(value: Source) {
@@ -369,13 +388,17 @@ function seek(value: number | number[]) {
 }
 function agentRange(start: number, end: number) {
   agentChart.value = {
-    ...(agentChart.value ?? {
-      joint: joint.value,
-      channels: joint.value === 'spine' ? ['midline'] : ['left', 'right'],
-      basis: 'filtered',
-    }),
+    ...agentSelection.value,
     interval: [start, end],
   };
+}
+function selectChartRange(start: number, end: number) {
+  const first = visibleFrames.value[0]?.time;
+  const last = visibleFrames.value.at(-1)?.time;
+  range.value =
+    first !== undefined && last !== undefined && start <= first && end >= last
+      ? null
+      : [start, end];
 }
 watch(clipRange, () => {
   range.value = null;
@@ -406,7 +429,8 @@ async function redecode() {
   playing.value = true;
 }
 async function report() {
-  if (!stage.value?.canvas || !visibleFrames.value.length) {
+  const reportStage = stage.value;
+  if (!reportStage?.canvas || !visibleFrames.value.length) {
     ElMessage.info('请先在采集页生成数据。');
     return;
   }
@@ -414,17 +438,23 @@ async function report() {
   await nextTick();
   try {
     const reference = session.info(),
-      time = latest.value?.time,
+      frame = latest.value,
       samples = visibleFrames.value;
     const assertCurrent = () => {
       session.assertCurrent(reference);
-      if (latest.value?.time !== time || visibleFrames.value !== samples)
+      if (
+        playing.value ||
+        stage.value !== reportStage ||
+        latest.value !== frame ||
+        visibleFrames.value !== samples
+      )
         throw new Error('报告画面或区间已改变，请重新生成。');
     };
-    await stage.value.waitUntilRendered();
     assertCurrent();
-    await exportReport(stage.value.canvas, samples, reference.synthetic, {
-      time,
+    await reportStage.waitUntilRendered();
+    assertCurrent();
+    await exportReport(reportStage.canvas, samples, reference.synthetic, {
+      time: frame?.time,
       reference,
       assertCurrent,
     });
@@ -663,7 +693,8 @@ defineExpose({ analysisTools, sessionInfo });
               :source="source"
               :playing="playing"
               :settings="settings"
-              :selected-points="latest?.points"
+              :selected-frame="latest"
+              :source-aspect="sessionInfo.parameters.aspect"
               :seek-time="seekTime"
               :session-id="sessionInfo.sessionId"
               @frame="capture"
@@ -862,7 +893,7 @@ defineExpose({ analysisTools, sessionInfo });
               :active="page === 'workspace' || page === 'analysis'"
               :expanded="page === 'analysis'"
               @seek="seek"
-              @range="(a, b) => (range = [a, b])" /><div class="chart-footer"
+              @range="selectChartRange" /><div class="chart-footer"
               ><span><MoveUpRight :size="12" />滚轮缩放 · 拖动底部滑块选择时间区间</span
               ><button @click="page = 'analysis'"
                 >{{ page === 'analysis' ? '详细统计见下方' : '探索时序数据'
@@ -880,11 +911,12 @@ defineExpose({ analysisTools, sessionInfo });
               :interval="range"
               kind="center"
               :active="page === 'workspace' || page === 'analysis'"
-              @range="(a, b) => (range = [a, b])"
+              @range="selectChartRange"
             /><div class="center-chart-foot"
               ><span><i class="legend-dot mint" />纵向位置</span
               ><span
-                >波动范围 <b>{{ display(centerRange, 4) }}</b></span
+                ><span class="center-stat-scope">统计范围：{{ centerScope }}</span> · 波动范围
+                <b>{{ display(selectedSummary.centerRange, 4) }}</b></span
               ></div
             ></section
           >
@@ -895,14 +927,16 @@ defineExpose({ analysisTools, sessionInfo });
             ><div class="panel-heading"
               ><h2>关节活动幅度</h2
               ><span class="unit-label"
-                >{{ range ? '图表选中区间' : '完整会话' }} · 单位 °</span
+                >{{ range ? '图表区间与当前片段交集' : clipRange ? '当前片段' : '完整会话' }} · 单位
+                °</span
               ></div
             ><div class="stats-table-wrap"
               ><table class="stats-table"
                 ><thead
                   ><tr
                     ><th>关节</th><th>左侧 / 中线最小 / 最大</th><th>左侧 / 中线 ROM</th
-                    ><th>右侧最小 / 最大</th><th>右侧 ROM</th></tr
+                    ><th>右侧最小 / 最大</th><th>右侧 ROM</th><th>左侧 / 中线有效样本</th
+                    ><th>右侧有效样本</th></tr
                   ></thead
                 ><tbody
                   ><tr v-for="j in jointSummaries" :key="j.key"
@@ -910,13 +944,25 @@ defineExpose({ analysisTools, sessionInfo });
                     ><td>{{ display(j.left.min) }} / {{ display(j.left.max) }}</td
                     ><td class="left-value">{{ display(j.left.rom) }}</td
                     ><td>{{ display(j.right.min) }} / {{ display(j.right.max) }}</td
-                    ><td class="right-value">{{ display(j.right.rom) }}</td></tr
+                    ><td class="right-value">{{ display(j.right.rom) }}</td
+                    ><td
+                      >{{ j.left.sampleCount }} / {{ selectedSummary.sampleCount }} ·
+                      {{ display(j.left.coverage === null ? null : j.left.coverage * 100) }}%</td
+                    ><td
+                      ><template v-if="j.key !== 'spine'"
+                        >{{ j.right.sampleCount }} / {{ selectedSummary.sampleCount }} ·
+                        {{
+                          display(j.right.coverage === null ? null : j.right.coverage * 100)
+                        }}%</template
+                      ><template v-else>—</template></td
+                    ></tr
                   ></tbody
                 ></table
               ></div
             ><div class="info-line"
               >filtered ROM = 所选区间最大角度 − 最小角度（至少 2
-              个有效样本）；低置信度或退化向量不参与统计。</div
+              个有效样本）；低置信度或退化向量不参与统计。有效样本覆盖率的分母为当前统计区间内全部已采样帧（含未检出帧），不是源视频覆盖率或测量准确率；少量样本仍可能产生不稳定的
+              ROM。二维投影受视角和遮挡影响。</div
             ></section
           ><section class="panel"
             ><div class="panel-heading"
@@ -992,7 +1038,7 @@ defineExpose({ analysisTools, sessionInfo });
             :threshold="sessionInfo.parameters.threshold"
             :interval="range"
             expanded
-            @range="(a, b) => (range = [a, b])"
+            @range="selectChartRange"
             @seek="seek"
           />
         </section>
@@ -1020,12 +1066,12 @@ defineExpose({ analysisTools, sessionInfo });
             style="padding: 20px; margin-top: 18px"
           >
             <h2
-              >Agent 视图 · {{ JOINTS.find((item) => item.key === joint)?.label }} ·
-              {{ agentChart?.basis ?? 'filtered' }} ·
+              >Agent 视图 · {{ JOINTS.find((item) => item.key === agentSelection.joint)?.label }} ·
+              {{ agentSelection.basis }} ·
               {{
-                agentChart?.channels
+                agentSelection.channels
                   .map((side) => ({ left: '左侧', right: '右侧', midline: '中线' })[side])
-                  .join(' / ') ?? '左侧 / 右侧'
+                  .join(' / ')
               }}</h2
             >
             <p
@@ -1036,7 +1082,7 @@ defineExpose({ analysisTools, sessionInfo });
               ref="agentTimeChart"
               :frames="frames"
               :revision="sessionInfo.revision"
-              :joint="joint"
+              :joint="agentSelection.joint"
               :markers="markers"
               :view="agentChart"
               kind="angle"
@@ -1238,7 +1284,7 @@ defineExpose({ analysisTools, sessionInfo });
         :interval="range"
         kind="angle"
         expanded
-        @range="(a, b) => (range = [a, b])"
+        @range="selectChartRange"
         @seek="seek"
       /><p class="drawer-intro"
         >蓝色为左侧或脊柱中线，橙色为右侧；使用 filtered

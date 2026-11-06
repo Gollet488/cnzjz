@@ -3,11 +3,15 @@ import { preview } from 'vite';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
-import { runProductControls } from './i3-product-controls.mjs';
+import { runProductControls, runWebLoad } from './i3-product-controls.mjs';
 
 const output = process.argv[2];
 const dist = process.argv.find((a) => a.startsWith('--dist='))?.slice(7) ?? 'dist';
 const sourceBefore = process.argv.find((a) => a.startsWith('--source-before='))?.slice(16);
+const webLoad = process.argv.includes('--web-load');
+const frames = Number(process.argv.find((a) => a.startsWith('--frames='))?.slice(9) ?? 18000);
+const channel = process.argv.find((a) => a.startsWith('--channel='))?.slice(10) ?? 'msedge';
+if (webLoad && ![202, 18000].includes(frames)) throw Error('frames must be 202 or 18000');
 if (!output) throw new Error('unique output directory required');
 await mkdir(output, { recursive: false });
 const save = (name, data) => writeFile(`${output}/${name}`, JSON.stringify(data, null, 2));
@@ -21,6 +25,13 @@ for (const path of [
   'src/utils/csv.ts',
   'src/utils/csvExport.ts',
   'src/composables/useCSVExport.ts',
+  'src/analysis/session.ts',
+  'src/analysis/frameIndex.ts',
+  'src/config.ts',
+  'src/components/PoseCompare.vue',
+  'scripts/i3-page-performance.mjs',
+  'scripts/i3-product-controls.mjs',
+  'tests/fixtures/browser-manifest.json',
   'pnpm-lock.yaml',
 ]) {
   const beforeName = path.split('/').at(-1);
@@ -36,13 +47,17 @@ for (const path of [
 }
 await save('conditions.json', {
   fingerprints,
+  argv: process.argv.slice(2),
+  frames,
   node: process.version,
   os: os.release(),
   cpu: os.cpus()[0].model,
   memory: os.totalmem(),
   viewport: [1440, 1000],
   synthetic: true,
-  models: 'not invoked',
+  models: process.argv.includes('--modalities')
+    ? 'local fixed MediaPipe only in separate modality phases; no Agent'
+    : 'not invoked',
   backgroundLoad: null,
   thermalState: null,
   powerPlan: 'unchanged',
@@ -55,89 +70,137 @@ const server = await preview({
 });
 let browser;
 try {
-  browser = await chromium.launch({ channel: 'msedge', headless: false });
+  browser = await chromium.launch({ channel, headless: false });
   report.browser = browser.version();
   const page = await browser.newPage({
     viewport: { width: 1440, height: 1000 },
     acceptDownloads: true,
   });
   const cdp = await page.context().newCDPSession(page);
+  const browserCDP = await browser.newBrowserCDPSession();
+  const hardware = await browserCDP.send('SystemInfo.getInfo');
+  report.hardware = {
+    logicalCPUs: os.cpus().length,
+    gpu: hardware.gpu.devices,
+    memoryScope: 'CDP main-page heap/backing only; no complete browser/GPU/WASM/process peak',
+  };
   await cdp.send('HeapProfiler.enable');
   page.on('pageerror', (e) => report.errors.push(e.message));
-  await page.addInitScript(() => {
-    const nativeRAF = requestAnimationFrame.bind(window),
-      nativeCancel = cancelAnimationFrame.bind(window);
-    const channel = new MessageChannel(),
-      callbacks = new Map();
-    let next = 1,
-      virtual = 1000,
-      scheduled = false;
-    window.requestAnimationFrame = (callback) => {
-      const id = next++;
-      callbacks.set(id, callback);
-      if (!scheduled) {
-        scheduled = true;
-        channel.port2.postMessage(0);
-      }
-      return id;
-    };
-    window.cancelAnimationFrame = (id) => callbacks.delete(id);
-    channel.port1.onmessage = () => {
-      scheduled = false;
-      const batch = [...callbacks.values()];
-      callbacks.clear();
-      virtual += 50;
-      for (const cb of batch) cb(virtual);
-    };
-    window.restoreClock = () => {
-      window.requestAnimationFrame = nativeRAF;
-      window.cancelAnimationFrame = nativeCancel;
-      for (const cb of callbacks.values()) nativeRAF(cb);
-      callbacks.clear();
-      channel.port1.close();
-      channel.port2.close();
-    };
-    window.sinks = [];
-    window.showSaveFilePicker = async () => {
-      const root = await navigator.storage.getDirectory();
-      const handle = await root.getFileHandle('i3-measure.csv', { create: true });
-      return {
-        createWritable: async () => {
-          const stream = await handle.createWritable();
-          const log = { opened: performance.now(), writes: [], state: 'writing', inFlight: 0 };
-          window.sinks.push(log);
-          return {
-            async write(chunk) {
-              const w = { start: performance.now(), bytes: chunk.byteLength, end: null };
-              log.writes.push(w);
-              log.inFlight++;
-              try {
-                await stream.write(chunk);
-              } finally {
-                w.end = performance.now();
-                log.inFlight--;
-              }
-            },
-            async close() {
-              await stream.close();
-              log.state = 'closed';
-              log.stopped = performance.now();
-            },
-            async abort(reason) {
-              try {
-                await stream.abort(reason);
-              } finally {
-                log.state = 'aborted';
-                log.stopped = performance.now();
-              }
-            },
-          };
-        },
-      };
-    };
+  // Deny paid agents, camera and external downloads for this local measurement.
+  await page.route('**/*', async (route) => {
+    const url = new URL(route.request().url());
+    if (
+      (!['127.0.0.1', 'localhost'].includes(url.hostname) &&
+        !['blob:', 'data:'].includes(url.protocol)) ||
+      url.pathname.startsWith('/__deepseek/') ||
+      url.pathname.startsWith('/api/')
+    ) {
+      report.errors.push(`blocked request: ${url.origin}${url.pathname}`);
+      return route.abort();
+    }
+    return route.continue();
   });
+  await page.addInitScript(
+    ({ webLoad, frames }) => {
+      const nativeRAF = requestAnimationFrame.bind(window),
+        nativeCancel = cancelAnimationFrame.bind(window);
+      const channel = new MessageChannel(),
+        callbacks = new Map();
+      let next = 1,
+        virtual = 1000,
+        scheduled = false;
+      let ticks = 0,
+        preparing = true;
+      window.requestAnimationFrame = (callback) => {
+        // Automation may retain this wrapper. Delegate to the native clock
+        // after preparation instead of collecting callbacks in a closed port.
+        if (!preparing) return nativeRAF(callback);
+        const id = next++;
+        callbacks.set(id, callback);
+        if (!scheduled) {
+          scheduled = true;
+          channel.port2.postMessage(0);
+        }
+        return id;
+      };
+      window.cancelAnimationFrame = (id) => (preparing ? callbacks.delete(id) : nativeCancel(id));
+      channel.port1.onmessage = () => {
+        scheduled = false;
+        const batch = [...callbacks.values()];
+        callbacks.clear();
+        virtual += 50;
+        for (const cb of batch) cb(virtual);
+        if (webLoad && ++ticks >= frames - 160) {
+          // Stop at a fixed synthetic size, then pause through the real control.
+          channel.port1.onmessage = null;
+          window.prepared = true;
+        }
+      };
+      window.restoreClock = () => {
+        preparing = false;
+        window.requestAnimationFrame = nativeRAF;
+        window.cancelAnimationFrame = nativeCancel;
+        for (const cb of callbacks.values()) nativeRAF(cb);
+        callbacks.clear();
+        channel.port1.close();
+        channel.port2.close();
+      };
+      window.sinks = [];
+      window.showSaveFilePicker = async () => {
+        const root = await navigator.storage.getDirectory();
+        const handle = await root.getFileHandle('i3-measure.csv', { create: true });
+        return {
+          createWritable: async () => {
+            const stream = await handle.createWritable();
+            const log = { opened: performance.now(), writes: [], state: 'writing', inFlight: 0 };
+            window.sinks.push(log);
+            return {
+              async write(chunk) {
+                const w = { start: performance.now(), bytes: chunk.byteLength, end: null };
+                log.writes.push(w);
+                log.inFlight++;
+                try {
+                  await stream.write(chunk);
+                } finally {
+                  w.end = performance.now();
+                  log.inFlight--;
+                }
+              },
+              async close() {
+                await stream.close();
+                log.state = 'closed';
+                log.stopped = performance.now();
+              },
+              async abort(reason) {
+                try {
+                  await stream.abort(reason);
+                } finally {
+                  log.state = 'aborted';
+                  log.stopped = performance.now();
+                }
+              },
+            };
+          },
+        };
+      };
+    },
+    { webLoad, frames },
+  );
   await page.goto('http://127.0.0.1:5193/');
-  if (process.argv.includes('--controls-only')) {
+  if (webLoad) {
+    await page.waitForFunction(() => window.prepared, null, { timeout: 180000, polling: 100 });
+    await page.evaluate(() => {
+      [...document.querySelectorAll('button')]
+        .find((b) => b.textContent.trim() === '暂停分析')
+        ?.click();
+      window.restoreClock();
+    });
+    await runWebLoad(page, cdp, report, save, {
+      output,
+      frames,
+      modalities: process.argv.includes('--modalities'),
+    });
+  } else if (process.argv.includes('--controls-only')) {
     const resume = process.argv.find((a) => a.startsWith('--resume-controls='))?.slice(18);
     if (resume) {
       const partial = JSON.parse(await readFile(resume, 'utf8'));
@@ -376,6 +439,19 @@ try {
 } catch (e) {
   report.status = 'failed';
   report.error = String(e);
+  report.errorStack = e.stack;
+  const page = browser?.contexts()[0]?.pages()[0];
+  if (page) {
+    report.diagnostic = await page
+      .evaluate(() => ({
+        sinks: window.sinks,
+        storage: !!navigator.storage?.getDirectory,
+        picker: typeof window.showSaveFilePicker,
+        text: document.body.innerText.slice(-3500),
+      }))
+      .catch(() => null);
+    await page.screenshot({ path: `${output}/failure.png`, fullPage: true }).catch(() => {});
+  }
   process.exitCode = 1;
 } finally {
   await save('result.json', report);
