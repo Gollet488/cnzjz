@@ -69,7 +69,7 @@ async function run(file: File, limit: number) {
         mediaTimeOffset: source.mediaTimeOffset,
       },
     });
-    inference = new Worker('/pose-inference.worker.js');
+    inference = new Worker(`${import.meta.env.BASE_URL}pose-inference.worker.js`);
     await infer({ type: 'init' });
     await checkpoint();
     const expected = new Set(source.presentation.map((s) => s.timestamp));

@@ -12,18 +12,29 @@ export const DEEPSEEK_INFERENCE = {
   tool_choice: 'auto',
 } as const;
 
+type DeepSeekFailureStage = 'configuration' | 'request' | 'transport' | 'response' | 'probe';
+
+export class DeepSeekRequestError extends Error {
+  readonly stage: DeepSeekFailureStage;
+  constructor(stage: DeepSeekFailureStage, message: string) {
+    super(message);
+    this.stage = stage;
+  }
+}
+
 function wireMessages(messages: ModelMessage[]) {
   let pending: { id: string; name: string }[] = [];
   const result = messages.map((message, index) => {
     if (message.role === 'tool') {
       const match = pending.findIndex((call) => call.name === message.toolName);
-      if (match < 0) throw new Error('DEEPSEEK_ORPHAN_TOOL_RESULT');
+      if (match < 0) throw new DeepSeekRequestError('request', 'DEEPSEEK_ORPHAN_TOOL_RESULT');
       const [call] = pending.splice(match, 1);
       return { role: 'tool', content: message.content, tool_call_id: call!.id };
     }
-    if (pending.length) throw new Error('DEEPSEEK_MISSING_TOOL_RESULT');
+    if (pending.length) throw new DeepSeekRequestError('request', 'DEEPSEEK_MISSING_TOOL_RESULT');
     if (message.calls?.length) {
-      if (message.role !== 'assistant') throw new Error('DEEPSEEK_INVALID_HISTORY_ROLE');
+      if (message.role !== 'assistant')
+        throw new DeepSeekRequestError('request', 'DEEPSEEK_INVALID_HISTORY_ROLE');
       // The history is a stateless projection. Rebind IDs in assistant/result
       // pairs deterministically; never change arguments or invent tool results.
       pending = message.calls.map((call, callIndex) => ({
@@ -42,7 +53,7 @@ function wireMessages(messages: ModelMessage[]) {
     }
     return { role: message.role, content: message.content };
   });
-  if (pending.length) throw new Error('DEEPSEEK_MISSING_TOOL_RESULT');
+  if (pending.length) throw new DeepSeekRequestError('request', 'DEEPSEEK_MISSING_TOOL_RESULT');
   return result;
 }
 
@@ -53,8 +64,10 @@ export class DeepSeekProvider implements ModelProvider {
   private readonly fetcher: typeof fetch;
 
   constructor(apiKey: string, model = DEEPSEEK_MODEL, fetcher: typeof fetch = fetch) {
-    if (!apiKey?.trim()) throw new Error('DEEPSEEK_API_KEY_REQUIRED');
-    if (/\s/.test(apiKey)) throw new Error('DEEPSEEK_API_KEY_INVALID');
+    if (!apiKey?.trim())
+      throw new DeepSeekRequestError('configuration', 'DEEPSEEK_API_KEY_REQUIRED');
+    if (/\s/.test(apiKey))
+      throw new DeepSeekRequestError('configuration', 'DEEPSEEK_API_KEY_INVALID');
     this.#apiKey = apiKey;
     this.model = model.trim();
     if (!this.model || this.model.length > 200) throw new Error('DEEPSEEK_MODEL_REQUIRED');
@@ -102,6 +115,11 @@ export class DeepSeekProvider implements ModelProvider {
           content += decoder.decode(chunk.value, { stream: true });
         }
         content += decoder.decode();
+      } catch {
+        if (response.ok)
+          throw new DeepSeekRequestError('transport', 'DEEPSEEK_RESPONSE_READ_FAILED');
+        // A failed error-body stream does not erase the HTTP status already received.
+        truncated = true;
       } finally {
         await reader.cancel().catch(() => {});
         reader.releaseLock();
@@ -122,7 +140,7 @@ export class DeepSeekProvider implements ModelProvider {
 
   async complete(input: Parameters<ModelProvider['complete']>[0]): Promise<ModelReply> {
     const body = JSON.stringify(this.chatBody(input));
-    const response = await this.fetcher(`${DEEPSEEK_ADDRESS}/chat/completions`, {
+    const request: RequestInit = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.#apiKey}` },
       body,
@@ -130,39 +148,47 @@ export class DeepSeekProvider implements ModelProvider {
       credentials: 'omit',
       redirect: 'error',
       referrerPolicy: 'no-referrer',
-    });
+    };
+    let response;
+    try {
+      response = await this.fetcher(`${DEEPSEEK_ADDRESS}/chat/completions`, request);
+    } catch {
+      input.signal.throwIfAborted();
+      throw new DeepSeekRequestError('transport', 'DEEPSEEK_FETCH_FAILED');
+    }
     const data = await this.readResponse(response);
     if (
-      typeof data.id !== 'string' ||
+      typeof data?.id !== 'string' ||
       typeof data.model !== 'string' ||
       !Array.isArray(data.choices) ||
       data.choices.length !== 1 ||
       data.choices[0]?.message?.role !== 'assistant'
     )
-      throw new Error('DEEPSEEK_INVALID_RESPONSE');
+      throw new DeepSeekRequestError('response', 'DEEPSEEK_INVALID_RESPONSE');
     const choice = data.choices[0];
     if (!['tool_calls', 'stop'].includes(choice.finish_reason))
-      throw new Error('DEEPSEEK_INCOMPLETE_RESPONSE');
+      throw new DeepSeekRequestError('response', 'DEEPSEEK_INCOMPLETE_RESPONSE');
     const calls = choice.message.tool_calls ?? [];
-    if (!Array.isArray(calls) || calls.length > 8) throw new Error('DEEPSEEK_CALL_BATCH_LIMIT');
+    if (!Array.isArray(calls) || calls.length > 8)
+      throw new DeepSeekRequestError('response', 'DEEPSEEK_CALL_BATCH_LIMIT');
     const tokens = (value: unknown) =>
       typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
     return {
       calls: calls.map((call: any) => {
         if (
-          call.type !== 'function' ||
+          call?.type !== 'function' ||
           typeof call.id !== 'string' ||
           typeof call.function?.name !== 'string' ||
           !call.function.name.length ||
           call.function.name.length > 100 ||
           typeof call.function.arguments !== 'string'
         )
-          throw new Error('DEEPSEEK_INVALID_CALL');
+          throw new DeepSeekRequestError('response', 'DEEPSEEK_INVALID_CALL');
         let args: unknown;
         try {
           args = JSON.parse(call.function.arguments);
         } catch {
-          throw new Error('DEEPSEEK_INVALID_CALL_ARGUMENTS');
+          throw new DeepSeekRequestError('response', 'DEEPSEEK_INVALID_CALL_ARGUMENTS');
         }
         return { name: call.function.name, arguments: args };
       }),
@@ -205,7 +231,7 @@ export class DeepSeekProvider implements ModelProvider {
       reply.calls[0]!.name !== 'connection_check' ||
       JSON.stringify(reply.calls[0]!.arguments) !== '{"echo":"kinetic"}'
     )
-      throw new Error('DEEPSEEK_TOOL_PROBE_FAILED');
+      throw new DeepSeekRequestError('probe', 'DEEPSEEK_TOOL_PROBE_FAILED');
     return { usage: reply.usage, requests: 1, response: reply.response };
   }
 }

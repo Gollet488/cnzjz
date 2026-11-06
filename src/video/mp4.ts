@@ -20,6 +20,12 @@ export async function readMP4(file: Blob, checkpoint: () => Promise<void> = asyn
     await checkpoint();
     const buffer = await file.slice(offset, offset + 1024 * 1024).arrayBuffer();
     await checkpoint();
+    if (offset === 0 && buffer.byteLength >= 12) {
+      const header = new DataView(buffer);
+      // Route RIFF/AVI to the existing converter before probing ISO BMFF boxes.
+      if (header.getUint32(0) === 0x52494646 && header.getUint32(8) === 0x41564920)
+        throw new Error('AVI 需要先转换为 H.264 MP4。');
+    }
     bytesRead += buffer.byteLength;
     if (bytesRead > 32 * 1024 * 1024) throw new Error('MP4 元数据超过 32 MB 限制。');
     const input = Object.assign(buffer, { fileStart: offset });

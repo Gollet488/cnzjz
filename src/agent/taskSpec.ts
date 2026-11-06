@@ -338,7 +338,9 @@ export function missingTaskFields(spec: TaskSpec): string[] {
   if (
     spec.goalTypes.some((t) => ['metrics', 'comparison', 'report'].includes(t)) ||
     spec.comparison ||
-    spec.deliveries.report
+    spec.deliveries.report ||
+    (spec.goalTypes.includes('quality') &&
+      (spec.joint !== null || spec.channels !== null || spec.basis !== null))
   ) {
     for (const field of ['joint', 'channels', 'basis', 'interval'] as const) require(field);
   }

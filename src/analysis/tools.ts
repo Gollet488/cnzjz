@@ -61,6 +61,13 @@ const statsSchema = object({
   populationVariance: nullable(number),
   sampleCount: integer,
 });
+const angleEventSchema = nullable(object({ time: number, value: number }));
+const sampleIntervalSchema = object({ interval: intervalSchema, samples: integer });
+const localSelectionSchema = object({
+  joint: enumeration(...JOINT_KEYS),
+  channels: array(enumeration('left', 'right', 'midline'), 1, 2),
+  basis: enumeration('raw', 'filtered'),
+});
 const evidenceSchema = object({
   ...reference,
   parameters: parametersSchema,
@@ -84,6 +91,7 @@ const metricSchema = object({
       velocity: statsSchema,
       peakAbsoluteVelocity: nullable(number),
       coverage: number,
+      events: object({ minimum: angleEventSchema, maximum: angleEventSchema }),
     }),
     1,
     2,
@@ -111,6 +119,38 @@ const qualitySchema = object({
   lowConfidenceIntervals: array(object({ interval: intervalSchema, samples: integer }), 0, 100),
   omittedIntervals: integer,
   maxSampleGapSeconds: nullable(number),
+  selection: nullable(
+    object({
+      joint: localSelectionSchema.properties!.joint,
+      basis: localSelectionSchema.properties!.basis,
+      channels: array(
+        object({
+          channel: enumeration('left', 'right', 'midline'),
+          validSamples: integer,
+          invalidSamples: integer,
+          coverage: number,
+          notDetectedSamples: integer,
+          unusableSamples: integer,
+          validIntervals: array(sampleIntervalSchema, 0, 5),
+          missingIntervals: array(sampleIntervalSchema, 0, 5),
+          validIntervalCount: integer,
+          missingIntervalCount: integer,
+          omittedValidIntervals: integer,
+          omittedMissingIntervals: integer,
+          longestMissingInterval: nullable(sampleIntervalSchema),
+        }),
+        1,
+        2,
+      ),
+    }),
+  ),
+  timing: object({
+    medianSampleGapSeconds: nullable(number),
+    continuityGapSeconds: number,
+    gapIntervals: array(object({ interval: intervalSchema, seconds: number }), 0, 5),
+    gapCount: integer,
+    omittedGapIntervals: integer,
+  }),
 });
 const compareSchema = object({
   first: metricSchema,
@@ -153,6 +193,7 @@ const reportSchema = object({
   facts: metricSchema,
   comparison: nullable(compareSchema),
   quality: qualitySchema,
+  comparisonQuality: nullable(qualitySchema),
   trends: array(string),
   missing: array(string),
   limitations: array(string),
@@ -208,8 +249,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'get_quality_summary',
-    description: '按已采样帧统计检测、置信度和缺失区间，非源视频覆盖率。',
-    inputSchema: object({ ...reference, interval: intervalSchema }),
+    description:
+      '按已采样帧统计检测、置信度和缺失。可选 selection 查询关节/侧别/raw或filtered角度可用性、连续有效与缺失源时间段；非时间覆盖率或人体精度。',
+    inputSchema: object(
+      { ...reference, interval: intervalSchema, selection: localSelectionSchema },
+      [...Object.keys(reference), 'interval'],
+    ),
     outputSchema: qualitySchema,
   },
   {
@@ -259,6 +304,7 @@ interface Selection {
 interface Query extends Selection {
   interval: Interval;
 }
+type LocalSelection = Pick<Selection, 'joint' | 'channels' | 'basis'>;
 const LIMITATIONS = [
   '单人单目 2D 几何投影；不代表动作质量或对错。',
   '覆盖率只按已采样帧计，不能证明穷尽源视频帧；缺失、主动运动和视角影响统计。',
@@ -305,22 +351,26 @@ function evidence(session: AnalysisSession, interval: Interval, basis: Basis, fr
     ],
   };
 }
-function query(session: AnalysisSession, p: Query) {
+function validateSelection(p: LocalSelection) {
   if (
     new Set(p.channels).size !== p.channels.length ||
     p.channels.some((side) => !channels(p.joint).includes(side))
   )
     throw new Error('INVALID_CHANNEL');
+}
+function query(session: AnalysisSession, p: Query) {
+  validateSelection(p);
   const frames = inInterval(session, p.interval);
   const positions = frames.map((f) => f.variance[p.basis]);
   return {
     evidence: evidence(session, p.interval, p.basis, frames),
     joint: p.joint,
     channels: p.channels.map((channel) => {
-      const values = frames.flatMap((f) => {
+      const samples = frames.flatMap((f) => {
         const n = angleValue(p.basis === 'raw' ? f.rawAngles : f.angles, p.joint, channel);
-        return n === null ? [] : [n];
+        return n === null ? [] : [{ time: f.time, value: n }];
       });
+      const values = samples.map((s) => s.value);
       // Do not count a derivative that uses an angle outside the query interval.
       const speeds = frames.slice(1).flatMap((f) => {
         const n = angleValue(p.basis === 'raw' ? f.rawVelocity : f.velocity, p.joint, channel);
@@ -334,6 +384,10 @@ function query(session: AnalysisSession, p: Query) {
         velocity: statistics(speeds),
         peakAbsoluteVelocity: speeds.length ? Math.max(...speeds.map(Math.abs)) : null,
         coverage: values.length / frames.length,
+        events: {
+          minimum: samples.find((s) => s.value === angle.min) ?? null,
+          maximum: samples.find((s) => s.value === angle.max) ?? null,
+        },
       };
     }),
     units: {
@@ -359,9 +413,110 @@ function query(session: AnalysisSession, p: Query) {
     },
   };
 }
-function quality(session: AnalysisSession, interval: Interval) {
+type SampleInterval = { interval: Interval; samples: number };
+// Only the largest five source-time spans are retained. A single sampled frame
+// has zero span; no implied frame duration or missing timestamp is invented.
+function intervalOrder(a: { interval: Interval }, b: { interval: Interval }) {
+  return (
+    b.interval[1] - b.interval[0] - (a.interval[1] - a.interval[0]) || a.interval[0] - b.interval[0]
+  );
+}
+function retainInterval<T extends { interval: Interval }>(items: T[], item: T) {
+  items.push(item);
+  items.sort(intervalOrder);
+  if (items.length > 5) items.pop();
+}
+function sampleTiming(frames: PoseFrame[]) {
+  const gaps = frames.slice(1).map((f, i) => f.time - frames[i].time);
+  const ordered = [...gaps].sort((a, b) => a - b);
+  const mid = Math.floor(ordered.length / 2);
+  const medianSampleGapSeconds = ordered.length
+    ? ordered.length % 2
+      ? ordered[mid]
+      : (ordered[mid - 1] + ordered[mid]) / 2
+    : null;
+  const continuityGapSeconds = Math.max(0.1, (medianSampleGapSeconds ?? 0) * 3);
+  const gapIntervals: { interval: Interval; seconds: number }[] = [];
+  let gapCount = 0;
+  gaps.forEach((seconds, i) => {
+    if (seconds > continuityGapSeconds) {
+      gapCount++;
+      retainInterval(gapIntervals, { interval: [frames[i].time, frames[i + 1].time], seconds });
+    }
+  });
+  return {
+    medianSampleGapSeconds,
+    continuityGapSeconds,
+    gapIntervals,
+    gapCount,
+    omittedGapIntervals: Math.max(0, gapCount - gapIntervals.length),
+  };
+}
+function localQuality(frames: PoseFrame[], p: LocalSelection, continuityGapSeconds: number) {
+  validateSelection(p);
+  return {
+    joint: p.joint,
+    basis: p.basis,
+    channels: p.channels.map((channel) => {
+      const validIntervals: SampleInterval[] = [],
+        missingIntervals: SampleInterval[] = [];
+      let validSamples = 0,
+        notDetectedSamples = 0,
+        unusableSamples = 0;
+      let validIntervalCount = 0,
+        missingIntervalCount = 0;
+      let group: SampleInterval | undefined, lastValid: boolean | undefined;
+      const finish = () => {
+        if (!group) return;
+        if (lastValid) {
+          validIntervalCount++;
+          retainInterval(validIntervals, group);
+        } else {
+          missingIntervalCount++;
+          retainInterval(missingIntervals, group);
+        }
+      };
+      frames.forEach((f, i) => {
+        const valid =
+          angleValue(p.basis === 'raw' ? f.rawAngles : f.angles, p.joint, channel) !== null;
+        if (valid) validSamples++;
+        else if (f.rawPoints.length !== 33) notDetectedSamples++;
+        else unusableSamples++;
+        if (
+          !group ||
+          valid !== lastValid ||
+          (i > 0 && f.time - frames[i - 1].time > continuityGapSeconds)
+        ) {
+          finish();
+          group = { interval: [f.time, f.time], samples: 0 };
+          lastValid = valid;
+        }
+        group.interval[1] = f.time;
+        group.samples++;
+      });
+      finish();
+      return {
+        channel,
+        validSamples,
+        invalidSamples: frames.length - validSamples,
+        coverage: validSamples / frames.length,
+        notDetectedSamples,
+        unusableSamples,
+        validIntervals,
+        missingIntervals,
+        validIntervalCount,
+        missingIntervalCount,
+        omittedValidIntervals: Math.max(0, validIntervalCount - validIntervals.length),
+        omittedMissingIntervals: Math.max(0, missingIntervalCount - missingIntervals.length),
+        longestMissingInterval: missingIntervals[0] ?? null,
+      };
+    }),
+  };
+}
+function quality(session: AnalysisSession, interval: Interval, selected?: LocalSelection) {
   const frames = inInterval(session, interval),
     threshold = session.info().parameters.threshold;
+  const timing = sampleTiming(frames);
   const groups: { interval: Interval; samples: number }[] = [];
   let group: (typeof groups)[number] | undefined;
   let groupCount = 0;
@@ -381,7 +536,15 @@ function quality(session: AnalysisSession, interval: Interval) {
     (f) => f.rawPoints.length === 33 && f.rawPoints.every((p) => p.visibility >= threshold),
   ).length;
   return {
-    evidence: evidence(session, interval, 'raw', frames),
+    evidence: {
+      ...evidence(session, interval, selected?.basis ?? 'raw', frames),
+      limitations: [
+        ...evidence(session, interval, selected?.basis ?? 'raw', frames).limitations,
+        '全点可靠率和置信度按 raw 点统计；局部可用性严格按选中口径的有效投影角计算，检测到但不可用也可能源于退化几何，不等同全部低置信。',
+        '连续段仅表示相邻已采样帧同为有效/无效；源时间差大于 max(0.1秒, 查询区间采样间隔中位数×3) 时中断。段长为末样本时间减首样本时间，单帧为0秒；不证明未采样时间有人体追踪。',
+        '局部有效/缺失段及异常采样间隔各保留源时间跨度最长的5段，跨度相同按起点排序；遗漏数另列。覆盖率分母为查询区间已采样帧，不能解释为时间覆盖或测量准确率。',
+      ],
+    },
     detectedSamples,
     missingSamples: frames.length - detectedSamples,
     fullyReliableSamples,
@@ -393,6 +556,8 @@ function quality(session: AnalysisSession, interval: Interval) {
       frames.length > 1
         ? Math.max(...frames.slice(1).map((f, i) => f.time - frames[i].time))
         : null,
+    selection: selected ? localQuality(frames, selected, timing.continuityGapSeconds) : null,
+    timing,
   };
 }
 export type ToolResult =
@@ -481,8 +646,8 @@ export function createToolRegistry(session: AnalysisSession, ports?: ViewReportP
                 : null;
               if (compared && !compared.ok) throw new Error(compared.error.code);
               const comparison = compared?.ok ? (compared.result as any) : null;
-              const q = quality(session, p.interval);
-              const secondQuality = p.comparison ? quality(session, p.comparison) : null;
+              const q = quality(session, p.interval, p);
+              const secondQuality = p.comparison ? quality(session, p.comparison, p) : null;
               result = {
                 handle,
                 evidence: ev,
@@ -490,16 +655,20 @@ export function createToolRegistry(session: AnalysisSession, ports?: ViewReportP
                 facts,
                 comparison,
                 quality: q,
+                comparisonQuality: secondQuality,
                 trends: comparison
                   ? comparison.differences.map(
                       (d: any) =>
                         `${d.channel} ROM：${d.rom === null ? '缺失' : d.rom > 0 ? '后段较大' : d.rom < 0 ? '后段较小' : '相同'}（仅区间差异，非阶段趋势或质量判断）`,
                     )
                   : ['单区间统计不推断时间趋势。'],
-                missing: [q, ...(secondQuality ? [secondQuality] : [])].map(
-                  (v) =>
-                    `${v.evidence.interval.join('–')} s：未检测 ${v.missingSamples} 个；全点不可靠 ${v.evidence.sampleCount - v.fullyReliableSamples} 个；省略低置信段 ${v.omittedIntervals} 个。`,
-                ),
+                missing: [q, ...(secondQuality ? [secondQuality] : [])].flatMap((v) => [
+                  `${v.evidence.interval.join('–')} s：未检测 ${v.missingSamples} 个；全点不可靠 ${v.evidence.sampleCount - v.fullyReliableSamples} 个；省略低置信段 ${v.omittedIntervals} 个。`,
+                  ...(v.selection?.channels.map(
+                    (c) =>
+                      `${v.selection!.joint}/${c.channel}/${v.selection!.basis}：有效 ${c.validSamples}/${v.evidence.sampleCount}；检测但角度不可用 ${c.unusableSamples}；连续缺失 ${c.missingIntervalCount} 段（省略 ${c.omittedMissingIntervals}）；最长缺失 ${c.longestMissingInterval ? c.longestMissingInterval.interval.join('–') + ' s / ' + c.longestMissingInterval.samples + ' 帧' : '无'}。`,
+                  ) ?? []),
+                ]),
                 limitations: [
                   ...ev.limitations,
                   ...(comparison?.reasons ?? []),
@@ -544,7 +713,11 @@ export function createToolRegistry(session: AnalysisSession, ports?: ViewReportP
         let result: unknown;
         if (name === 'get_session_info') result = session.info();
         else if (name === 'get_quality_summary')
-          result = quality(session, (input as Query).interval);
+          result = quality(
+            session,
+            (input as Query).interval,
+            (input as { selection?: LocalSelection }).selection,
+          );
         else if (name === 'query_metrics') result = query(session, input as Query);
         else {
           const p = input as Selection & { first: Interval; second: Interval };
@@ -558,6 +731,13 @@ export function createToolRegistry(session: AnalysisSession, ports?: ViewReportP
             second.channels.some((v) => v.coverage < 0.8 || v.angle.sampleCount < 2)
           )
             reasons.push('至少一侧有效样本不足 2 或已采样帧覆盖率低于 80%');
+          if (
+            sampleTiming(inInterval(session, p.first)).gapCount > 0 ||
+            sampleTiming(inInterval(session, p.second)).gapCount > 0
+          )
+            reasons.push(
+              '至少一区间存在采样中断（源时间差大于 max(0.1秒, 区间采样间隔中位数×3)）；帧覆盖率不能证明时间连续',
+            );
           if (p.first[0] <= p.second[1] && p.second[0] <= p.first[1])
             reasons.push('区间重叠，不能作为独立片段');
           const diff = (a: number | null, b: number | null) =>

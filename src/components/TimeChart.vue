@@ -103,6 +103,31 @@ function locate(time: number) {
   if (selected && (time < selected[0] || time > selected[1])) emit('range', ...domain.value);
   emit('seek', time);
 }
+// ECharts retains formatters across option updates. Build them outside draw's
+// lexical environment so they cannot pin its complete source/visible session.
+const sourceTimeLabel = (value: number) => value.toFixed(2) + ' s';
+const coordinateLabel = (value: number) => value.toFixed(3);
+function temporalFormatters(coordinates: boolean) {
+  return {
+    value: (v: unknown) =>
+      v === null ? '不可用' : Number(v).toFixed(coordinates ? 4 : 1) + (coordinates ? '' : '°'),
+    axis: (v: number) => (coordinates ? v.toFixed(3) : v + '°'),
+  };
+}
+function trajectoryTooltip(p: unknown) {
+  const v = (p as { value: number[] }).value;
+  return `${v[2]!.toFixed(3)} s<br/>X ${v[0]!.toFixed(4)} · Y ${v[1]!.toFixed(4)}`;
+}
+function heatmapFormatters(heat: ReturnType<typeof velocityHeatmap>) {
+  return {
+    tooltip: (p: unknown) => {
+      const c = (p as { data: { cell: (typeof heat.cells)[number] } }).data.cell;
+      const bucket = heat.buckets[c.column]!;
+      return `${JOINTS[c.row]!.label} · ${bucket[0].toFixed(3)}–${bucket[1].toFixed(3)} s<br/>${c.value === null ? '缺失 / 无有效速度' : `实际峰值 ${c.value.toFixed(3)} °/s${c.value > heat.cap ? '（颜色截顶）' : ''}`}<br/>有效 ${c.valid} / 缺失 ${c.missing} 侧样本`;
+    },
+    axis: (v: string) => `${heat.buckets[Number(v)]![0].toFixed(2)}s`,
+  };
+}
 function draw() {
   if (!chart) return;
   const frames = props.frames;
@@ -126,15 +151,12 @@ function draw() {
           value: [c.column, c.row, missing ? 0 : Math.min(c.value!, heat.cap)],
           cell: c,
         }));
+    const format = heatmapFormatters(heat);
     applyOption({
       animation: false,
       grid: { left: 58, right: 18, top: 10, bottom: 62 },
       tooltip: {
-        formatter: (p: unknown) => {
-          const c = (p as { data: { cell: (typeof heat.cells)[number] } }).data.cell;
-          const bucket = heat.buckets[c.column]!;
-          return `${JOINTS[c.row]!.label} · ${bucket[0].toFixed(3)}–${bucket[1].toFixed(3)} s<br/>${c.value === null ? '缺失 / 无有效速度' : `实际峰值 ${c.value.toFixed(3)} °/s${c.value > heat.cap ? '（颜色截顶）' : ''}`}<br/>有效 ${c.valid} / 缺失 ${c.missing} 侧样本`;
-        },
+        formatter: format.tooltip,
       },
       xAxis: {
         ...axis,
@@ -144,7 +166,7 @@ function draw() {
         axisLabel: {
           ...axis.axisLabel,
           interval: Math.max(0, Math.ceil(heat.buckets.length / 4) - 1),
-          formatter: (v: string) => `${heat.buckets[Number(v)]![0].toFixed(2)}s`,
+          formatter: format.axis,
         },
       },
       yAxis: {
@@ -225,10 +247,7 @@ function draw() {
       grid,
       tooltip: {
         trigger: 'item',
-        formatter: (p: unknown) => {
-          const v = (p as { value: number[] }).value;
-          return `${v[2]!.toFixed(3)} s<br/>X ${v[0]!.toFixed(4)} · Y ${v[1]!.toFixed(4)}`;
-        },
+        formatter: trajectoryTooltip,
       },
       xAxis: {
         ...axis,
@@ -236,7 +255,7 @@ function draw() {
         name: 'X →',
         min: bounds.x[0],
         max: bounds.x[1],
-        axisLabel: { ...axis.axisLabel, formatter: (v: number) => v.toFixed(3) },
+        axisLabel: { ...axis.axisLabel, formatter: coordinateLabel },
       },
       yAxis: {
         ...axis,
@@ -245,7 +264,7 @@ function draw() {
         inverse: true,
         min: bounds.y[0],
         max: bounds.y[1],
-        axisLabel: { ...axis.axisLabel, formatter: (v: number) => v.toFixed(3) },
+        axisLabel: { ...axis.axisLabel, formatter: coordinateLabel },
       },
       series: [
         {
@@ -337,15 +356,13 @@ function draw() {
       ' 显示按时间桶保留首末点和最小/最大值，缺失处断开；查询、CSV 和证据使用全量数据。';
   const first = domain.value[0],
     last = domain.value[1];
+  const format = temporalFormatters(center || point);
   applyOption({
     animation: false,
     grid,
     tooltip: {
       trigger: 'axis',
-      valueFormatter: (v: unknown) =>
-        v === null
-          ? '不可用'
-          : Number(v).toFixed(center || point ? 4 : 1) + (center || point ? '' : '°'),
+      valueFormatter: format.value,
     },
     xAxis: {
       ...axis,
@@ -353,7 +370,7 @@ function draw() {
       min: first,
       max: last > first ? last : first + 0.05,
       splitLine: { show: false },
-      axisLabel: { ...axis.axisLabel, formatter: (v: number) => v.toFixed(2) + ' s' },
+      axisLabel: { ...axis.axisLabel, formatter: sourceTimeLabel },
     },
     yAxis: {
       ...axis,
@@ -363,7 +380,7 @@ function draw() {
       max: center || point ? extent[1] : 180,
       axisLabel: {
         ...axis.axisLabel,
-        formatter: (v: number) => (center || point ? v.toFixed(3) : v + '°'),
+        formatter: format.axis,
       },
     },
     dataZoom: [
@@ -425,13 +442,19 @@ function initializeChart() {
     const data = event as Zoom & { batch?: Zoom[] };
     const zoom = data.batch?.[0] ?? data;
     const [first, last] = domain.value;
-    const span = last > first ? last - first : 0.05;
+    const axisEnd = last > first ? last : first + 0.05;
+    const span = axisEnd - first;
     // The event already contains the value/percentage range on our fixed value
     // axis. getOption() clones every displayed series just to read two numbers.
     const start =
       zoom.startValue ?? (typeof zoom.start === 'number' ? first + (span * zoom.start) / 100 : NaN);
     const end =
-      zoom.endValue ?? (typeof zoom.end === 'number' ? first + (span * zoom.end) / 100 : NaN);
+      zoom.endValue ??
+      (zoom.end === 100
+        ? axisEnd
+        : typeof zoom.end === 'number'
+          ? first + (span * zoom.end) / 100
+          : NaN);
     if (Number.isFinite(start) && Number.isFinite(end)) emit('range', start, end);
   });
   scheduleDraw(true);
@@ -489,7 +512,16 @@ watch(
 );
 watch(
   () => [props.frames, props.revision],
-  (current, previous) => scheduleDraw(current[0] !== previous[0]),
+  (current, previous) => {
+    if (current[0] !== previous[0]) {
+      // Reset/recalculation replaces the array even while this chart is hidden.
+      // Drop the old session immediately; an inactive chart may never draw again.
+      sourceFrames = undefined;
+      sourceSeries = [];
+      sourceKey = '';
+    }
+    scheduleDraw(current[0] !== previous[0]);
+  },
 );
 watch(
   [

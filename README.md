@@ -4,6 +4,8 @@
 
 本项目面向通用人体运动的姿态采集与量化分析，提供本地推理、可追溯数值和 Agent 工具调用。启动、保留 Git 历史的上传步骤和已知限制见 [构建与交付](docs/delivery.md)，参赛要求核对见 [仓库提交清单](docs/submission-checklist.md)，目标需求见 [requirement.md](requirement.md)。
 
+GitHub Pages 目标地址为 [Kinetic Pose Lab](https://gollet488.github.io/cnzjz/)。发布状态见 [Actions](https://github.com/Gollet488/cnzjz/actions)。浏览器内的视频分析、图表和下载可直接使用。启用 Agent 前请按 [Ollama 自部署步骤](docs/environment.md#ollama) 准备本机模型。
+
 ## 技术架构
 
 Vue 3 / TypeScript 负责页面和状态，Element Plus 提供交互组件，ECharts 展示时序图表。MediaPipe Pose Landmarker Lite 在浏览器内提取人体关键点；本地视频经过 MP4Box 索引、WebCodecs 解码与 Worker 推理，其他格式先由 FFmpeg WebAssembly 转换。分析层计算通用几何与时序指标，Agent 通过受控工具读取分析结果并交付带证据的报告、视图或导出。
@@ -33,7 +35,7 @@ pnpm dev
 3. 本地视频支持 MP4、MOV、MKV、AVI、WebM、FLV、WMV、MPEG、TS、3GP、OGV 等容器，不按扩展名拒绝文件。可直接分析的 H.264 视频保留原流程；其他输入自动使用本地 FFmpeg WebAssembly 转为 H.264 后分析，双视频对比使用同一流程。转换资源随 `prepare:assets` 准备，无需上传视频或连接 CDN。支持范围仍受实际编码、文件完整性与设备内存限制；加密文件无法保证支持。单文件最高 500 MB；转换可能耗时较长，可取消，转换结果缩放至不超过 1920×1080，时间轴与完整性以转换后视频为准。CSV 的 `acquisition_mode=webcodecs-transcoded` 标识转换流程。
 4. 分析页可选关节、raw/filtered、区间与关键点，查看角度、速度、轨迹和左右差异。
 5. 导出页保存 CSV 或 PNG；CSV 支持取消和进度，支持原生文件写入时使用文件流，否则使用内存 Blob。
-6. Agent 页选择模型服务，先“验证并连接”，再提交目标。Ollama 使用本机地址和已安装且支持 tools 的模型；DeepSeek 使用本项目的本机开发/预览代理和 Node 环境中的 `DEEPSEEK_API_KEY`。
+6. 在 Agent 页使用两段 ROM 比较任务卡，手动填参或在连接后让模型草拟，核对后确认运行。自由目标入口可在验证并连接模型后使用。改段和保存步骤见 [Agent 工作台指南](docs/agent-workbench.md)。
 
 视频、画面、关键点推理和数值计算留在浏览器。Agent 会向所选模型发送指令和必要的有界工具反馈；选择 DeepSeek 时，这些文本和分析反馈会经本机代理发送到官方 API，密钥只由 Node 读取。页面不接收密钥；不要将密钥写入源码。Ollama 需允许页面来源跨域访问；Node 连接成功不代表浏览器 CORS 已通过。
 
@@ -76,7 +78,7 @@ node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case comp
 - `docs`：使用与交付、数据契约、视频和 Agent 技术说明。
 - `.github/workflows`：Windows / Linux 的基础 CI 检查。
 
-当前最多保留 18,000 帧。二维投影、遮挡、视角和置信度会影响指标；系统不识别运动种类、不评分、不判断动作对错。双视频对比目前是预览功能，参数跟随与跨画幅比例修正仍待完成，距离不能用于严格序列相似度结论。静态部署使用根路径 HTTP 服务；本项目未配置子路径资源前缀，上传源码到 GitHub 不会自动上线网站。
+当前最多保留 18,000 帧。二维投影、遮挡、视角和置信度会影响指标。双视频对比按各视频源宽高比修正几何距离，约 10 Hz 预览适合目视比较。GitHub Pages 使用 `/cnzjz/`，本机开发和预览使用根路径。
 
 ## 团队信息
 
@@ -87,4 +89,4 @@ node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case comp
 
 ## 开发与提交
 
-使用 TypeScript 类型检查、ESLint 和 Prettier 保持代码一致；复杂的数据契约、时间戳和工具协议有对应技术说明与回归测试。修改后运行上方检查命令，再从当前 Git 仓库提交和推送，保留真实开发历史。现有 `.delivery/` 是旧源码快照，不作为本次参赛仓库上传入口。功能规划和历史状态见 [核心功能执行计划](docs/core-execution-plan.md)。
+使用 TypeScript 类型检查、ESLint 和 Prettier 保持代码一致；复杂的数据契约、时间戳和工具协议有对应技术说明与回归测试。修改后运行上方检查命令，再从当前 Git 仓库提交和推送，保留真实开发历史。现有 `.delivery/` 是旧源码快照，不作为本次参赛仓库上传入口。当前完成度、问题看板和每轮动态更新的下一条 Codex 指令见 [核心功能执行计划](docs/core-execution-plan.md)。

@@ -64,9 +64,9 @@ export async function prepareVideo(
   });
   try {
     await ffmpeg.load({
-      classWorkerURL: '/ffmpeg/worker.js',
-      coreURL: '/ffmpeg/ffmpeg-core.js',
-      wasmURL: '/ffmpeg/ffmpeg-core.wasm',
+      classWorkerURL: `${import.meta.env.BASE_URL}ffmpeg/worker.js`,
+      coreURL: `${import.meta.env.BASE_URL}ffmpeg/ffmpeg-core.js`,
+      wasmURL: `${import.meta.env.BASE_URL}ffmpeg/ffmpeg-core.wasm`,
     });
     signal.throwIfAborted();
     // Do not use user-provided names as virtual FS paths or command options.

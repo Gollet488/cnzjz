@@ -78,6 +78,47 @@ test('normalized pose distance is invariant to translation and scale', () => {
   const occluded = a.map((p) => ({ ...p, visibility: 0.1 }));
   assert.equal(poseDistance(occluded, b), null);
 });
+
+test('pose distance restores each source aspect before translation/scale normalization', () => {
+  const a = fixture();
+  const b = a.map((p) => ({ ...p, x: (p.x * 3 + 0.7) / 2, y: p.y * 3 - 0.2 }));
+  near(poseDistance(a, b, 0.5, 1, 2), 0);
+  const portrait = a.map((p) => ({ ...p, x: p.x / 0.5625 }));
+  near(poseDistance(portrait, b, 0.5, 0.5625, 2), 0);
+});
+
+test('pose distance rejects invalid anchors, aspect, threshold and degenerate torso', () => {
+  const a = fixture();
+  for (const field of ['x', 'y', 'z', 'visibility'] as const) {
+    for (const value of [NaN, Infinity, -Infinity]) {
+      const b = fixture();
+      b[23][field] = value;
+      assert.equal(poseDistance(a, b), null);
+      assert.equal(poseDistance(b, a), null);
+    }
+  }
+  for (const aspect of [0, -1, NaN, Infinity]) {
+    assert.equal(poseDistance(a, a, 0.5, aspect, 1), null);
+    assert.equal(poseDistance(a, a, 0.5, 1, aspect), null);
+  }
+  for (const threshold of [NaN, Infinity, -0.1, 1.1])
+    assert.equal(poseDistance(a, a, threshold), null);
+  assert.equal(poseDistance(a, Array(33).fill(point(0.5, 0.5))), null);
+  assert.equal(poseDistance(a, a.slice(0, 32)), null);
+});
+
+test('pose distance excludes invalid non-anchors and honors the confidence threshold', () => {
+  const a = fixture(),
+    b = fixture();
+  b[0] = point(10, 10, 0.6);
+  assert.ok(poseDistance(a, b, 0.5)! > 0);
+  near(poseDistance(a, b, 0.7), 0);
+  for (const field of ['x', 'y', 'z', 'visibility'] as const) {
+    b[0] = point(10, 10);
+    b[0][field] = NaN;
+    near(poseDistance(a, b), 0);
+  }
+});
 test('missing detections preserve a timestamp with null metrics and no fabricated points', () => {
   const frame = measureFrame([], 1, undefined, []);
   assert.equal(frame.confidence, 0);

@@ -2,7 +2,7 @@ import type { AnalysisSession, SessionInfo, SessionReference } from '../analysis
 import type { createToolRegistry, ToolDefinition, ToolResult } from '../analysis/tools.ts';
 import { array, boolean, enumeration, object, SchemaError, validate } from '../analysis/schema.ts';
 import type { ModelMessage, ModelProvider } from './provider.ts';
-import { ProviderResponseError } from './provider.ts';
+import { abortable, ProviderResponseError } from './provider.ts';
 import {
   taskSpecSchema,
   taskUnderstandingSchema,
@@ -13,7 +13,7 @@ import {
   TaskSpecSourceError,
 } from './taskSpec.ts';
 import type { TaskUnderstanding } from './taskSpec.ts';
-import { checkCompletion, completionSchema } from './completion.ts';
+import { checkCompletion, completionSchema, WorkspaceApplicationError } from './completion.ts';
 import type { CompletionCheck } from './completion.ts';
 import {
   AGENT_PROTOCOL_VERSION,
@@ -60,6 +60,13 @@ async function protocolDigest(value: unknown) {
   return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+import { confirmedFreeRomSpec, freeRomReview, isRomComparison } from './freeRomReview.ts';
+import type { FreeRomConfirmation, FreeRomReview } from './freeRomReview.ts';
+import { assembleEvidence, romEvidenceRequirements } from './submissionEvidence.ts';
+import type { EvidenceRequirement } from './submissionEvidence.ts';
+import { same } from './taskSpec.ts';
+import type { RomCardExecution } from './romTaskCard.ts';
+
 export type RunStatus =
   | 'running'
   | 'completed'
@@ -77,6 +84,7 @@ export interface CallRecord {
   name: string;
   arguments: unknown;
   modelArguments?: unknown;
+  reusedCallId?: string;
   output: ToolResult;
   elapsedMs?: number;
   evidenceCatalog?: EvidenceCatalog;
@@ -86,8 +94,28 @@ export interface Citation {
   callId: string;
   path: string;
   value: string | number | boolean | null;
+  source?: 'browser-local-workflow' | 'local-executor';
+}
+export interface SubmissionEvidenceGap {
+  tool: string;
+  labels: string[];
+  reason:
+    | 'missing_tool_or_scope'
+    | 'fact_mismatch'
+    | 'missing_citation'
+    | 'fact_missing'
+    | 'parameter_mismatch'
+    | 'stale_evidence'
+    | 'view_not_applied'
+    | 'artifact_not_ready'
+    | 'invalid_reference';
+  detail?: string;
 }
 export interface AgentRun {
+  romCard?: RomCardExecution;
+  romReview?: FreeRomReview & { confirmation?: FreeRomConfirmation };
+  submissionGaps?: SubmissionEvidenceGap[];
+  localSubmission?: true;
   protocolVersion?: typeof AGENT_PROTOCOL_VERSION;
   modelProtocolVersion?: string;
   protocolFingerprint?: string;
@@ -115,6 +143,8 @@ export interface AgentRun {
   conversationId?: string;
   auditStatus?: 'saved' | 'failed' | 'caller_owned';
 }
+
+export const MAX_FINAL_CITATIONS = 20;
 
 const CONTROL_TOOLS: ToolDefinition[] = [
   {
@@ -148,8 +178,7 @@ const CONTROL_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'finish_analysis',
-    description:
-      '控制协议 v2：交付结果或必要澄清。选择 messageCode，由本地渲染中文；citations 至多十二项，只选择证明当前目标所需的少量 evidenceId，不复制整个目录。仅选择本轮成功工具反馈 evidenceCatalog.entries 中已有的 evidenceId（通过 label/value 选择任务所需指标、比较、质量、定位、视图或成果）。不手写 callId/path，不复制数值。无数据用 needs_input，越界用 limited 或 needs_input；可空引用但不能冒称 completed。',
+    description: `控制协议 v2：交付结果或必要澄清。选择 messageCode，由本地渲染中文；citations 至多 ${MAX_FINAL_CITATIONS} 项，只选择证明当前目标所需的 evidenceId。仅选择本轮成功工具反馈 evidenceCatalog.entries 中已有的 evidenceId（通过 label/value 选择任务所需指标、比较、质量、定位、视图或成果）。不手写 callId/path，不复制数值。无数据用 needs_input，越界用 limited 或 needs_input；可空引用但不能冒称 completed。`,
     inputSchema: object({
       outcome: enumeration(
         'completed',
@@ -160,17 +189,17 @@ const CONTROL_TOOLS: ToolDefinition[] = [
         'failed',
       ),
       messageCode: messageCodeSchema,
-      citations: array(object({ evidenceId: { type: 'string' } }), 0, 12),
+      citations: array(object({ evidenceId: { type: 'string' } }), 0, MAX_FINAL_CITATIONS),
     }),
     outputSchema: object({ accepted: boolean }),
   },
 ];
 
-export const AGENT_INSTRUCTION_VERSION = 'E.2';
+export const AGENT_INSTRUCTION_VERSION = 'E.3';
 export const AGENT_SYSTEM_PROMPT = `你是通用人体姿态分析 Agent，使用控制协议 v2.0.0。模型负责选择工具，本地工具计算所有数值。
 读取会话后用 set_task_spec（已有 previousTask 的修改用 set_task_patch）记录当前目标及交付要求。相对区间依据当前实际采样 range 推导，不能凭空选择相邻区间。规格被拒绝就修正后重新提交 set_task_spec；没有 previousTask 时禁止使用 patch。goalTypes 只包含用户实际请求的 metrics/comparison/quality/seek/view/report/export，不增加目标。interval 为统计前段，comparison.second 为后段，direction=second_minus_first；metrics 记录用户要求的统计项。view 明确关节、侧别、口径、区间；单纯定位、视图、报告、导出无需额外调用所有分析工具。
 sources 的 text 是用户原文逐字片段，保留空格、大小写、标点；不能写参数值的 JSON、英文翻译、true/false 或自编解释。derived 仍需引用原文中触发推导的片段。无混合来源可用一个顶层来源覆盖其子字段；false 也需来源。currentSession 只是当前会话，不能当作 inherited 来源；inherited 必须来自 previousTask 或 pendingUserIntents 的有效 runId。sources.field 只声明 TaskSpec 参数字段，不声明 sessionId、revision、source 或 unresolved。
-未请求报告时 deliveries.report=false，未请求导出时 deliveries.export=null；这两个值不能从 schema 猜成 true 或对象。单纯质量查询不需要关节、侧别、raw/filtered、定位或视图，相关值为 null，metrics=[]，不把无关字段列 unresolved。单纯导出也不需要关节、侧别、口径或报告。不要在错误恢复时改做无关目标。
+未请求报告时 deliveries.report=false，未请求导出时 deliveries.export=null；这两个值不能从 schema 猜成 true 或对象。全局质量查询不需要关节、侧别、raw/filtered，相关值为 null；用户指定局部质量时保留关节、侧别、口径，三项必须齐全，缺项不猜。质量查询 metrics=[]，不自行添加定位或视图。局部质量须引用每个所选侧的样本、覆盖或缺失事实，全点可靠率不能代替局部可用性。单纯导出也不需要关节、侧别、口径或报告。不要在错误恢复时改做无关目标。
 用户未给定且无可追溯继承的字段保留 null/空数组并列 unresolved，使用 needs_input 澄清。不要默认 raw/filtered 或侧别。previousTask 是之前受结构校验的模型理解，继承需列来源，并非已证实语义正确。pendingUserIntents 是此前规格接受前失败/取消/过期的原始用户要求；恢复这些要求时 sources 可用 inherited、其 runId 和原文片段。这些只证明用户来源，不证明语言理解。任务规格与原文都将在工作台展示；局部校验不能证明任意复杂自然语言理解。
 最后用匹配当前规格的有效统计证据、最后实际视图、可用成果交付。质量不能替代比较，视图不能替代统计；缺失交付用 partial，不可比用 not_comparable，需澄清用 needs_input，执行失败用 failed。completed 被拒绝后按结构化 missing/satisfied 反馈补齐，不删改规格逃避检查。
 只接受单人单目平面几何；不识别运动类型、不评分、不判断动作对错、不做医学结论。
@@ -201,7 +230,7 @@ export function checkedText(text: string, max: number) {
     );
 }
 
-function checkEvidence(registry: ReturnType<typeof createToolRegistry>, output: ToolResult) {
+export function checkEvidence(registry: ReturnType<typeof createToolRegistry>, output: ToolResult) {
   if (
     !output.ok ||
     [
@@ -225,26 +254,12 @@ function checkEvidence(registry: ReturnType<typeof createToolRegistry>, output: 
     if (output.tool === 'prepare_report') {
       registry.validateEvidence(result.facts.evidence);
       registry.validateEvidence(result.quality.evidence);
+      if (result.comparisonQuality) registry.validateEvidence(result.comparisonQuality.evidence);
       if (result.comparison) {
         registry.validateEvidence(result.comparison.first.evidence);
         registry.validateEvidence(result.comparison.second.evidence);
       }
     }
-  }
-}
-
-// Abort races include providers that ignore signals; late replies cannot commit.
-async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw new Error(String(signal.reason));
-  let listener: () => void = () => {};
-  const stopped = new Promise<never>((_, reject) => {
-    listener = () => reject(new Error(String(signal.reason)));
-    signal.addEventListener('abort', listener, { once: true });
-  });
-  try {
-    return await Promise.race([work, stopped]);
-  } finally {
-    signal.removeEventListener('abort', listener);
   }
 }
 
@@ -261,6 +276,16 @@ export class AgentRuntime {
   private readonly onAudit?: (audit: RunAudit) => void | Promise<void>;
   private readonly onReady?: (run: AgentRun) => void | Promise<void>;
   private readonly beforeRequest?: () => void;
+  private readonly reviewRom?: (
+    review: FreeRomReview,
+    signal: AbortSignal,
+  ) => Promise<FreeRomConfirmation>;
+  private readonly verifyApplication?: (run: AgentRun) => Promise<void>;
+  private readonly submissionRequirements?: EvidenceRequirement[];
+  private readonly submissionEvidence?: (
+    run: AgentRun,
+    citations: Citation[],
+  ) => SubmissionEvidenceGap[];
   private readonly limits: {
     rounds: number;
     calls: number;
@@ -279,6 +304,10 @@ export class AgentRuntime {
     onAudit?: (audit: RunAudit) => void | Promise<void>;
     onReady?: (run: AgentRun) => void | Promise<void>;
     beforeRequest?: () => void;
+    submissionEvidence?: AgentRuntime['submissionEvidence'];
+    submissionRequirements?: EvidenceRequirement[];
+    reviewRom?: AgentRuntime['reviewRom'];
+    verifyApplication?: AgentRuntime['verifyApplication'];
     limits?: Partial<AgentRuntime['limits']>;
   }) {
     this.legacy = options.modelProtocol === 'legacy-v2';
@@ -289,6 +318,10 @@ export class AgentRuntime {
     this.onAudit = options.onAudit;
     this.onReady = options.onReady;
     this.beforeRequest = options.beforeRequest;
+    this.submissionEvidence = options.submissionEvidence;
+    this.submissionRequirements = options.submissionRequirements;
+    this.reviewRom = options.reviewRom;
+    this.verifyApplication = options.verifyApplication;
     this.limits = {
       rounds: 12,
       calls: 24,
@@ -354,6 +387,7 @@ export class AgentRuntime {
       usage: { inputTokens: null, outputTokens: null, reportedRequests: 0 },
       context: contextSnapshot,
       requests: [],
+      ...(this.submissionRequirements ? { localSubmission: true as const } : {}),
       conversationId: this.conversationId,
     };
     const definitions = [...this.registry.definitions, ...CONTROL_TOOLS];
@@ -405,7 +439,25 @@ export class AgentRuntime {
       },
     ];
     let correction: ModelMessage | undefined;
-    const timer = setTimeout(() => controller.abort('timeout'), this.limits.timeoutMs);
+    let deadline = performance.now() + this.limits.timeoutMs;
+    let timer = setTimeout(() => controller.abort('timeout'), this.limits.timeoutMs);
+    const localEvidence = () => {
+      if (!run.task) return;
+      const requirements =
+        this.submissionRequirements ??
+        (run.romReview?.confirmation ? romEvidenceRequirements(run) : undefined);
+      if (!requirements) return;
+      const local = assembleEvidence(run, this.registry, requirements, (output) =>
+        checkEvidence(this.registry, output),
+      );
+      if (!run.calls.some((call) => call.name === 'get_session_info' && call.output.ok))
+        local.gaps.push({
+          tool: 'get_session_info',
+          labels: ['sessionId', 'revision'],
+          reason: 'missing_tool_or_scope',
+        });
+      return local;
+    };
     // External non-UI clients can change the session too; abort pending requests.
     const monitor = setInterval(() => {
       try {
@@ -415,13 +467,21 @@ export class AgentRuntime {
       }
     }, 50);
     let recoveries = 0,
+      submissionRecoveries = 0,
       callCount = 0;
     try {
       emit();
       while (run.rounds < this.limits.rounds) {
         assertActive();
-        if (adapter && run.task)
-          run.completion = checkCompletion(run, run.citations, this.registry);
+        if (adapter && run.task) {
+          const local = localEvidence();
+          run.completion = checkCompletion(run, local?.citations ?? run.citations, this.registry);
+          if (local) {
+            run.submissionGaps = local.gaps;
+            if (local.gaps.length && run.completion.state === 'ready')
+              run.completion.state = 'partial';
+          }
+        }
         const messages: ModelMessage[] = [
           ...(adapter
             ? [
@@ -541,7 +601,13 @@ export class AgentRuntime {
           run.phase = `正在校验并执行 ${call.name}`;
           emit();
           let output: ToolResult;
+          let reusedCallId: string | undefined;
+          let submissionGaps: SubmissionEvidenceGap[] | undefined;
+          let submissionBudget:
+            | { submitted: number; maximum: number; minimumReplacements: number }
+            | undefined;
           const toolStarted = performance.now();
+          const previousManualWait = timing.manualWaitMs;
           try {
             if (adapter)
               call = { name: modelCall.name, arguments: adapter.expand(modelCall, run, offered) };
@@ -550,7 +616,7 @@ export class AgentRuntime {
             if (call.name === 'set_task_spec' || call.name === 'set_task_patch') {
               if (run.task)
                 throw new Error('TASK_SPEC_LOCKED：本轮已接受规格；更正理解需用户发起新目标。');
-              const spec =
+              let spec =
                 call.name === 'set_task_patch'
                   ? applyTaskPatch(
                       call.arguments,
@@ -574,6 +640,40 @@ export class AgentRuntime {
                   throw new Error(
                     `TASK_SPEC_INCOMPLETE:${JSON.stringify(undeclared)}：尚未接受或锁定。先核对分析目标是否符合用户要求；质量和缺失本身不要求角度统计。保留真实要求，真正缺少的必要字段才列入 unresolved；不要因模型自加目标而报告用户缺参。`,
                   );
+              }
+              const review =
+                adapter &&
+                this.reviewRom &&
+                freeRomReview(run.goal, reference, spec, modelCall.arguments);
+              if (review && this.reviewRom) {
+                run.romReview = review;
+                run.phase = '请在两段 ROM 任务卡核对并确认参数';
+                emit();
+                const started = performance.now();
+                const remaining = Math.max(0, deadline - started);
+                clearTimeout(timer);
+                let confirmation: FreeRomConfirmation;
+                try {
+                  confirmation = await abortable(
+                    this.reviewRom(structuredClone(review), controller.signal),
+                    controller.signal,
+                  );
+                  assertActive();
+                } finally {
+                  timing.manualWaitMs += performance.now() - started;
+                  deadline = performance.now() + remaining;
+                  timer = setTimeout(() => controller.abort('timeout'), remaining);
+                }
+                spec = confirmedFreeRomSpec(
+                  review,
+                  confirmation,
+                  this.session.info(),
+                  this.session.frames,
+                  previousTask,
+                  contextSnapshot.pendingUserIntents,
+                );
+                validateTaskAnalysis(spec);
+                run.romReview.confirmation = structuredClone(confirmation);
               }
               const task: TaskUnderstanding = {
                 runId: run.id,
@@ -605,13 +705,39 @@ export class AgentRuntime {
                 messageCode: MessageCode;
                 citations: { evidenceId: string }[];
               };
-              const citations = p.citations.map((citation) => {
-                const resolved = directory.resolve(citation.evidenceId, run);
-                const record = run.calls.find((c) => c.id === resolved.callId);
-                if (!record?.output.ok) throw new Error('INVALID_CITATION_CALL');
-                checkEvidence(this.registry, record.output);
-                return resolved;
+              const local = localEvidence();
+              const optional = p.citations.flatMap((citation) => {
+                try {
+                  const resolved = directory.resolve(citation.evidenceId, run);
+                  const record = run.calls.find((c) => c.id === resolved.callId);
+                  if (!record?.output.ok) throw new Error('INVALID_CITATION_CALL');
+                  checkEvidence(this.registry, record.output);
+                  return [resolved];
+                } catch (error) {
+                  if (!local) throw error;
+                  const detail = error instanceof Error ? error.message : String(error);
+                  local.gaps.push({
+                    tool: 'finish_analysis',
+                    labels: [citation.evidenceId],
+                    reason: 'invalid_reference',
+                    detail,
+                  });
+                  return [];
+                }
               });
+              const citations = local
+                ? [
+                    ...new Map(
+                      [...optional, ...local.citations].map((c) => [c.callId + c.path, c]),
+                    ).values(),
+                  ]
+                    .sort(
+                      (a, b) =>
+                        Number(b.source === 'local-executor') -
+                        Number(a.source === 'local-executor'),
+                    )
+                    .slice(0, MAX_FINAL_CITATIONS)
+                : optional;
               if (!run.calls.some((c) => c.name === 'get_session_info' && c.output.ok))
                 throw new Error(
                   'READ_SESSION_FIRST：finish_analysis 前必须显式调用 get_session_info。',
@@ -626,9 +752,39 @@ export class AgentRuntime {
                 throw new Error(
                   'INTENT_RANGE_UNAVAILABLE：保留区间超出当前采样范围，请澄清，不静默裁剪。',
                 );
-              for (const record of run.calls)
-                if (record.output.ok) checkEvidence(this.registry, record.output);
+              if (!local)
+                for (const record of run.calls)
+                  if (record.output.ok) checkEvidence(this.registry, record.output);
               run.completion = checkCompletion(run, citations, this.registry);
+              if (['completed', 'not_comparable', 'limited'].includes(p.outcome)) {
+                if (local) {
+                  run.submissionGaps = local.gaps;
+                  submissionGaps = local.gaps.filter((gap) => gap.reason !== 'invalid_reference');
+                  if (submissionGaps.length) {
+                    if (run.completion.state === 'ready') run.completion.state = 'partial';
+                    throw new Error(
+                      'SUBMISSION_EVIDENCE_REQUIRED：按 submissionGaps 补齐本地工具证据。',
+                    );
+                  }
+                }
+                submissionGaps = this.submissionEvidence?.(run, citations);
+                if (submissionGaps?.length) {
+                  const missingCitations = submissionGaps.filter(
+                    (gap) => gap.reason === 'missing_citation',
+                  ).length;
+                  submissionBudget = {
+                    submitted: citations.length,
+                    maximum: MAX_FINAL_CITATIONS,
+                    minimumReplacements: Math.max(
+                      0,
+                      citations.length + missingCitations - MAX_FINAL_CITATIONS,
+                    ),
+                  };
+                  throw new Error(
+                    'SUBMISSION_EVIDENCE_REQUIRED：按 submissionGaps 补齐。missing_citation 表示事实已存在，从 availableEvidence 选对应 evidenceId。minimumReplacements 大于零时，先移除至少该数量的重复或非必需引用，给缺项留出位置。保留证明其他必需项的引用与正确结论，再提交更新后的完整列表。',
+                  );
+                }
+              }
               if (p.outcome === 'completed' && run.completion.state !== 'ready')
                 throw new Error(
                   `${run.completion.state === 'not_comparable' ? 'NOT_COMPARABLE' : 'EVIDENCE_REQUIRED'}：${JSON.stringify(run.completion)}`,
@@ -637,7 +793,56 @@ export class AgentRuntime {
                 throw new Error('NOT_COMPARABLE_EVIDENCE_REQUIRED');
               if (p.outcome === 'partial' && !run.completion.satisfied.length)
                 throw new Error('PARTIAL_EVIDENCE_REQUIRED：尚无匹配任务的已满足条件。');
+              if (
+                local &&
+                this.verifyApplication &&
+                ['completed', 'not_comparable', 'limited'].includes(p.outcome)
+              ) {
+                try {
+                  await abortable(this.verifyApplication(run), controller.signal);
+                  assertActive();
+                  const checked = localEvidence()!;
+                  if (checked.gaps.length) {
+                    submissionGaps = run.submissionGaps = checked.gaps;
+                    throw new Error('SUBMISSION_EVIDENCE_REQUIRED');
+                  }
+                } catch (error) {
+                  assertActive();
+                  if (!submissionGaps?.length) {
+                    const tool =
+                      error instanceof WorkspaceApplicationError ? error.tool : 'workspace';
+                    const artifact = tool === 'prepare_report' || tool === 'prepare_export';
+                    submissionGaps = run.submissionGaps = [
+                      {
+                        tool,
+                        labels: [artifact ? 'handle' : 'application'],
+                        reason: artifact ? 'artifact_not_ready' : 'view_not_applied',
+                        detail: error instanceof Error ? error.message : String(error),
+                      },
+                    ];
+                  }
+                  run.completion = checkCompletion(run, citations, this.registry);
+                  for (const gap of submissionGaps) {
+                    const name = {
+                      set_chart_view: 'view',
+                      prepare_report: 'report',
+                      prepare_export: 'export',
+                    }[gap.tool];
+                    if (name && run.completion.satisfied.includes(name)) {
+                      run.completion.satisfied = run.completion.satisfied.filter(
+                        (item) => item !== name,
+                      );
+                      run.completion.missing.push(name);
+                    }
+                  }
+                  if (run.completion.state === 'ready') run.completion.state = 'partial';
+                  throw new Error('WORKSPACE_APPLICATION_REQUIRED：图表或成果核对失败。', {
+                    cause: error,
+                  });
+                }
+              }
               assertActive();
+              if (local) run.submissionGaps = local.gaps;
               run.citations = citations;
               run.message = MESSAGE_TEXT[p.messageCode];
               run.status =
@@ -657,7 +862,35 @@ export class AgentRuntime {
                 throw new Error(
                   'INTENT_RANGE_UNAVAILABLE：保留区间在当前来源不可用，请澄清，不执行裁剪后的查询或写入。',
                 );
-              output = this.registry.execute(call.name, call.arguments);
+              if (
+                this.reviewRom &&
+                run.task &&
+                isRomComparison(run.task.spec) &&
+                !run.romReview?.confirmation &&
+                call.name !== 'get_session_info'
+              )
+                throw new Error('ROM_CONFIRMATION_REQUIRED：请先补齐参数并确认。');
+              const last =
+                (run.romReview?.confirmation || run.localSubmission) &&
+                call.name === 'set_chart_view'
+                  ? [...run.calls]
+                      .reverse()
+                      .find(
+                        (record) =>
+                          record.name === call.name && record.output.ok && !record.reusedCallId,
+                      )
+                  : undefined;
+              if (
+                last?.output.ok &&
+                same(last.arguments, call.arguments) &&
+                same(
+                  (last.output.result as { view: unknown }).view,
+                  this.registry.readWorkspace().chart,
+                )
+              ) {
+                reusedCallId = last.id;
+                output = last.output;
+              } else output = this.registry.execute(call.name, call.arguments);
               checkEvidence(this.registry, output);
             }
             if (control && output.ok) validate(control.outputSchema, output.result);
@@ -676,13 +909,17 @@ export class AgentRuntime {
                 ...(error instanceof TaskSpecSourceError
                   ? { missingSources: error.missingSources }
                   : {}),
+                ...(submissionGaps?.length ? { submissionGaps, submissionBudget } : {}),
                 ...(adapter && modelCall.name === 'inspect_result'
                   ? { inspection: adapter.inspectionHelp(modelCall.arguments, run) }
                   : {}),
               },
             };
           }
-          const toolMs = performance.now() - toolStarted;
+          const toolMs = Math.max(
+            0,
+            performance.now() - toolStarted - (timing.manualWaitMs - previousManualWait),
+          );
           timing.toolMs += toolMs;
           assertActive();
           const record = {
@@ -691,8 +928,9 @@ export class AgentRuntime {
             arguments: structuredClone(call.arguments ?? null),
             ...(adapter ? { modelArguments: structuredClone(modelCall.arguments ?? null) } : {}),
             output,
+            ...(reusedCallId ? { reusedCallId } : {}),
             elapsedMs: toolMs,
-            ...(output.ok && call.name !== 'inspect_result'
+            ...(output.ok && !reusedCallId && call.name !== 'inspect_result'
               ? {
                   evidenceCatalog: directory.add(
                     id,
@@ -710,7 +948,11 @@ export class AgentRuntime {
             ? `${call.name} 已完成，结果将反馈模型`
             : `${call.name} 被拒绝，正在反馈错误`;
           emit();
-          if (!output.ok && ++recoveries > this.limits.recoveries)
+          if (
+            !output.ok &&
+            (submissionGaps?.length ? ++submissionRecoveries : ++recoveries) >
+              this.limits.recoveries
+          )
             throw new Error('RECOVERY_LIMIT');
           if (run.status !== 'running') break;
         }
