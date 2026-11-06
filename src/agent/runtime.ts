@@ -405,7 +405,7 @@ export class AgentRuntime {
     const romIntent =
       !this.legacy &&
       this.reviewRom &&
-      this.provider.id === 'ollama-local' &&
+      ['ollama-local', 'deepseek-api'].includes(this.provider.id) &&
       (!previousTask || previousRom)
         ? parseRomIntent(run.goal, previousRom)
         : undefined;
