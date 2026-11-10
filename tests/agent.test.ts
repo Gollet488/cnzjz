@@ -154,7 +154,15 @@ test('different quality goal calls quality rather than fixed comparison sequence
         ]),
       (r) => finish(r, 'get_quality_summary', '/effectiveRate'),
     ],
-    (goal) => taskFixture(goal, { goalTypes: ['quality'], interval: [0, 20] }),
+    (goal) =>
+      taskFixture(goal, {
+        goalTypes: ['quality'],
+        interval: [0, 20],
+        joint: null,
+        channels: null,
+        basis: null,
+        metrics: [],
+      }),
   );
   const result = await runtime(session, model).run('哪些区间不适合比较？');
   assert.equal(result.status, 'completed');

@@ -73,17 +73,18 @@ function locate(call: CallRecord, second = false, interval?: [number, number]) {
   const metric =
     call.name === 'compare_intervals' ? (second ? result.second : result.first) : result;
   const ev = metric.evidence;
+  const selection = call.name === 'get_quality_summary' ? metric.selection : metric;
   const input = { sessionId: ev.sessionId, revision: ev.revision };
   const selectedInterval = interval ?? ev.interval;
   const outputs = [props.tools.execute('seek_to_time', { ...input, time: selectedInterval[0] })];
-  if (metric.joint)
+  if (selection?.joint)
     outputs.push(
       props.tools.execute('set_chart_view', {
         ...input,
         interval: selectedInterval,
         basis: ev.basis,
-        joint: metric.joint,
-        channels: metric.channels.map((c: any) => c.channel),
+        joint: selection.joint,
+        channels: selection.channels.map((c: any) => c.channel),
       }),
     );
   const failed = outputs.find((o) => !o.ok);
@@ -314,6 +315,13 @@ onBeforeUnmount(() => {
           :disabled="running"
           @click="goal = '哪些区间不适合比较？请查询整个已采样区间的质量与缺失情况'"
           >查询区间质量</button
+        ><button
+          :disabled="running"
+          @click="
+            goal =
+              '查询整个已采样区间左右膝 filtered 角度的可用样本、覆盖率、连续缺失与可用时间段，保留限制'
+          "
+          >查询双膝可用性</button
         ><button :disabled="running" @click="goal = '只看右侧，第二段改成 12–17 秒'"
           >接续修改区间</button
         ><button

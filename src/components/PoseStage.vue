@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, shallowReactive, watch, onMounted, onBeforeUnmount } from 'vue';
 import { UploadCloud, Video, ScanLine } from 'lucide-vue-next';
-import type { Landmark, Settings, Source } from '../types';
+import type { Landmark, PoseFrame, Settings, Source } from '../types';
 import { demoPose } from '../utils/demo';
 import { renderPose } from '../utils/renderer';
 import { getPoseEngine } from '../utils/poseEngine';
@@ -15,7 +15,8 @@ const props = defineProps<{
   source: Source;
   playing: boolean;
   settings: Settings;
-  selectedPoints?: Landmark[];
+  selectedFrame?: PoseFrame;
+  sourceAspect: number;
   seekTime?: number;
   sessionId: string;
 }>();
@@ -25,7 +26,7 @@ const emit = defineEmits<{
     time: number,
     aspect: number,
     source: Source,
-    accept?: (value: boolean) => void,
+    accept?: (sampleTime?: number) => void,
   ];
   status: [message: string];
   ready: [name: string];
@@ -43,6 +44,16 @@ const offlineState = ref<OfflineState>('idle');
 const offlineMetadata = ref<OfflineMetadata | null>(null);
 const cameraConnected = ref(false);
 const cameraHint = ref('点击开始分析，在浏览器提示中允许使用摄像头。');
+// 96 reusable thumbnails, at most 96 × 384 × 384 × 4 bytes (54 MiB of RGBA pixels).
+const CAMERA_HISTORY_FRAMES = 96;
+const CAMERA_HISTORY_SIDE = 384;
+const CAMERA_HISTORY_MISSING = '此采样的摄像头历史画面不可用，无法导出该时刻的 PNG。';
+const cameraHistory = shallowReactive(new Map<number, HTMLCanvasElement>());
+const cameraReviewTime = computed(() =>
+  props.source === 'camera' && !props.playing ? props.selectedFrame?.time : undefined,
+);
+const cameraReviewImage = computed(() => cameraHistory.get(cameraReviewTime.value ?? -1));
+let cameraInput: HTMLCanvasElement | undefined;
 let pausedDemoPaint:
   | { points: Landmark[]; settings: string; width: number; height: number }
   | undefined;
@@ -82,6 +93,42 @@ function releaseCamera() {
   if (video.value) {
     video.value.pause();
     video.value.srcObject = null;
+  }
+}
+function copyCameraInput(video: HTMLVideoElement) {
+  const input = (cameraInput ??= document.createElement('canvas'));
+  if (input.width !== video.videoWidth) input.width = video.videoWidth;
+  if (input.height !== video.videoHeight) input.height = video.videoHeight;
+  const ctx = input.getContext('2d', { alpha: false });
+  if (!ctx || !input.width || !input.height) return;
+  try {
+    ctx.drawImage(video, 0, 0);
+    return input;
+  } catch {
+    // Inference can continue from video if a still cannot be copied.
+  }
+}
+function saveCameraImage(time: number, input: HTMLCanvasElement) {
+  let image: HTMLCanvasElement;
+  if (cameraHistory.size === CAMERA_HISTORY_FRAMES) {
+    const [oldest, reusable] = cameraHistory.entries().next().value!;
+    cameraHistory.delete(oldest);
+    image = reusable;
+  } else {
+    image = document.createElement('canvas');
+  }
+  const scale = Math.min(1, CAMERA_HISTORY_SIDE / Math.max(input.width, input.height));
+  const width = Math.max(1, Math.round(input.width * scale));
+  const height = Math.max(1, Math.round(input.height * scale));
+  if (image.width !== width) image.width = width;
+  if (image.height !== height) image.height = height;
+  const ctx = image.getContext('2d', { alpha: false });
+  if (!ctx) return;
+  try {
+    ctx.drawImage(input, 0, 0, width, height);
+    cameraHistory.set(time, image);
+  } catch {
+    // Only a successfully copied image may be associated with a sample.
   }
 }
 function cameraFailure(message: string) {
@@ -201,8 +248,8 @@ async function start() {
             value.time,
             offlineMetadata.value!.aspect,
             'file',
-            (value) => {
-              accepted = value;
+            (sampleTime) => {
+              accepted = sampleTime !== undefined;
             },
           );
           if (!accepted) {
@@ -408,6 +455,10 @@ function stop() {
   processed.value = 0;
   hiddenPause = false;
   releaseCamera();
+  for (const image of cameraHistory.values()) image.width = image.height = 0;
+  cameraHistory.clear();
+  if (cameraInput) cameraInput.width = cameraInput.height = 0;
+  cameraInput = undefined;
   points = [];
   trail = [];
   lastVideo = -1;
@@ -420,30 +471,39 @@ function tick(now: number) {
   raf = requestAnimationFrame(tick);
   const dt = previousNow ? Math.min((now - previousNow) / 1000, 0.15) : 0;
   previousNow = now;
+  const cameraVideo = props.source === 'camera' && props.playing ? video.value : undefined;
+  const cameraTime = cameraVideo?.currentTime;
   if (props.source === 'demo') {
     if (props.playing) demoTime += dt;
-    points = props.playing ? demoPose(demoTime) : (props.selectedPoints ?? demoPose(demoTime));
+    points = props.playing
+      ? demoPose(demoTime)
+      : (props.selectedFrame?.points ?? demoPose(demoTime));
     if (props.playing && now - lastSample >= 50) {
       lastSample = now;
       emit('frame', points, demoTime, 850 / 590, 'demo');
     }
   } else if (
-    props.source === 'camera' &&
-    props.playing &&
     engine &&
     modelReady.value &&
-    video.value &&
-    video.value.readyState >= 2 &&
+    cameraVideo &&
+    cameraVideo.readyState >= 2 &&
     // Sample distinct camera frames at up to 30 Hz. A 50 ms RAF gate rounds
     // upward to a display tick and falls below the required 20 effective fps.
     now - lastSample >= 1000 / 30 &&
-    video.value.currentTime !== lastVideo
+    cameraTime !== undefined &&
+    cameraTime !== lastVideo
   ) {
     lastSample = now;
-    lastVideo = video.value.currentTime;
+    lastVideo = cameraTime;
     try {
+      // Freeze one input for synchronous inference and the history copy. The
+      // media clock is read once for the sample, before inference can delay it.
+      const input = copyCameraInput(cameraVideo);
+      const aspect = input
+        ? input.width / input.height
+        : cameraVideo.videoWidth / cameraVideo.videoHeight;
       inferenceTime = Math.max(inferenceTime + 1, performance.now());
-      const result = engine.detectForVideo(video.value, inferenceTime);
+      const result = engine.detectForVideo(input ?? cameraVideo, inferenceTime);
       points =
         result.landmarks[0]?.map((p) => ({
           x: p.x,
@@ -451,13 +511,9 @@ function tick(now: number) {
           z: p.z,
           visibility: p.visibility ?? 0,
         })) ?? [];
-      emit(
-        'frame',
-        points,
-        video.value.currentTime,
-        video.value.videoWidth / video.value.videoHeight,
-        props.source,
-      );
+      emit('frame', points, cameraTime, aspect, 'camera', (sampleTime) => {
+        if (input && sampleTime !== undefined) saveCameraImage(sampleTime, input);
+      });
       if (!!points.length !== lastDetection) {
         lastDetection = !!points.length;
         emit('status', points.length ? '' : '未检测到完整人体，请保证单人全身入镜。');
@@ -466,21 +522,27 @@ function tick(now: number) {
       cameraFailure('当前帧推理失败，已释放摄像头，请重置后重试。');
     }
   }
+  paint();
+}
+function paint() {
   if (canvas.value) {
+    const cameraReview = cameraReviewTime.value !== undefined;
     const aspect =
       props.source === 'demo'
         ? DEMO_SIZE.width / DEMO_SIZE.height
         : props.source === 'file'
           ? (offlineMetadata.value?.aspect ?? DEMO_SIZE.width / DEMO_SIZE.height)
-          : video.value?.videoWidth && video.value.videoHeight
-            ? video.value.videoWidth / video.value.videoHeight
-            : DEMO_SIZE.width / DEMO_SIZE.height;
+          : cameraReview
+            ? props.sourceAspect
+            : video.value?.videoWidth && video.value.videoHeight
+              ? video.value.videoWidth / video.value.videoHeight
+              : DEMO_SIZE.width / DEMO_SIZE.height;
     const size = stageSize(aspect);
     if (canvas.value.width !== size.width || canvas.value.height !== size.height) {
       canvas.value.width = size.width;
       canvas.value.height = size.height;
     }
-    const displayed = props.selectedPoints ?? points;
+    const displayed = props.selectedFrame?.points ?? points;
     // A paused synthetic frame has no asynchronously changing video background.
     // Retain its bitmap until the points/settings/size change, including seeks
     // from another page. Acquisition, inference and file/camera painting keep
@@ -501,17 +563,22 @@ function tick(now: number) {
       trail.push(centerOfMass(displayed, props.settings.threshold));
       trail = trail.slice(-180);
     }
+    const background =
+      props.source === 'demo'
+        ? undefined
+        : cameraReview
+          ? cameraReviewImage.value
+          : props.source === 'file' && !reviewing && preview
+            ? preview
+            : video.value;
     renderPose(
       canvas.value,
       displayed,
       props.settings,
-      props.source === 'demo'
-        ? undefined
-        : props.source === 'file' && !reviewing && preview
-          ? preview
-          : video.value,
+      background,
       props.playing ? trail : [],
       aspect,
+      !background && !cameraReview,
     );
   }
 }
@@ -584,7 +651,12 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', visibility);
   if (objectURL) URL.revokeObjectURL(objectURL);
 });
-function waitUntilRendered() {
+async function waitUntilRendered() {
+  if (props.source === 'camera') {
+    if (!cameraReviewImage.value) throw new Error(CAMERA_HISTORY_MISSING);
+    paint();
+    return;
+  }
   const token = generation;
   return new Promise<void>((resolve, reject) => {
     let waiting = 0;
@@ -661,6 +733,12 @@ defineExpose({
       ><span>Y ↓</span><div>·</div><small>X →</small></div
     >
     <div
+      v-if="cameraReviewTime !== undefined && !cameraReviewImage"
+      class="camera-history-status"
+      role="status"
+      >{{ CAMERA_HISTORY_MISSING }}</div
+    >
+    <div
       v-if="(source === 'file' && !filename) || (source === 'camera' && !cameraConnected)"
       class="stage-empty"
       ><component :is="source === 'camera' ? Video : UploadCloud" :size="38" /><h3>{{
@@ -724,7 +802,8 @@ defineExpose({
   </div>
 </template>
 <style scoped>
-.offline-progress {
+.offline-progress,
+.camera-history-status {
   position: absolute;
   bottom: 42px;
   left: 16px;

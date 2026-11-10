@@ -21,6 +21,7 @@ const sections = computed<CallRecord[]>(() => {
     ['query_metrics', result.value.facts],
     ['compare_intervals', result.value.comparison],
     ['get_quality_summary', result.value.quality],
+    ['get_quality_summary', result.value.comparisonQuality],
   ]
     .filter(([, value]) => value)
     .map(([name, value], i) => ({

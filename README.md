@@ -4,6 +4,8 @@
 
 本项目面向通用人体运动的姿态采集与量化分析，提供本地推理、可追溯数值和 Agent 工具调用。启动、保留 Git 历史的上传步骤和已知限制见 [构建与交付](docs/delivery.md)，参赛要求核对见 [仓库提交清单](docs/submission-checklist.md)，目标需求见 [requirement.md](requirement.md)。
 
+HTTPS 发布候选已推送至 [codex/https-release](https://github.com/Gollet488/cnzjz/tree/codex/https-release)。公开目标为 [Kinetic Pose Lab](https://gollet488.github.io/cnzjz/)，以 Pages 部署状态为准。本机完整 Agent 路径与 Ollama 连接步骤见 [环境配置](docs/environment.md#ollama)。
+
 ## 技术架构
 
 Vue 3 / TypeScript 负责页面和状态，Element Plus 提供交互组件，ECharts 展示时序图表。MediaPipe Pose Landmarker Lite 在浏览器内提取人体关键点；本地视频经过 MP4Box 索引、WebCodecs 解码与 Worker 推理，其他格式先由 FFmpeg WebAssembly 转换。分析层计算通用几何与时序指标，Agent 通过受控工具读取分析结果并交付带证据的报告、视图或导出。
@@ -76,7 +78,7 @@ node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case comp
 - `docs`：使用与交付、数据契约、视频和 Agent 技术说明。
 - `.github/workflows`：Windows / Linux 的基础 CI 检查。
 
-当前最多保留 18,000 帧。二维投影、遮挡、视角和置信度会影响指标；系统不识别运动种类、不评分、不判断动作对错。双视频对比目前是预览功能，参数跟随与跨画幅比例修正仍待完成，距离不能用于严格序列相似度结论。静态部署使用根路径 HTTP 服务；本项目未配置子路径资源前缀，上传源码到 GitHub 不会自动上线网站。
+当前最多保留 18,000 帧。二维投影、遮挡、视角和置信度会影响指标；系统不识别运动种类、不评分、不判断动作对错。双视频对比已接入分析与显示设置，并按各视频源宽高比修正几何距离；目前仍为约 10 Hz 预览，距离不能用于严格序列相似度结论。隔离发布候选适配 GitHub Pages 的 `/cnzjz/`，本机开发和预览继续使用根路径。
 
 ## 团队信息
 
@@ -87,4 +89,4 @@ node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case comp
 
 ## 开发与提交
 
-使用 TypeScript 类型检查、ESLint 和 Prettier 保持代码一致；复杂的数据契约、时间戳和工具协议有对应技术说明与回归测试。修改后运行上方检查命令，再从当前 Git 仓库提交和推送，保留真实开发历史。现有 `.delivery/` 是旧源码快照，不作为本次参赛仓库上传入口。功能规划和历史状态见 [核心功能执行计划](docs/core-execution-plan.md)。
+使用 TypeScript 类型检查、ESLint 和 Prettier 保持代码一致；复杂的数据契约、时间戳和工具协议有对应技术说明与回归测试。修改后运行上方检查命令，再从当前 Git 仓库提交和推送，保留真实开发历史。现有 `.delivery/` 是旧源码快照，不作为本次参赛仓库上传入口。当前完成度、问题看板和每轮动态更新的下一条 Codex 指令见 [核心功能执行计划](docs/core-execution-plan.md)。

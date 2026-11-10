@@ -1,6 +1,18 @@
 # 构建与交付
 
+## 2026-11-05 HTTPS 发布
+
+隔离候选为 [36f75ea](https://github.com/Gollet488/cnzjz/commit/36f75ea3e5407e30944795c37ed163de9cf6907d)。构建使用冻结锁文件和 `pnpm build --base /cnzjz/`，工作流只上传 `dist/`。[Checks](https://github.com/Gollet488/cnzjz/actions/runs/42028811793) · [Pages 工作流](https://github.com/Gollet488/cnzjz/actions/runs/42028811980)
+
+Pages 目标地址为 [Kinetic Pose Lab](https://gollet488.github.io/cnzjz/)。仓库管理员在 [Settings → Pages](https://github.com/Gollet488/cnzjz/settings/pages) 将 Source 设为 GitHub Actions 后，可继续候选的部署。发布验收需打开最终 HTTPS 页面，复验本地视频分析、实际资源请求、图表与片段、354 列 CSV、PNG、摄像头和 Ollama 回环权限。
+
+Chrome 156 已在本机 HTTPS 候选上完成实际视频推理、下载与真实摄像头权限、采集和轨道释放。已验证本机 Web 加 DeepSeek 回环代理的完整多轮交付及重算失效。Ollama 已验证连接探测及允许、拒绝、服务离线三种状态，完整业务验收待可用模型。安装、来源配置与本机入口见 [环境配置](environment.md#ollama)。
+
+本轮原始证据位于本机 `.qa/core-work/20261105-https-release/`。真实人体素材、私人审计、密钥和旧交付压缩包留在发布目录之外。以下内容为历史记录。
+
 更新日期：2026-10-31（Asia/Shanghai）。按参赛要求补齐代码仓库资料，由用户自行上传 GitHub。本次不创建提交、不推送，保留当前仓库和原有开发历史。
+
+2026-11-03 补充：本文保留当时的交付检查；当前完成度及后续任务以 [统一执行计划](core-execution-plan.md) 为准，历史未提交状态、服务 PID 和测试结果不能当作当前实况。
 
 ## 当前仓库整理
 
@@ -80,7 +92,7 @@ GitHub Desktop 也可直接添加当前本地仓库，检查 Changes、创建提
 
 上传后现有 GitHub Actions 会执行 Windows/Linux 的格式、lint、单元测试和构建；远程 CI 结果以仓库实际运行结果为准。本次未执行远程 CI。
 
-## 网站部署与模型连接
+## 2026-10-31 历史部署与模型连接
 
 生成的 `dist/` 可通过根路径 HTTP 静态服务访问，不要双击 `index.html` 用 `file://` 运行。MediaPipe 模型、WASM 与推理 Worker 一同分发，资源校验固定版本、模型 SHA-256 和依赖包分发字节。摄像头需要浏览器许可与安全上下文，本机使用 localhost/127.0.0.1。
 
@@ -97,10 +109,10 @@ Agent 的两种连接方式：
 
 - 本轮未重新采集真实摄像头、未运行真实人体视频，也未调用真实 Ollama/DeepSeek。历史真人视频、人工摄像头 CSV 与真实 DeepSeek 多轮结果保留在统一计划和本机审计中，不能等同于本轮重测。
 - 工具自动操作真实摄像头媒体时钟/轨道、Windows 原生保存选择器及设备性能仍待实测；人工操作反馈与模拟用例分别保留。
-- 双视频姿态对比仍使用固定阈值/窗口，未统一不同画幅比例，约 10 Hz 预览不等于严格逐帧序列配准。主分析链路可用，对比距离暂不用于严格相似度结论。
+- 2026-11-03 V1 已接入双视频分析与显示设置、独立滤波窗口及各视频源宽高比校正；约 10 Hz 预览不等于严格逐帧序列配准，对比距离不用于严格相似度结论。
 - 单目二维投影、遮挡、视角和置信度影响指标；最多保留 18,000 帧，不识别运动类型、不评分、不判断动作对错。
 
-恢复开发时使用 [统一执行计划](core-execution-plan.md)，当前不继续其中旧的下一条指令。
+后续开发使用 [统一执行计划](core-execution-plan.md) 中最新的“当前下一条指令”；旧的设备单项等待队列已由 2026-11-03 的条件队列替代。
 
 ## 现有交付工具
 

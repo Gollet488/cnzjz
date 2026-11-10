@@ -107,6 +107,31 @@ export function checkCompletion(
   const usableReports = reports.filter(
     (c) => available(c, 'report') && cited(c, (p) => p === '/handle'),
   );
+  const localQuality = !!(spec.joint && spec.channels?.length && spec.basis);
+  const qualityMatches = (v: any) =>
+    same(v?.evidence?.interval, spec.interval) &&
+    (!localQuality ||
+      (v?.selection?.joint === spec.joint &&
+        v.selection.basis === spec.basis &&
+        v.evidence.basis === spec.basis &&
+        sameChannels(
+          v.selection.channels.map((c: any) => c.channel),
+          spec.channels!,
+        )));
+  const qualityCited = (c: CallRecord, value: any, prefix = '') =>
+    localQuality
+      ? value.selection.channels.every((_: any, i: number) =>
+          cited(c, (p) =>
+            new RegExp(
+              `^${prefix}/selection/channels/${i}/(validSamples|invalidSamples|coverage|notDetectedSamples|unusableSamples)$`,
+            ).test(p),
+          ),
+        )
+      : cited(c, (p) =>
+          new RegExp(
+            `^${prefix}/(effectiveRate|meanConfidence|missingSamples|detectedSamples|fullyReliableSamples|maxSampleGapSeconds)$`,
+          ).test(p),
+        );
   const require = (name: string, ok: boolean) => (ok ? check.satisfied : check.missing).push(name);
   if (spec.goalTypes.includes('metrics'))
     require('metrics', calls.some(
@@ -120,13 +145,14 @@ export function checkCompletion(
     require('quality', calls.some(
       (c) =>
         c.name === 'get_quality_summary' &&
-        same(c.output.result.evidence.interval, spec.interval) &&
-        cited(c, (p) =>
-          /^\/(effectiveRate|meanConfidence|missingSamples|detectedSamples|fullyReliableSamples|maxSampleGapSeconds)$/.test(
-            p,
-          ),
-        ),
-    ) || usableReports.length > 0);
+        qualityMatches(c.output.result) &&
+        qualityCited(c, c.output.result),
+    ) ||
+      usableReports.some(
+        (c) =>
+          qualityMatches(c.output.result.quality) &&
+          (!localQuality || qualityCited(c, c.output.result.quality, '/quality')),
+      ));
   if (spec.goalTypes.includes('comparison') || spec.comparison) {
     const comparisons = calls.filter(
       (c) => c.name === 'compare_intervals' && matchComparison(c.output.result),
@@ -134,7 +160,12 @@ export function checkCompletion(
     const candidates = [
       ...comparisons
         .filter((c) =>
-          cited(c, (p) => spec.metrics.some((m) => new RegExp(`^/differences/\\d+/${m}$`).test(p))),
+          cited(
+            c,
+            (p) =>
+              spec.metrics.some((m) => new RegExp(`^/differences/\\d+/${m}$`).test(p)) ||
+              (c.output.result.comparable === false && /^\/(comparable|reasons\/\d+)$/.test(p)),
+          ),
         )
         .map((c) => c.output.result),
       ...usableReports.map((c) => c.output.result.comparison).filter(Boolean),
@@ -172,7 +203,13 @@ export function checkCompletion(
     require('report', usableReports.some(
       (c) =>
         numericMetrics(c.output.result.facts) &&
-        (!spec.comparison || c.output.result.comparison.comparable),
+        (!spec.comparison ||
+          c.output.result.comparison.comparable ||
+          (c.output.result.comparison.comparable === false &&
+            c.output.result.comparison.reasons.length > 0 &&
+            c.output.result.comparison.reasons.every((reason: string) =>
+              c.output.result.limitations.includes(reason),
+            ))),
     ));
   const exported = spec.deliveries.export;
   if (exported)

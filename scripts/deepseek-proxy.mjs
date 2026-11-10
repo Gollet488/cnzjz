@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { DeepSeekProvider } from '../src/agent/providers/deepseek.ts';
+import { ProviderResponseError } from '../src/agent/provider.ts';
+import { DeepSeekProvider, DeepSeekRequestError } from '../src/agent/providers/deepseek.ts';
 
 export const PROXY_BODY_LIMIT = 256_000;
 const loopback = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -17,8 +18,29 @@ export function userApiKey() {
       '-Command',
       "[Console]::Write([Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY','User'))",
     ],
-    { encoding: 'utf8', windowsHide: true, timeout: 5000 },
+    { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] },
   ).trim();
+}
+
+const failureCodes = {
+  configuration: 'DEEPSEEK_PROXY_CONFIGURATION',
+  request: 'DEEPSEEK_PROXY_REQUEST_PROTOCOL',
+  transport: 'DEEPSEEK_PROXY_TRANSPORT',
+  response: 'DEEPSEEK_PROXY_RESPONSE_PROTOCOL',
+  probe: 'DEEPSEEK_PROXY_TOOL_PROBE_PROTOCOL',
+};
+
+function failureCode(error) {
+  if (error instanceof DeepSeekRequestError && Object.hasOwn(failureCodes, error.stage))
+    return failureCodes[error.stage];
+  if (error instanceof ProviderResponseError) {
+    const status = error.failure.httpStatus;
+    if (Number.isInteger(status) && status >= 100 && status <= 599)
+      return status >= 200 && status < 300
+        ? failureCodes.response
+        : `DEEPSEEK_PROXY_UPSTREAM_HTTP_${status}`;
+  }
+  return 'DEEPSEEK_PROXY_UNKNOWN';
 }
 
 function validInput(value) {
@@ -103,9 +125,10 @@ export function createDeepSeekMiddleware({
     active.add(controller);
     const stop = () => controller.abort();
     const timer = setTimeout(() => {
-      controller.abort();
+      controller.abort('timeout');
+      // Let the 504 flush before closing a connection with an unfinished upload.
+      if (!req.complete) res.once('finish', () => req.destroy());
       send(504, { error: 'DEEPSEEK_PROXY_TIMEOUT' });
-      req.destroy();
     }, timeoutMs);
     req.once('aborted', stop);
     res.once('close', stop);
@@ -134,18 +157,21 @@ export function createDeepSeekMiddleware({
           : !validInput(input)
       )
         return send(400, { error: 'DEEPSEEK_PROXY_INVALID_INPUT' });
-      const provider = providerFactory();
+      let provider;
+      try {
+        provider = providerFactory();
+      } catch {
+        return send(502, { error: failureCodes.configuration });
+      }
       const result = probe
         ? await provider.probe(controller.signal)
         : await provider.complete({ ...input, signal: controller.signal });
       if (!controller.signal.aborted) send(200, result);
-    } catch {
+    } catch (error) {
       // Do not propagate upstream bodies, network diagnostics, headers or credentials.
-      send(controller.signal.aborted ? 504 : 502, {
-        error: controller.signal.aborted
-          ? 'DEEPSEEK_PROXY_TIMEOUT'
-          : 'DEEPSEEK_PROXY_REQUEST_FAILED',
-      });
+      if (controller.signal.reason === 'timeout') send(504, { error: 'DEEPSEEK_PROXY_TIMEOUT' });
+      else if (controller.signal.aborted) send(503, { error: 'DEEPSEEK_PROXY_CANCELLED' });
+      else send(502, { error: failureCode(error) });
     } finally {
       clearTimeout(timer);
       active.delete(controller);

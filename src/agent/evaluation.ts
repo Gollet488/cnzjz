@@ -310,7 +310,7 @@ const DELIVERY_PATHS: Record<string, RegExp> = {
   query_metrics:
     /^\/channels\/\d+\/(rom|peakAbsoluteVelocity|coverage|(?:angle|velocity)\/(?:min|max|mean|populationVariance))$/,
   get_quality_summary:
-    /^\/(effectiveRate|meanConfidence|missingSamples|detectedSamples|fullyReliableSamples|maxSampleGapSeconds)$/,
+    /^\/(effectiveRate|meanConfidence|missingSamples|detectedSamples|fullyReliableSamples|maxSampleGapSeconds|selection\/channels\/\d+\/(?:validSamples|invalidSamples|coverage|notDetectedSamples|unusableSamples))$/,
   set_chart_view: /^\/view\/(joint|basis|channels\/\d+|interval\/\d+)$/,
   seek_to_time: /^\/appliedTime$/,
   prepare_report: /^\/handle$/,
@@ -385,7 +385,14 @@ export function assessRun(
       last &&
       matches(last) &&
       run.citations.some(
-        (ref) => ref.callId === last.id && DELIVERY_PATHS[expected.name]?.test(ref.path),
+        (ref) =>
+          ref.callId === last.id &&
+          (DELIVERY_PATHS[expected.name]?.test(ref.path) ||
+            (expected.name === 'compare_intervals' &&
+              run.status === 'not_comparable' &&
+              last.output.ok &&
+              (last.output.result as any).comparable === false &&
+              /^\/(comparable|reasons\/\d+)$/.test(ref.path))),
       );
     if (!cited) failures.push(`missing_delivery_evidence:${expected.name}`);
     if (expected.name === 'set_chart_view') {

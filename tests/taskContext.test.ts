@@ -85,7 +85,15 @@ function start(task: TaskSpec) {
 }
 
 for (const firstOutcome of ['completed', 'failed', 'limit'] as const) {
-  test(`${firstOutcome} then partial user modification retains every omitted parameter and uses fresh evidence`, async () => {
+  test(`${firstOutcome} then partial user modification retains every omitted parameter and uses fresh evidence`, async (t) => {
+    let nextId = 0;
+    // A valid inherited UUID can contain a prior call ID as a prefix substring.
+    const group = firstOutcome === 'completed' ? 'c400' : 'c200';
+    t.mock.method(
+      crypto,
+      'randomUUID',
+      () => `${(++nextId).toString(16).padStart(8, '0')}-${group}-4000-8000-000000000000`,
+    );
     let turn = 0,
       step = 0;
     let signal: AbortSignal | undefined;
@@ -100,7 +108,10 @@ for (const firstOutcome of ['completed', 'failed', 'limit'] as const) {
         assert.equal(r.messages.length, 2, 'no prior conversation/tool messages');
         assert.equal(user(r).previousTask.spec.joint, 'knee');
         assert.equal(user(r).context.recentFeedback.status, firstOutcome);
-        assert.ok(!JSON.stringify(r.messages).includes(h.audits[0].run.calls.at(-1)!.id));
+        assert.equal(user(r).previousTask.runId, h.audits[0].run.id);
+        const oldCallId = h.audits[0].run.calls.at(-1)!.id;
+        assert.ok(user(r).previousTask.runId.includes(oldCallId), 'exercise the UUID collision');
+        assert.ok(!r.messages.some((m) => m.content.includes(JSON.stringify(oldCallId))));
         return {
           calls: [
             { name: 'get_session_info', arguments: {} },

@@ -59,7 +59,7 @@ export function csvHeader() {
   ];
 }
 function csvRow(f: PoseFrame, labels: string, session: SessionInfo) {
-  return [
+  const values = [
     f.time,
     session.sessionId,
     session.revision,
@@ -81,36 +81,36 @@ function csvRow(f: PoseFrame, labels: string, session: SessionInfo) {
     f.center?.y,
     f.asymmetry,
     ...f.windowInterval,
-    ...(['raw', 'filtered'] as const).flatMap((basis) => {
-      const v = f.variance[basis];
-      return [
-        v.value,
-        v.windowFrames,
-        v.validPoints,
-        v.validSamples,
-        v.minSamplesPerPoint,
-        v.maxSamplesPerPoint,
-      ];
-    }),
-    f.heightDifference.shoulder,
-    f.heightDifference.hip,
-    f.heightDifference.knee,
-    ...[f.rawPoints, f.points].flatMap((points) =>
-      POINT_NAMES.flatMap((_, index) => {
-        const p = points[index];
-        return [p?.x, p?.y, p?.z, p?.visibility];
-      }),
-    ),
-    ...(['raw', 'filtered'] as const).flatMap((basis) =>
-      JOINTS.flatMap((j) =>
-        channels(j.key).flatMap((side) => [
-          angleValue(basis === 'raw' ? f.rawAngles : f.angles, j.key, side),
-          angleValue(basis === 'raw' ? f.rawVelocity : f.velocity, j.key, side),
-        ]),
-      ),
-    ),
-    labels,
   ];
+  for (const basis of ['raw', 'filtered'] as const) {
+    const v = f.variance[basis];
+    values.push(
+      v.value,
+      v.windowFrames,
+      v.validPoints,
+      v.validSamples,
+      v.minSamplesPerPoint,
+      v.maxSamplesPerPoint,
+    );
+  }
+  values.push(f.heightDifference.shoulder, f.heightDifference.hip, f.heightDifference.knee);
+  for (const points of [f.rawPoints, f.points]) {
+    for (let index = 0; index < POINT_NAMES.length; index++) {
+      const p = points[index];
+      values.push(p?.x, p?.y, p?.z, p?.visibility);
+    }
+  }
+  for (const basis of ['raw', 'filtered'] as const) {
+    const angles = basis === 'raw' ? f.rawAngles : f.angles;
+    const velocity = basis === 'raw' ? f.rawVelocity : f.velocity;
+    for (const { key } of JOINTS) {
+      for (const side of channels(key)) {
+        values.push(angleValue(angles, key, side), angleValue(velocity, key, side));
+      }
+    }
+  }
+  values.push(labels);
+  return values;
 }
 
 export const CSV_CHUNK_ROWS = 24;

@@ -1151,7 +1151,8 @@ test('v3.5 mixed quality and metrics explicitly requested remain separate goals 
       outcome: 'completed',
       messageCode: 'evidence_ready',
       citations: [
-        evidenceRef(feedback(r, 'get_quality_summary'), '/missingSamples'),
+        evidenceRef(feedback(r, 'get_quality_summary'), '/selection/channels/0/validSamples'),
+        evidenceRef(feedback(r, 'get_quality_summary'), '/selection/channels/1/validSamples'),
         evidenceRef(feedback(r, 'query_metrics'), '/channels/0/rom'),
       ],
     });
