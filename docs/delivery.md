@@ -1,22 +1,14 @@
 # 构建与交付
 
-## 2026-11-05 HTTPS 发布候选
+## 2026-11-05 HTTPS 发布
 
-仓库为 [Gollet488/cnzjz](https://github.com/Gollet488/cnzjz)，目标地址为 [Kinetic Pose Lab](https://gollet488.github.io/cnzjz/)。候选构建使用固定依赖和 `/cnzjz/` 路径。仓库管理员可在 [Settings → Pages](https://github.com/Gollet488/cnzjz/settings/pages) 将 Source 设为 GitHub Actions。候选分支的发布作业通过 [Actions](https://github.com/Gollet488/cnzjz/actions) 查看和重跑。提交合入 main 后，由同一工作流构建和发布。
+隔离候选为 [36f75ea](https://github.com/Gollet488/cnzjz/commit/36f75ea3e5407e30944795c37ed163de9cf6907d)。构建使用冻结锁文件和 `pnpm build --base /cnzjz/`，工作流只上传 `dist/`。[Checks](https://github.com/Gollet488/cnzjz/actions/runs/42028811793) · [Pages 工作流](https://github.com/Gollet488/cnzjz/actions/runs/42028811980)
 
-```powershell
-pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm lint
-pnpm test
-pnpm build --base /cnzjz/
-```
+Pages 目标地址为 [Kinetic Pose Lab](https://gollet488.github.io/cnzjz/)。仓库管理员在 [Settings → Pages](https://github.com/Gollet488/cnzjz/settings/pages) 将 Source 设为 GitHub Actions 后，可继续候选的部署。发布验收需打开最终 HTTPS 页面，复验本地视频分析、实际资源请求、图表与片段、354 列 CSV、PNG、摄像头和 Ollama 回环权限。
 
-工作流上传 `dist/`。该目录包括应用、合成演示代码、模型、WASM 和 Worker。真实人体素材、私人审计、环境密钥、本机证据与旧压缩包保存在发布目录之外。评审可直接打开 HTTPS 站点使用本地分析功能。最终验收包括 Chrome 上传、模型及 Worker 请求、图表与片段、354 列 CSV 和 PNG 下载，以及实际摄像头轨道。
+Chrome 156 已在本机 HTTPS 候选上完成实际视频推理、下载与真实摄像头权限、采集和轨道释放。已验证本机 Web 加 DeepSeek 回环代理的完整多轮交付及重算失效。Ollama 已验证连接探测及允许、拒绝、服务离线三种状态，完整业务验收待可用模型。安装、来源配置与本机入口见 [环境配置](environment.md#ollama)。
 
-Agent 的 Ollama 安装、精确来源配置、回环权限和本机回退地址见 [环境配置](environment.md#ollama)。DeepSeek 入口在回环 Web 页面可选，使用用户自己的密钥和现有 Node 代理。
-
-以下保留首次交付的历史检查与工具说明。
+本轮原始证据位于本机 `.qa/core-work/20261105-https-release/`。真实人体素材、私人审计、密钥和旧交付压缩包留在发布目录之外。以下内容为历史记录。
 
 更新日期：2026-10-31（Asia/Shanghai）。按参赛要求补齐代码仓库资料，由用户自行上传 GitHub。本次不创建提交、不推送，保留当前仓库和原有开发历史。
 

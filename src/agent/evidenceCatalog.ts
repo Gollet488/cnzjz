@@ -87,7 +87,6 @@ function localQualityPaths(result: any): string[] {
       paths.push(`${prefix}/units/angle`, `${prefix}/evidence/limitations/0`);
       for (let i = 0; i < Math.min(value.channels.length, 2); i++) {
         paths.push(`${prefix}/channels/${i}/angle/sampleCount`);
-        if (prefix === '/first' || prefix === '/second') paths.push(`${prefix}/channels/${i}/rom`);
         for (const event of ['minimum', 'maximum'])
           for (const field of ['time', 'value'])
             paths.push(`${prefix}/channels/${i}/events/${event}/${field}`);

@@ -121,6 +121,11 @@ export interface SubmissionEvidenceGap {
     | 'invalid_reference';
   detail?: string;
 }
+export interface SubmissionEvidenceGap {
+  tool: string;
+  labels: string[];
+  reason: 'missing_tool_or_scope' | 'fact_mismatch' | 'missing_citation';
+}
 export interface AgentRun {
   romCard?: RomCardExecution;
   romReview?: FreeRomReview & { confirmation?: FreeRomConfirmation };
@@ -286,12 +291,6 @@ export class AgentRuntime {
   private readonly onAudit?: (audit: RunAudit) => void | Promise<void>;
   private readonly onReady?: (run: AgentRun) => void | Promise<void>;
   private readonly beforeRequest?: () => void;
-  private readonly reviewRom?: (
-    review: FreeRomReview,
-    signal: AbortSignal,
-  ) => Promise<FreeRomConfirmation>;
-  private readonly verifyApplication?: (run: AgentRun) => Promise<void>;
-  private readonly submissionRequirements?: EvidenceRequirement[];
   private readonly submissionEvidence?: (
     run: AgentRun,
     citations: Citation[],
@@ -315,9 +314,6 @@ export class AgentRuntime {
     onReady?: (run: AgentRun) => void | Promise<void>;
     beforeRequest?: () => void;
     submissionEvidence?: AgentRuntime['submissionEvidence'];
-    submissionRequirements?: EvidenceRequirement[];
-    reviewRom?: AgentRuntime['reviewRom'];
-    verifyApplication?: AgentRuntime['verifyApplication'];
     limits?: Partial<AgentRuntime['limits']>;
   }) {
     this.legacy = options.modelProtocol === 'legacy-v2';
@@ -329,9 +325,6 @@ export class AgentRuntime {
     this.onReady = options.onReady;
     this.beforeRequest = options.beforeRequest;
     this.submissionEvidence = options.submissionEvidence;
-    this.submissionRequirements = options.submissionRequirements;
-    this.reviewRom = options.reviewRom;
-    this.verifyApplication = options.verifyApplication;
     this.limits = {
       rounds: 12,
       calls: 24,
@@ -680,7 +673,6 @@ export class AgentRuntime {
           run.phase = `正在校验并执行 ${call.name}`;
           emit();
           let output: ToolResult;
-          let reusedCallId: string | undefined;
           let submissionGaps: SubmissionEvidenceGap[] | undefined;
           let submissionBudget:
             | { submitted: number; maximum: number; minimumReplacements: number }
@@ -847,16 +839,6 @@ export class AgentRuntime {
                   if (record.output.ok) checkEvidence(this.registry, record.output);
               run.completion = checkCompletion(run, citations, this.registry);
               if (['completed', 'not_comparable', 'limited'].includes(p.outcome)) {
-                if (local) {
-                  run.submissionGaps = local.gaps;
-                  submissionGaps = local.gaps.filter((gap) => gap.reason !== 'invalid_reference');
-                  if (submissionGaps.length) {
-                    if (run.completion.state === 'ready') run.completion.state = 'partial';
-                    throw new Error(
-                      'SUBMISSION_EVIDENCE_REQUIRED：按 submissionGaps 补齐本地工具证据。',
-                    );
-                  }
-                }
                 submissionGaps = this.submissionEvidence?.(run, citations);
                 if (submissionGaps?.length) {
                   const missingCitations = submissionGaps.filter(
@@ -1045,7 +1027,6 @@ export class AgentRuntime {
                 ? `${call.name} 已完成，结果将反馈模型`
                 : `${call.name} 被拒绝，正在反馈错误`;
           emit();
-          if (boundRom && !output.ok) throw new Error(output.error.message);
           if (
             !output.ok &&
             (submissionGaps?.length ? ++submissionRecoveries : ++recoveries) >

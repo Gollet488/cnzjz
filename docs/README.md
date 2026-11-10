@@ -11,6 +11,7 @@
 | [系统架构](architecture.md) | 技术栈、模块职责、数据流与部署结构 |
 | [目标需求](../requirement.md) | 产品范围和需求 |
 | [统一执行计划](core-execution-plan.md) | 当前完成度、全部问题、任务重复次数与下一条完整指令 |
+| [已有真实数据与验收基线](real-data-baseline.md) | 原两份视频的固定数据引用、源 PTS/raw/filtered/354 列保护与两个冻结目标 |
 
 ## 技术资料
 

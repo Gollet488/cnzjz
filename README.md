@@ -4,7 +4,7 @@
 
 本项目面向通用人体运动的姿态采集与量化分析，提供本地推理、可追溯数值和 Agent 工具调用。启动、保留 Git 历史的上传步骤和已知限制见 [构建与交付](docs/delivery.md)，参赛要求核对见 [仓库提交清单](docs/submission-checklist.md)，目标需求见 [requirement.md](requirement.md)。
 
-GitHub Pages 目标地址为 [Kinetic Pose Lab](https://gollet488.github.io/cnzjz/)。发布状态见 [Actions](https://github.com/Gollet488/cnzjz/actions)。浏览器内的视频分析、图表和下载可直接使用。启用 Agent 前请按 [Ollama 自部署步骤](docs/environment.md#ollama) 准备本机模型。
+HTTPS 发布候选已推送至 [codex/https-release](https://github.com/Gollet488/cnzjz/tree/codex/https-release)。公开目标为 [Kinetic Pose Lab](https://gollet488.github.io/cnzjz/)，以 Pages 部署状态为准。本机完整 Agent 路径与 Ollama 连接步骤见 [环境配置](docs/environment.md#ollama)。
 
 ## 技术架构
 
@@ -78,7 +78,7 @@ node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case comp
 - `docs`：使用与交付、数据契约、视频和 Agent 技术说明。
 - `.github/workflows`：Windows / Linux 的基础 CI 检查。
 
-当前最多保留 18,000 帧。二维投影、遮挡、视角和置信度会影响指标。双视频对比按各视频源宽高比修正几何距离，约 10 Hz 预览适合目视比较。GitHub Pages 使用 `/cnzjz/`，本机开发和预览使用根路径。
+当前最多保留 18,000 帧。二维投影、遮挡、视角和置信度会影响指标；系统不识别运动种类、不评分、不判断动作对错。双视频对比已接入分析与显示设置，并按各视频源宽高比修正几何距离；目前仍为约 10 Hz 预览，距离不能用于严格序列相似度结论。隔离发布候选适配 GitHub Pages 的 `/cnzjz/`，本机开发和预览继续使用根路径。
 
 ## 团队信息
 

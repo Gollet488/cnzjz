@@ -102,12 +102,13 @@ async function mount(t: any) {
   }).outputText;
   const key = `compareUnit${Math.random().toString(36).slice(2)}`;
   (globalThis as any)[key] = modules;
-  const injected = js
-    .replaceAll('import.meta.env.BASE_URL', '"/"')
-    .replace(/^import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"];?$/gm, (_, bindings, specifier) => {
+  const injected = js.replace(
+    /^import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"];?$/gm,
+    (_, bindings, specifier) => {
       assert.ok(modules[specifier], `Unexpected dependency: ${specifier}`);
       return `const {${bindings.replace(/\s+as\s+/g, ':')}} = globalThis[${JSON.stringify(key)}][${JSON.stringify(specifier)}];`;
-    });
+    },
+  );
   const component = (
     await import(`data:text/javascript;base64,${Buffer.from(injected).toString('base64')}`)
   ).default;
@@ -308,18 +309,14 @@ for (const invalidate of ['parameters', 'source', 'unmount']) {
 
 test('comparison pauses late play promises after invalidation and ignores duplicate starts', async (t) => {
   const q = await mount(t),
-    pending = deferred(),
-    started = deferred();
+    pending = deferred();
   q.videos[1].play = async function () {
-    started.resolve();
     await pending.promise;
     this.paused = false;
   };
   const playing = q.s.play();
-  assert.equal(
-    await Promise.race([started.promise.then(() => true), playing.then(() => false)]),
-    true,
-  );
+  // Wait until both model promises have completed and play() has begun.
+  while (!q.state.models.length || q.videos[0].paused) await Promise.resolve();
   await q.s.play();
   assert.equal(q.state.models.length, 2);
   q.settings.threshold = 0.7;
@@ -333,21 +330,16 @@ test('comparison pauses late play promises after invalidation and ignores duplic
 
 test('comparison keeps start locked until every playback promise settles after one rejects', async (t) => {
   const q = await mount(t),
-    pending = deferred(),
-    started = deferred();
+    pending = deferred();
   q.videos[0].play = async () => {
     throw new Error('play denied');
   };
   q.videos[1].play = async function () {
-    started.resolve();
     await pending.promise;
     this.paused = false;
   };
   const playing = q.s.play();
-  assert.equal(
-    await Promise.race([started.promise.then(() => true), playing.then(() => false)]),
-    true,
-  );
+  while (q.state.models.length < 2) await Promise.resolve();
   for (let i = 0; i < 8; i++) await Promise.resolve();
   assert.equal(q.s.busy, true);
   await q.s.play();

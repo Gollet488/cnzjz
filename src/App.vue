@@ -43,7 +43,7 @@ import TimeChart from './components/TimeChart.vue';
 import MarkerTimeline from './components/MarkerTimeline.vue';
 import PoseCompare from './components/PoseCompare.vue';
 import AgentPanel from './components/AgentPanel.vue';
-import { WorkspaceApplicationError } from './agent/completion.ts';
+import PoseCorrection from './components/PoseCorrection.vue';
 import type { AgentRun } from './agent/runtime.ts';
 import { DEFAULT_SETTINGS, JOINTS, MAX_FRAMES, POINT_NAMES } from './config';
 import { DEMO_SIZE } from './utils/dimensions';
@@ -834,6 +834,8 @@ defineExpose({ analysisTools, sessionInfo });
             ></aside
           >
         </div>
+
+        <PoseCorrection v-show="page === 'workspace'" :frame="latest" />
 
         <div v-if="message && page === 'workspace'" class="status-message"
           ><Info :size="15" />{{ message

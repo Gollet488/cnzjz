@@ -67,7 +67,7 @@ pnpm preview:env
 
    将实际页面的协议、主机和端口填入 `OLLAMA_ORIGINS`，不带 `/cnzjz/` 或末尾斜线。使用开发服务时可改为 `http://127.0.0.1:5173`。变量由 Ollama 启动进程读取。每次修改后重新启动该进程。
 
-2. 在另一终端确认已安装 Qwen2.5-7B-Instruct-1M Q4_K_M。已有匹配权重和标签 `qwen2.5:7b-instruct` 时可直接使用。首次安装时核对 GGUF 的 SHA-256，再创建本机标签。模型清单中的 tools 标记用于初筛，页面连接仍需真实结构化探测。[模型文件](https://huggingface.co/second-state/Qwen2.5-7B-Instruct-1M-GGUF/blob/main/Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf)
+2. 在另一终端安装本轮通过结构化连接探测的 Qwen2.5-7B-Instruct-1M Q4_K_M。下载 GGUF 后核对 SHA-256，再创建本机标签 `qwen2.5:7b-instruct`。该配置的连接探测已通过，完整三轮任务在来源声明校验处停止。模型清单中的 tools 标记用于初筛，页面连接仍需真实结构化探测。[模型文件](https://huggingface.co/second-state/Qwen2.5-7B-Instruct-1M-GGUF/blob/main/Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf)
 
    ```powershell
    $file = 'Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf'
@@ -86,11 +86,9 @@ pnpm preview:env
 
    本轮连接实测使用 Ollama 0.40.13。运行 `ollama list` 可核对标签。安装约需 4.7 GB 模型文件及足够的可用内存。
 
-3. 安装项目依赖后执行 `pnpm build` 和 `pnpm preview --port 4173 --strictPort`。从 `http://127.0.0.1:4173/` 进入「AI Agent 分析」，地址填 `http://127.0.0.1:11434`，点击「读取模型」，选中标签后点击「验证并连接」。Chrome 请求访问回环网络时选择允许。拒绝后可在地址栏的站点设置中重新允许。
+3. 打开 [Pages 站点](https://gollet488.github.io/cnzjz/) 的「AI Agent 分析」。使用 `http://127.0.0.1:11434`，点击「读取模型」。Chrome 请求访问回环网络时选择允许，随后选择模型并点击「验证并连接」。拒绝后可在地址栏的站点设置中重新允许回环网络。
 
-4. 用合成演示验证时，先采集到足够时间再暂停分析。提交目标后核对任务规格中的关节、侧别、口径和前后段，确认实际图表与证据一致，再保存报告或 CSV。任务失败时可在该轮点「保存完整本地审计」，保留实际工具参数和拒绝原因。
-
-2026-11-05 的本机 Chrome 生产预览中，上述固定 Qwen2.5 通过了结构化连接探测和首轮来源声明，并执行了比较和图表工具。首轮把用户给出的绝对后段当成采样末尾 5 秒，未完成引用提交。该配置的三轮报告与 CSV 交付仍待验收。
+4. 如果浏览器或管理策略无法开放回环权限，克隆代码并按本页安装依赖，执行 `pnpm build` 后运行 `pnpm preview --port 4173 --strictPort`，从 `http://127.0.0.1:4173/` 进入 Agent。新会话请在该地址重新导入视频或使用合成演示。
 
 | 现象 | 检查 |
 | --- | --- |

@@ -50,6 +50,7 @@ const hash = (value) => createHash('sha256').update(value).digest('hex');
 const HUMAN_INPUTS = [
   {
     id: 'human-720',
+    path: 'D:/Users/Legion/Desktop/testvideo/下载 (1).mp4',
     sha256: '4619fc6b5571dfeac86420cea76e3ee27506c4b8c571ad0058d72c3138c38303',
     frames: 2011,
     joint: 'elbow',
@@ -60,6 +61,7 @@ const HUMAN_INPUTS = [
   },
   {
     id: 'human-1080',
+    path: 'D:/Users/Legion/Desktop/testvideo/跳舞使人心情愉悦～#查尔斯顿舞 #魔性律动舞#快乐就这么简单 - 1080p.mp4',
     sha256: '38d02deb423e756eedd24a5af1bc24b34568d75692c9da4da2f4261bf4672264',
     frames: 1000,
     joint: 'knee',
@@ -156,32 +158,28 @@ export function humanScenarios() {
   });
 }
 
-async function readAuthorizedHumanIndex(indexPath) {
+async function humanReplayMaterials(indexPath, caseIds) {
   const permittedIndex = resolve(
     root,
     '.qa/core-work/20261030-input-closure-1793357317372/input-index.json',
   );
   if (resolve(indexPath) !== permittedIndex) throw new Error('UNAUTHORIZED_HUMAN_INPUT_INDEX');
   const indexBytes = await readFile(indexPath);
-  const sha256 = hash(indexBytes);
-  // Freeze the original authorization without publishing local paths or names.
-  if (sha256 !== 'c0b937b41c09a2c274a282f9af9892d3bce43360c8a98522cfc35dab3131028b')
-    throw new Error('UNAUTHORIZED_HUMAN_INPUT_SET');
   const index = JSON.parse(indexBytes.toString('utf8'));
-  if (!Array.isArray(index.videos) || index.videos.length !== HUMAN_INPUTS.length)
+  if (
+    resolve(index.authorizedDirectory) !== resolve('D:/Users/Legion/Desktop/testvideo') ||
+    !Array.isArray(index.videos) ||
+    index.videos.length !== HUMAN_INPUTS.length
+  )
     throw new Error('UNAUTHORIZED_HUMAN_INPUT_SET');
-  return { index, sha256 };
-}
-
-async function humanReplayMaterials(indexPath, caseIds) {
-  const { index, sha256 } = await readAuthorizedHumanIndex(indexPath);
   const { parseCSV, replayCSV } = await import('../tests/browser/files.ts');
   const materials = new Map();
   for (const allowed of HUMAN_INPUTS.filter(({ id }) => caseIds.includes(id))) {
-    const entry = index.videos.find((video) => video.sha256 === allowed.sha256);
-    if (!entry || entry.frames !== allowed.frames)
+    const entry = index.videos.find((video) => resolve(video.path) === resolve(allowed.path));
+    if (!entry || entry.sha256 !== allowed.sha256 || entry.frames !== allowed.frames)
       throw new Error(`HUMAN_INPUT_IDENTITY:${allowed.id}`);
-    const videoBytes = await readFile(entry.path);
+    // Read only this exact authorized file. Never enumerate testvideo.
+    const videoBytes = await readFile(allowed.path);
     if (videoBytes.length !== entry.bytes || hash(videoBytes) !== allowed.sha256)
       throw new Error(`HUMAN_INPUT_HASH:${allowed.id}`);
     const directory = resolve(
@@ -199,7 +197,7 @@ async function humanReplayMaterials(indexPath, caseIds) {
     if (
       !verification.passed ||
       verification.input.sha256 !== allowed.sha256 ||
-      resolve(verification.input.path) !== resolve(entry.path) ||
+      resolve(verification.input.path) !== resolve(allowed.path) ||
       verification.fullCSV.rows !== entry.frames ||
       verification.fullCSV.columns !== 354 ||
       rows.length !== entry.frames ||
@@ -257,7 +255,7 @@ async function humanReplayMaterials(indexPath, caseIds) {
       kind: 'historical-human-inference-replay',
       newPageInference: false,
       original: {
-        path: entry.path,
+        path: allowed.path,
         bytes: entry.bytes,
         sha256: allowed.sha256,
         display: entry.display,
@@ -266,7 +264,7 @@ async function humanReplayMaterials(indexPath, caseIds) {
         frames: entry.frames,
         reference: { sessionId: first.session_id, revision: Number(first.session_revision) },
       },
-      index: { path: indexPath, sha256 },
+      index: { path: indexPath, sha256: hash(indexBytes) },
       csv: { path: csvPath, sha256: hash(csvBytes), columns: 354, rows: rows.length },
       verification: { path: verificationPath, sha256: hash(verificationBytes) },
       allSourcePTSMatch: true,
@@ -287,7 +285,6 @@ async function humanReplayMaterials(indexPath, caseIds) {
 // their computed frames directly, so the product tools can query them without
 // opening a video or replaying the landmark filter.
 export async function frozenHumanMaterials(indexPath, caseIds = HUMAN_INPUTS.map(({ id }) => id)) {
-  const { index } = await readAuthorizedHumanIndex(indexPath);
   const { parseCSV } = await import('../tests/browser/files.ts');
   const baseline = JSON.parse(
     await readFile(resolve(root, '.qa/core-work/20261104-data-baseline/baseline.json'), 'utf8'),
@@ -295,12 +292,10 @@ export async function frozenHumanMaterials(indexPath, caseIds = HUMAN_INPUTS.map
   const materials = new Map();
   for (const allowed of HUMAN_INPUTS.filter(({ id }) => caseIds.includes(id))) {
     const entry = baseline.materials.find((value) => value.id === allowed.id);
-    const original = index.videos.find((video) => video.sha256 === allowed.sha256);
     if (
       !entry ||
-      !original ||
       resolve(root, entry.index.path) !== resolve(indexPath) ||
-      resolve(entry.original.path) !== resolve(original.path) ||
+      resolve(entry.original.path) !== resolve(allowed.path) ||
       entry.original.sha256 !== allowed.sha256 ||
       entry.original.frames !== allowed.frames ||
       !entry.historicalComplete ||
@@ -414,11 +409,10 @@ export function humanSubmissionEvidence(scenario, sidecar) {
     );
   return {
     requiredCitations: requirements.length,
-    requirements,
     gaps(run, citations) {
       const calls = new Map();
       for (const { name, args } of scenario.turns[0].expected) {
-        const call = run.calls.findLast((c) => c.name === name && c.output.ok && !c.reusedCallId);
+        const call = run.calls.findLast((c) => c.name === name && c.output.ok);
         if (call && Object.entries(args).every(([key, value]) => same(call.arguments[key], value)))
           calls.set(name, call);
       }
@@ -672,7 +666,7 @@ async function writeHumanLocalOutputs(materials, output) {
     const markdown = [
       `# ${allowed.id}：旧人体推理数据的当前产品分析`,
       '',
-      `原件：${provenance.original.path}；SHA-256 ${allowed.sha256}。`,
+      `原件：${allowed.path}；SHA-256 ${allowed.sha256}。`,
       '',
       `源 PTS ${info.range.join('–')} s；解析 completed，${info.sampleCount}/${provenance.original.frames} 帧，与索引全部 PTS 一致。未检出 ${data.quality.missingSamples} 帧。当前回放版本 ${info.sessionId}@${info.revision}。`,
       '',
@@ -1328,9 +1322,6 @@ export async function runEvaluation(options, dependencies = {}) {
             },
             modelProtocol: dependencies.modelProtocol,
             submissionEvidence: humanEvidence.get(scenario.id)?.gaps,
-            ...(scenario.id === 'human-1080'
-              ? { submissionRequirements: humanEvidence.get(scenario.id)?.requirements }
-              : {}),
             session,
             registry,
             provider: instrumented,

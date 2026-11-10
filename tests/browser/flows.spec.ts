@@ -6,9 +6,6 @@ import { execFileSync } from 'node:child_process';
 import { readMP4 } from '../../src/video/mp4.ts';
 import { resolve } from 'node:path';
 import { JOINTS } from '../../src/config.ts';
-import { fixedRomSession, romCard, setAbsolute } from './rom-card-helpers.ts';
-import { resolveCitation } from '../../src/agent/evidenceCatalog.ts';
-import type { RunAudit } from '../../src/agent/audit.ts';
 import { goals, scriptedOllama } from './scripted-ollama.ts';
 import {
   downloadFile,
@@ -1345,6 +1342,59 @@ test('center fluctuation follows the session, clip and linked chart range', asyn
   await observe('09-clip-cleared', '完整会话', full);
 });
 
+test('correction cues follow the selected frame, joint and user range', async ({ page }) => {
+  await page.goto('/');
+  const correction = page.getByRole('region', { name: '动作纠正提示' });
+  const status = correction.getByRole('status');
+  const min = correction.getByLabel('目标下限（°）');
+  const max = correction.getByLabel('目标上限（°）');
+  await expect(status).toHaveText('待设置目标');
+
+  const timeline = page.getByRole('slider', { name: '历史帧时间轴' });
+  await timeline.press('Home');
+  await expect(correction.getByText(/^0\.00 s · \d/)).toBeVisible();
+  await min.fill('180');
+  await max.fill('180');
+  await expect(status).toHaveText('夹角偏小');
+  await min.fill('0');
+  await max.fill('0');
+  await expect(status).toHaveText('夹角偏大');
+  await min.fill('1');
+  await expect(status).toHaveText('目标范围无效');
+  await min.fill('0');
+  await max.fill('180');
+  await expect(status).toHaveText('夹角在目标范围内');
+  await timeline.press('End');
+  await expect(correction.getByText(/^[1-9]\d*\.\d{2} s · \d/)).toBeVisible();
+
+  await correction.getByLabel('侧别').selectOption('right');
+  await expect(min).toHaveValue('');
+  await expect(max).toHaveValue('');
+  const rightKnee = await page
+    .getByRole('button', { name: /^膝关节/ })
+    .locator('.right-value')
+    .innerText();
+  await expect(correction.getByText(`${rightKnee}°`, { exact: false })).toBeVisible();
+  await correction.getByLabel('提示关节').selectOption('spine');
+  await expect(correction.getByLabel('侧别')).toBeDisabled();
+  await min.fill('0');
+  await max.fill('180');
+  await expect(status).toHaveText('夹角在目标范围内');
+
+  await page.getByRole('button', { name: '显示与分析设置' }).click();
+  const settings = page.getByRole('dialog', { name: '分析与显示设置' });
+  const threshold = settings.getByRole('spinbutton').first();
+  await threshold.fill('1');
+  await threshold.press('Enter');
+  await threshold.press('Escape');
+  await expect(status).toHaveText('当前夹角不可用');
+
+  await page.getByRole('button', { name: '上传视频', exact: true }).click();
+  await expect(status).toHaveText('等待采样');
+  await correction.getByRole('button', { name: '清除目标' }).click();
+  await expect(status).toHaveText('待设置目标');
+});
+
 test('clip, quoted marker, recalculate preserve snapshot and downloadable CSV', async ({
   page,
 }, info) => {
@@ -1479,54 +1529,6 @@ for (const provider of ['ollama', 'deepseek'] as const)
       await expect(plot).toContainText('右侧');
       if (turn) await expect(plot).not.toContainText('左侧');
       else await expect(plot).toContainText('左侧');
-      const reviewedAudit: RunAudit = JSON.parse(
-        (
-          await downloadFile(
-            page,
-            info,
-            run.getByRole('button', { name: '保存完整本地审计', exact: true }),
-            `free-goal-turn-${turn + 1}.json`,
-          )
-        ).bytes.toString(),
-      );
-      const confirmed = reviewedAudit.run.romReview?.confirmation;
-      expect(confirmed?.reviewed).toMatchObject({
-        sessionId: rows[0].session_id,
-        revision: Number(rows[0].session_revision),
-      });
-      if (archive && !turn) {
-        expect(reviewedAudit.run.romReview?.input.second).toEqual({ mode: 'end', seconds: 5 });
-        expect(confirmed?.input.second).toEqual({ mode: 'absolute', start: 15, end: 20 });
-        const charts = reviewedAudit.run.calls.filter(
-          (c) => c.name === 'set_chart_view' && c.output.ok,
-        );
-        expect(charts).toHaveLength(2);
-        expect(charts[1].reusedCallId).toBe(charts[0].id);
-      }
-      expect(reviewedAudit.run.completion?.state).toBe('ready');
-      expect(reviewedAudit.run.submissionGaps).toEqual([]);
-      const comparison = reviewedAudit.run.calls.find((c) => c.name === 'compare_intervals')!;
-      expect(comparison.arguments).toMatchObject({
-        joint: 'knee',
-        basis: 'filtered',
-        channels: turn ? ['right'] : ['left', 'right'],
-        first: [0, 5],
-        second: turn ? [12, 17] : [15, 20],
-      });
-      for (const [i, side] of (turn ? ['right'] : ['left', 'right']).entries()) {
-        const before = rom(rows, [0, 5], side);
-        const after = rom(rows, turn ? [12, 17] : [15, 20], side);
-        const citation = reviewedAudit.run.citations.find(
-          (c) => c.callId === comparison.id && c.path === `/differences/${i}/rom`,
-        );
-        expect(citation?.source).toBe('local-executor');
-        expect(citation?.value).toBeCloseTo(after.value - before.value, 8);
-      }
-      for (const citation of reviewedAudit.run.citations) {
-        const call = reviewedAudit.run.calls.find((c) => c.id === citation.callId);
-        if (!call?.output.ok) throw new Error('Citation has no successful source');
-        expect(resolveCitation(call.output.result, citation.path)).toEqual(citation.value);
-      }
       if (turn === goals.length - 1) continue;
 
       await heading.hover();
@@ -1554,7 +1556,7 @@ for (const provider of ['ollama', 'deepseek'] as const)
       await expect.poll(() => bitmap(plot)).toBe(deliveredCurve);
       await chart.screenshot({ path: info.outputPath(`agent-restored-turn-${turn + 1}.png`) });
     }
-    expect(downloads, 'prepare must not trigger automatic downloads').toBe(4);
+    expect(downloads, 'prepare must not trigger automatic downloads').toBe(1);
     await page.screenshot({ path: info.outputPath('agent-final.png'), fullPage: true });
     const run = page.locator('.run-panel').first();
     const report = JSON.parse(

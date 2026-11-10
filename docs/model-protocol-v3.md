@@ -1,6 +1,6 @@
 # 模型适配协议
 
-实现：`src/agent/modelProtocol.ts`。当前版本为 3.12.0，指令版本为 rom-review-local-evidence。
+实现：`src/agent/modelProtocol.ts`。当前版本为 3.12.0，指令版本为 core-submission-evidence。
 
 请求提供当前会话、当前用户来源、可继承任务、绑定标识和受状态约束的工具。模型必须自行声明目标参数与来源，本地适配器不按运动关键词代填业务意图。
 
@@ -16,10 +16,9 @@
 - 模型字段 schema 直接说明范围与对象的选择条件：全部采样使用现有 sampled，比较最终视图可选现有 comparison；可空 comparison/view/export 将 null 分支置前，不增加别名或可省略字段。接受前核对非空 comparison 必须对应 goalTypes 的 comparison 或 deliveries.report=true；否则 TASK_SPEC_ANALYSIS_CONFLICT，unresolved 不能绕过。模型自行依据原文重新声明，不自动删意图或补参数。显式混合分析、比较报告及真正缺参仍受支持；此一致性检查不证明模型理解了用户，也不能发现所有内部一致但语义错误的额外交付或范围。
 - 业务工具只传本轮 taskRef（schema 枚举当前标识），绑定模型已声明并接受的规格。适配器冻结会话与版本；重复传业务参数、sessionId 或 revision 一律拒绝，不静默覆盖。底层本地工具仍要求完整参数与版本。
 - inspect_result：callId 枚举本轮成功调用，path 枚举真实目录与已展开子树中的路径；模型自行选择调用、路径和页。枚举为多个调用的并集，执行时仍核对该调用真实存在此路径，不重写错误路径。深层字段可从父路径逐层读取，分页 limit 1–32，重复读取不创造新事实。
-- 两段 ROM 网页自由目标在规格通过结构、来源和保留检查后暂停。任务卡以原始选择和当前展开区间供用户审阅，确认时再查会话版本。审计的 romReview 保存模型建议、用户确认和选择类型，task.spec 保存实际工具绑定。用户在表单修改的字段以该次确认作为来源。等待审阅单列为 manualWaitMs。
-- finish_analysis 的提交上限仍为 20 项。网页已确认的两段 ROM 和冻结 1080 由本地从当前工具结果组装必需引用。模型用 messageCode 选择说明，可用 citations 选择补充证据，必需引用优先。旧 ID 和无效补充不作为证据，审计记录 invalid_reference。1080 保留原 20 项、冻结值及额外独立验收。其他任务沿用原来的模型引用和 submissionBudget 检查。
+- finish_analysis 最多接受 20 项本轮 evidenceId。availableEvidence 汇集每种工具最新成功调用的任务目录，模型从中选择引用。冻结人体评测的 submissionGaps 列出提交缺项及其工具和标签。若提交已占用部分或全部预算，submissionBudget.minimumReplacements 给出为已有缺项腾出位置至少需移除的引用数。模型自行修订完整引用列表，可在同一运行内重新提交。旧调用的目录仍可通过 inspect_result 读取。
 
-完整工具结果留在审计，后续模型请求使用有界投影、任务证据目录和最近错误。inspectedPages 从本轮真实成功调用去重索引已读 callId/path/start/limit；不同页不合并，重复页不新增事实。每次模型请求前重新核对 completion。使用本地引用的任务会同时检查缺失事实、版本、任务范围、实际视图和可用成果。submissionGaps 记录工具、字段及原因。报告和 CSV 的句柄只证明已准备。get_session_info 是结束前提，模型仍负责实际调用；未提供的工具不能被提前执行。冻结评测的提交证据拒绝单独计恢复次数，仍受整轮请求及工具调用上限约束。
+完整工具结果留在审计，后续模型请求使用有界投影、任务证据目录和最近错误。inspectedPages 从本轮真实成功调用去重索引已读 callId/path/start/limit；不同页不合并，重复页不新增事实。每次模型请求前重新核对 completion，引用为空时已计算目标仍可缺少最终引用，不表示无需引用或自动成功。get_session_info 是结束前提，模型仍负责实际调用；未提供的工具不能被提前执行。冻结评测的提交证据拒绝单独计恢复次数，仍受整轮请求及工具调用上限约束。
 
 完全相同的工具、原始参数和错误只在模型历史投影一次，选择最近两类不同拒绝，rejection 保留每次 callId 和 attempts；错误不同或参数不同仍分别保留。原始审计与恢复计数不去重，不修改 sources。结构有效但被拒的 set_task_spec 另投影 scopeReview：实际声明的前段/后段/视图区间、是否等于全部采样、是否覆盖两段及原始 unresolved。来源拒绝不能掩盖范围问题；范围关系通过也不证明用户语义正确。不对错误区间或 unresolved 做静默修复。
 
