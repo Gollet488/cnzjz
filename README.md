@@ -35,7 +35,7 @@ pnpm dev
 3. 本地视频支持 MP4、MOV、MKV、AVI、WebM、FLV、WMV、MPEG、TS、3GP、OGV 等容器，不按扩展名拒绝文件。可直接分析的 H.264 视频保留原流程；其他输入自动使用本地 FFmpeg WebAssembly 转为 H.264 后分析，双视频对比使用同一流程。转换资源随 `prepare:assets` 准备，无需上传视频或连接 CDN。支持范围仍受实际编码、文件完整性与设备内存限制；加密文件无法保证支持。单文件最高 500 MB；转换可能耗时较长，可取消，转换结果缩放至不超过 1920×1080，时间轴与完整性以转换后视频为准。CSV 的 `acquisition_mode=webcodecs-transcoded` 标识转换流程。
 4. 分析页可选关节、raw/filtered、区间与关键点，查看角度、速度、轨迹和左右差异。
 5. 导出页保存 CSV 或 PNG；CSV 支持取消和进度，支持原生文件写入时使用文件流，否则使用内存 Blob。
-6. Agent 页选择模型服务，先“验证并连接”，再提交目标。Ollama 使用本机地址和已安装且支持 tools 的模型；DeepSeek 使用本项目的本机开发/预览代理和 Node 环境中的 `DEEPSEEK_API_KEY`。
+6. 在 Agent 页使用两段 ROM 比较任务卡，手动填参或在连接后让模型草拟，核对后确认运行。自由目标入口可在验证并连接模型后使用。改段和保存步骤见 [Agent 工作台指南](docs/agent-workbench.md)。
 
 视频、画面、关键点推理和数值计算留在浏览器。Agent 会向所选模型发送指令和必要的有界工具反馈；选择 DeepSeek 时，这些文本和分析反馈会经本机代理发送到官方 API，密钥只由 Node 读取。页面不接收密钥；不要将密钥写入源码。Ollama 需允许页面来源跨域访问；Node 连接成功不代表浏览器 CORS 已通过。
 

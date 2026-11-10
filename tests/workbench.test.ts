@@ -923,7 +923,7 @@ test('evaluation wall budget aborts an in-flight request and retains its unknown
       '--model',
       'not-real',
       '--max-business-ms',
-      '25',
+      '1000',
       '--output',
       await outputPath(),
     ]),

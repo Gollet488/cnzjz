@@ -1,3 +1,4 @@
+import { reviewExpectedFreeGoal } from './rom-card-helpers.ts';
 // Real production UI + official API; no request mocking or session injection.
 import { test, expect } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -156,6 +157,7 @@ test('REAL DeepSeek three turns and saved report/CSV, bounded fixed configuratio
         await page.getByRole('button', { name: '执行目标', exact: true }).click();
         const panel = page.locator('.run-panel').first();
         await expect(panel.locator('h3').first()).toHaveText(goal);
+        await reviewExpectedFreeGoal(page, index);
         await expect(panel.locator('.run-status')).not.toHaveText('执行中', { timeout: 125000 });
         await expect(
           panel.getByRole('button', { name: '保存完整本地审计', exact: true }),

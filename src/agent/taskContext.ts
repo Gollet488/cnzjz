@@ -3,6 +3,7 @@ import type { Schema } from '../analysis/schema.ts';
 import type { SessionInfo } from '../analysis/session.ts';
 import { same, taskSpecSchema, validateTaskSpec } from './taskSpec.ts';
 import type { TaskSpec, TaskUnderstanding } from './taskSpec.ts';
+import type { FreeRomInput } from './freeRomReview.ts';
 
 export const TASK_CONTEXT_VERSION = '1.1.0';
 export const CONTEXT_LIMITS = {
@@ -159,6 +160,7 @@ export function unavailableTaskFields(spec: TaskSpec, session: SessionInfo): str
 
 export class TaskContext {
   private task?: TaskUnderstanding;
+  private romInput?: FreeRomInput;
   private pending: {
     runId: string;
     goal: string;
@@ -170,6 +172,9 @@ export class TaskContext {
 
   get previousTask() {
     return this.task ? structuredClone(this.task) : undefined;
+  }
+  get previousRomInput() {
+    return this.romInput ? structuredClone(this.romInput) : undefined;
   }
   snapshot(session: SessionInfo) {
     return structuredClone({
@@ -201,7 +206,7 @@ export class TaskContext {
     this.pending.push(intent);
     this.turns++;
   }
-  accept(task: TaskUnderstanding, session: SessionInfo) {
+  accept(task: TaskUnderstanding, session: SessionInfo, romInput?: FreeRomInput) {
     checkTaskRetention(task.spec, this.task, this.pending);
     const consumed = new Set(task.spec.sources.map((source) => source.fromRunId));
     const pending = this.pending.filter(
@@ -210,6 +215,7 @@ export class TaskContext {
     if (jsonBytes({ task, feedback: this.feedback, pending }) > CONTEXT_LIMITS.intentBytes - 1000)
       throw new Error('TASK_CONTEXT_LIMIT：规格过大；请缩小本轮要求或清空上下文。');
     this.task = structuredClone(task);
+    this.romInput = romInput ? structuredClone(romInput) : undefined;
     this.pending = pending;
     this.reference = { sessionId: session.sessionId, revision: session.revision };
   }

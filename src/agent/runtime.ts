@@ -1,8 +1,8 @@
 import type { AnalysisSession, SessionInfo, SessionReference } from '../analysis/session.ts';
 import type { createToolRegistry, ToolDefinition, ToolResult } from '../analysis/tools.ts';
 import { array, boolean, enumeration, object, SchemaError, validate } from '../analysis/schema.ts';
-import type { ModelMessage, ModelProvider } from './provider.ts';
-import { ProviderResponseError } from './provider.ts';
+import type { ModelCall, ModelMessage, ModelProvider, ModelReply } from './provider.ts';
+import { abortable, ProviderResponseError } from './provider.ts';
 import {
   taskSpecSchema,
   taskUnderstandingSchema,
@@ -13,7 +13,7 @@ import {
   TaskSpecSourceError,
 } from './taskSpec.ts';
 import type { TaskUnderstanding } from './taskSpec.ts';
-import { checkCompletion, completionSchema } from './completion.ts';
+import { checkCompletion, completionSchema, WorkspaceApplicationError } from './completion.ts';
 import type { CompletionCheck } from './completion.ts';
 import {
   AGENT_PROTOCOL_VERSION,
@@ -48,6 +48,7 @@ import {
   MODEL_SYSTEM_PROMPT,
   MODEL_PROTOCOL_SCHEMAS,
   modelGoalTypes,
+  taskToolArguments,
   compactModelFeedback,
 } from './modelProtocol.ts';
 export { resolveCitation } from './evidenceCatalog.ts';
@@ -59,6 +60,21 @@ async function protocolDigest(value: unknown) {
   );
   return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+import { confirmedFreeRomSpec, freeRomReview, isRomComparison } from './freeRomReview.ts';
+import type { FreeRomConfirmation, FreeRomReview } from './freeRomReview.ts';
+import { assembleEvidence, romEvidenceRequirements } from './submissionEvidence.ts';
+import type { EvidenceRequirement } from './submissionEvidence.ts';
+import { same } from './taskSpec.ts';
+import type { RomCardExecution } from './romTaskCard.ts';
+import {
+  bindRomIntent,
+  parseRomIntent,
+  ROM_INTENT_PROMPT,
+  ROM_INTENT_TOOL,
+  romIntentMessages,
+  verifyRomIntent,
+} from './romIntent.ts';
 
 export type RunStatus =
   | 'running'
@@ -77,6 +93,8 @@ export interface CallRecord {
   name: string;
   arguments: unknown;
   modelArguments?: unknown;
+  source?: 'local-executor';
+  reusedCallId?: string;
   output: ToolResult;
   elapsedMs?: number;
   evidenceCatalog?: EvidenceCatalog;
@@ -86,6 +104,22 @@ export interface Citation {
   callId: string;
   path: string;
   value: string | number | boolean | null;
+  source?: 'browser-local-workflow' | 'local-executor';
+}
+export interface SubmissionEvidenceGap {
+  tool: string;
+  labels: string[];
+  reason:
+    | 'missing_tool_or_scope'
+    | 'fact_mismatch'
+    | 'missing_citation'
+    | 'fact_missing'
+    | 'parameter_mismatch'
+    | 'stale_evidence'
+    | 'view_not_applied'
+    | 'artifact_not_ready'
+    | 'invalid_reference';
+  detail?: string;
 }
 export interface SubmissionEvidenceGap {
   tool: string;
@@ -93,6 +127,10 @@ export interface SubmissionEvidenceGap {
   reason: 'missing_tool_or_scope' | 'fact_mismatch' | 'missing_citation';
 }
 export interface AgentRun {
+  romCard?: RomCardExecution;
+  romReview?: FreeRomReview & { confirmation?: FreeRomConfirmation };
+  submissionGaps?: SubmissionEvidenceGap[];
+  localSubmission?: true;
   protocolVersion?: typeof AGENT_PROTOCOL_VERSION;
   modelProtocolVersion?: string;
   protocolFingerprint?: string;
@@ -207,7 +245,7 @@ export function checkedText(text: string, max: number) {
     );
 }
 
-function checkEvidence(registry: ReturnType<typeof createToolRegistry>, output: ToolResult) {
+export function checkEvidence(registry: ReturnType<typeof createToolRegistry>, output: ToolResult) {
   if (
     !output.ok ||
     [
@@ -237,21 +275,6 @@ function checkEvidence(registry: ReturnType<typeof createToolRegistry>, output: 
         registry.validateEvidence(result.comparison.second.evidence);
       }
     }
-  }
-}
-
-// Abort races include providers that ignore signals; late replies cannot commit.
-async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw new Error(String(signal.reason));
-  let listener: () => void = () => {};
-  const stopped = new Promise<never>((_, reject) => {
-    listener = () => reject(new Error(String(signal.reason)));
-    signal.addEventListener('abort', listener, { once: true });
-  });
-  try {
-    return await Promise.race([work, stopped]);
-  } finally {
-    signal.removeEventListener('abort', listener);
   }
 }
 
@@ -341,6 +364,7 @@ export class AgentRuntime {
     const context = this.context;
     const conversationCosts = this.costs;
     const previousTask = context.previousTask;
+    const previousRom = context.previousRomInput;
     const contextSnapshot = context.snapshot(reference);
     const runId = crypto.randomUUID();
     context.begin(runId, goal.trim(), reference);
@@ -367,9 +391,18 @@ export class AgentRuntime {
       usage: { inputTokens: null, outputTokens: null, reportedRequests: 0 },
       context: contextSnapshot,
       requests: [],
+      ...(this.submissionRequirements ? { localSubmission: true as const } : {}),
       conversationId: this.conversationId,
     };
     const definitions = [...this.registry.definitions, ...CONTROL_TOOLS];
+    const romIntent =
+      !this.legacy &&
+      this.reviewRom &&
+      ['ollama-local', 'deepseek-api'].includes(this.provider.id) &&
+      (!previousTask || previousRom)
+        ? parseRomIntent(run.goal, previousRom)
+        : undefined;
+    if (romIntent) definitions.push(ROM_INTENT_TOOL);
     const adapter = this.legacy
       ? undefined
       : new ModelProtocolAdapter(
@@ -384,7 +417,7 @@ export class AgentRuntime {
       run.protocolFingerprint = await protocolDigest({
         version: MODEL_PROTOCOL_VERSION,
         instructions: MODEL_INSTRUCTION_VERSION,
-        prompt: MODEL_SYSTEM_PROMPT,
+        prompt: romIntent ? ROM_INTENT_PROMPT : MODEL_SYSTEM_PROMPT,
         schemas: MODEL_PROTOCOL_SCHEMAS,
         definitions,
       });
@@ -418,7 +451,25 @@ export class AgentRuntime {
       },
     ];
     let correction: ModelMessage | undefined;
-    const timer = setTimeout(() => controller.abort('timeout'), this.limits.timeoutMs);
+    let deadline = performance.now() + this.limits.timeoutMs;
+    let timer = setTimeout(() => controller.abort('timeout'), this.limits.timeoutMs);
+    const localEvidence = () => {
+      if (!run.task) return;
+      const requirements =
+        this.submissionRequirements ??
+        (run.romReview?.confirmation ? romEvidenceRequirements(run) : undefined);
+      if (!requirements) return;
+      const local = assembleEvidence(run, this.registry, requirements, (output) =>
+        checkEvidence(this.registry, output),
+      );
+      if (!run.calls.some((call) => call.name === 'get_session_info' && call.output.ok))
+        local.gaps.push({
+          tool: 'get_session_info',
+          labels: ['sessionId', 'revision'],
+          reason: 'missing_tool_or_scope',
+        });
+      return local;
+    };
     // External non-UI clients can change the session too; abort pending requests.
     const monitor = setInterval(() => {
       try {
@@ -432,34 +483,58 @@ export class AgentRuntime {
       callCount = 0;
     try {
       emit();
+      if (romIntent && previousTask && contextSnapshot.referenceChanged)
+        throw new Error('STALE_SESSION');
+      const boundRom =
+        romIntent &&
+        bindRomIntent(
+          romIntent,
+          run.goal,
+          reference,
+          this.session.frames,
+          previousTask && previousRom ? { task: previousTask, input: previousRom } : undefined,
+        );
       while (run.rounds < this.limits.rounds) {
         assertActive();
-        if (adapter && run.task)
-          run.completion = checkCompletion(run, run.citations, this.registry);
-        const messages: ModelMessage[] = [
-          ...(adapter
-            ? [
-                { role: 'system' as const, content: MODEL_SYSTEM_PROMPT },
-                {
-                  role: 'user' as const,
-                  content: JSON.stringify({
-                    ...adapter.context(run),
-                    acceptedTask: run.task
-                      ? {
-                          ...run.task.spec,
-                          goalTypes: modelGoalTypes(run.task.spec.goalTypes),
-                          sources: undefined,
-                        }
-                      : null,
-                    protocolFingerprint: run.protocolFingerprint,
-                  }),
-                },
-              ]
-            : baseMessages),
-          ...(adapter ? compactModelFeedback(run) : selectFeedback(run.calls, run.completion)),
-          ...(correction ? [correction] : []),
-        ];
-        const offered = adapter ? adapter.tools(run, definitions) : definitions;
+        if (adapter && run.task) {
+          const local = localEvidence();
+          run.completion = checkCompletion(run, local?.citations ?? run.citations, this.registry);
+          if (local) {
+            run.submissionGaps = local.gaps;
+            if (local.gaps.length && run.completion.state === 'ready')
+              run.completion.state = 'partial';
+          }
+        }
+        const messages: ModelMessage[] = boundRom
+          ? romIntentMessages(boundRom)
+          : [
+              ...(adapter
+                ? [
+                    { role: 'system' as const, content: MODEL_SYSTEM_PROMPT },
+                    {
+                      role: 'user' as const,
+                      content: JSON.stringify({
+                        ...adapter.context(run),
+                        acceptedTask: run.task
+                          ? {
+                              ...run.task.spec,
+                              goalTypes: modelGoalTypes(run.task.spec.goalTypes),
+                              sources: undefined,
+                            }
+                          : null,
+                        protocolFingerprint: run.protocolFingerprint,
+                      }),
+                    },
+                  ]
+                : baseMessages),
+              ...(adapter ? compactModelFeedback(run) : selectFeedback(run.calls, run.completion)),
+              ...(correction ? [correction] : []),
+            ];
+        const offered = boundRom
+          ? [ROM_INTENT_TOOL]
+          : adapter
+            ? adapter.tools(run, definitions)
+            : definitions;
         const input = { messages, tools: offered };
         const toolFingerprint = adapter ? await protocolDigest(offered) : undefined;
         assertActive();
@@ -498,7 +573,7 @@ export class AgentRuntime {
         audit.requests.push(requestAudit);
         const requestedAt = performance.now();
         const requestTimer = setTimeout(() => controller.abort('timeout'), this.limits.requestMs);
-        let reply;
+        let reply: ModelReply;
         try {
           assertActive();
           reply = await abortable(
@@ -527,6 +602,7 @@ export class AgentRuntime {
         }
         run.rounds++;
         assertActive();
+        if (boundRom) verifyRomIntent(reply.calls, boundRom, this.session.info());
         if (!reply.calls.length) {
           if (++recoveries > this.limits.recoveries) throw new Error('RECOVERY_LIMIT');
           correction = {
@@ -547,10 +623,52 @@ export class AgentRuntime {
           };
           continue;
         }
-        for (const modelCall of reply.calls) {
+        function* confirmedRomCalls(): Generator<{ modelCall: ModelCall; local: boolean }> {
+          yield { modelCall: reply.calls[0], local: false };
+          const spec = run.task!.spec;
+          const params = taskToolArguments(spec);
+          yield { modelCall: { name: 'get_session_info', arguments: {} }, local: true };
+          const names = ['compare_intervals'];
+          if (spec.goalTypes.includes('metrics')) names.push('query_metrics');
+          if (spec.goalTypes.includes('quality')) names.push('get_quality_summary');
+          if (spec.deliveries.view) names.push('set_chart_view');
+          if (spec.time !== null) names.push('seek_to_time');
+          if (spec.deliveries.report) names.push('prepare_report');
+          if (spec.deliveries.export) names.push('prepare_export');
+          for (const name of names)
+            yield {
+              modelCall: {
+                name,
+                arguments: {
+                  sessionId: reference.sessionId,
+                  revision: reference.revision,
+                  ...(params[name] as object),
+                },
+              },
+              local: true,
+            };
+          const state = checkCompletion(run, localEvidence()?.citations ?? [], registry).state;
+          const limited = state === 'not_comparable';
+          yield {
+            modelCall: {
+              name: 'finish_analysis',
+              arguments: {
+                outcome: limited ? 'not_comparable' : 'completed',
+                messageCode: limited ? 'comparison_limited' : 'evidence_ready',
+                citations: [],
+              },
+            },
+            local: true,
+          };
+        }
+        const registry = this.registry;
+        const work = boundRom
+          ? confirmedRomCalls()
+          : reply.calls.map((modelCall) => ({ modelCall, local: false }));
+        for (const { modelCall, local } of work) {
           let call = modelCall;
           assertActive();
-          callCount++;
+          if (++callCount > this.limits.calls) throw new Error('CALL_LIMIT');
           const id = `${run.id.slice(0, 8)}-c${callCount}`;
           run.phase = `正在校验并执行 ${call.name}`;
           emit();
@@ -560,28 +678,35 @@ export class AgentRuntime {
             | { submitted: number; maximum: number; minimumReplacements: number }
             | undefined;
           const toolStarted = performance.now();
+          const previousManualWait = timing.manualWaitMs;
           try {
-            if (adapter)
+            if (adapter && !boundRom)
               call = { name: modelCall.name, arguments: adapter.expand(modelCall, run, offered) };
             const control = CONTROL_TOOLS.find((t) => t.name === call.name);
             if (control) validate(control.inputSchema, call.arguments);
-            if (call.name === 'set_task_spec' || call.name === 'set_task_patch') {
+            if (
+              call.name === ROM_INTENT_TOOL.name ||
+              call.name === 'set_task_spec' ||
+              call.name === 'set_task_patch'
+            ) {
               if (run.task)
                 throw new Error('TASK_SPEC_LOCKED：本轮已接受规格；更正理解需用户发起新目标。');
-              const spec =
-                call.name === 'set_task_patch'
-                  ? applyTaskPatch(
-                      call.arguments,
-                      run.goal,
-                      previousTask,
-                      contextSnapshot.pendingUserIntents,
-                    )
-                  : validateTaskSpec(
-                      call.arguments,
-                      run.goal,
-                      previousTask,
-                      contextSnapshot.pendingUserIntents,
-                    );
+              let spec =
+                call.name === ROM_INTENT_TOOL.name && boundRom
+                  ? boundRom.review.proposed
+                  : call.name === 'set_task_patch'
+                    ? applyTaskPatch(
+                        call.arguments,
+                        run.goal,
+                        previousTask,
+                        contextSnapshot.pendingUserIntents,
+                      )
+                    : validateTaskSpec(
+                        call.arguments,
+                        run.goal,
+                        previousTask,
+                        contextSnapshot.pendingUserIntents,
+                      );
               if (adapter) {
                 checkTaskRetention(spec, previousTask, contextSnapshot.pendingUserIntents);
                 validateTaskAnalysis(spec);
@@ -593,13 +718,52 @@ export class AgentRuntime {
                     `TASK_SPEC_INCOMPLETE:${JSON.stringify(undeclared)}：尚未接受或锁定。先核对分析目标是否符合用户要求；质量和缺失本身不要求角度统计。保留真实要求，真正缺少的必要字段才列入 unresolved；不要因模型自加目标而报告用户缺参。`,
                   );
               }
+              const review =
+                boundRom?.review ??
+                (adapter &&
+                  this.reviewRom &&
+                  freeRomReview(run.goal, reference, spec, modelCall.arguments));
+              if (review && this.reviewRom) {
+                run.romReview = review;
+                run.phase = '请在两段 ROM 任务卡核对并确认参数';
+                emit();
+                const started = performance.now();
+                const remaining = Math.max(0, deadline - started);
+                clearTimeout(timer);
+                let confirmation: FreeRomConfirmation;
+                try {
+                  confirmation = await abortable(
+                    this.reviewRom(structuredClone(review), controller.signal),
+                    controller.signal,
+                  );
+                  assertActive();
+                } finally {
+                  timing.manualWaitMs += performance.now() - started;
+                  deadline = performance.now() + remaining;
+                  timer = setTimeout(() => controller.abort('timeout'), remaining);
+                }
+                spec = confirmedFreeRomSpec(
+                  review,
+                  confirmation,
+                  this.session.info(),
+                  this.session.frames,
+                  previousTask,
+                  contextSnapshot.pendingUserIntents,
+                );
+                validateTaskAnalysis(spec);
+                run.romReview.confirmation = structuredClone(confirmation);
+              }
               const task: TaskUnderstanding = {
                 runId: run.id,
                 goal: run.goal,
                 spec,
                 validation: 'structure_and_provenance_only',
               };
-              context.accept(task, reference);
+              context.accept(
+                task,
+                reference,
+                boundRom ? run.romReview?.confirmation?.input : undefined,
+              );
               run.task = task;
               run.completion = checkCompletion(run, [], this.registry);
               output = {
@@ -623,13 +787,39 @@ export class AgentRuntime {
                 messageCode: MessageCode;
                 citations: { evidenceId: string }[];
               };
-              const citations = p.citations.map((citation) => {
-                const resolved = directory.resolve(citation.evidenceId, run);
-                const record = run.calls.find((c) => c.id === resolved.callId);
-                if (!record?.output.ok) throw new Error('INVALID_CITATION_CALL');
-                checkEvidence(this.registry, record.output);
-                return resolved;
+              const local = localEvidence();
+              const optional = p.citations.flatMap((citation) => {
+                try {
+                  const resolved = directory.resolve(citation.evidenceId, run);
+                  const record = run.calls.find((c) => c.id === resolved.callId);
+                  if (!record?.output.ok) throw new Error('INVALID_CITATION_CALL');
+                  checkEvidence(this.registry, record.output);
+                  return [resolved];
+                } catch (error) {
+                  if (!local) throw error;
+                  const detail = error instanceof Error ? error.message : String(error);
+                  local.gaps.push({
+                    tool: 'finish_analysis',
+                    labels: [citation.evidenceId],
+                    reason: 'invalid_reference',
+                    detail,
+                  });
+                  return [];
+                }
               });
+              const citations = local
+                ? [
+                    ...new Map(
+                      [...optional, ...local.citations].map((c) => [c.callId + c.path, c]),
+                    ).values(),
+                  ]
+                    .sort(
+                      (a, b) =>
+                        Number(b.source === 'local-executor') -
+                        Number(a.source === 'local-executor'),
+                    )
+                    .slice(0, MAX_FINAL_CITATIONS)
+                : optional;
               if (!run.calls.some((c) => c.name === 'get_session_info' && c.output.ok))
                 throw new Error(
                   'READ_SESSION_FIRST：finish_analysis 前必须显式调用 get_session_info。',
@@ -644,8 +834,9 @@ export class AgentRuntime {
                 throw new Error(
                   'INTENT_RANGE_UNAVAILABLE：保留区间超出当前采样范围，请澄清，不静默裁剪。',
                 );
-              for (const record of run.calls)
-                if (record.output.ok) checkEvidence(this.registry, record.output);
+              if (!local)
+                for (const record of run.calls)
+                  if (record.output.ok) checkEvidence(this.registry, record.output);
               run.completion = checkCompletion(run, citations, this.registry);
               if (['completed', 'not_comparable', 'limited'].includes(p.outcome)) {
                 submissionGaps = this.submissionEvidence?.(run, citations);
@@ -674,7 +865,56 @@ export class AgentRuntime {
                 throw new Error('NOT_COMPARABLE_EVIDENCE_REQUIRED');
               if (p.outcome === 'partial' && !run.completion.satisfied.length)
                 throw new Error('PARTIAL_EVIDENCE_REQUIRED：尚无匹配任务的已满足条件。');
+              if (
+                local &&
+                this.verifyApplication &&
+                ['completed', 'not_comparable', 'limited'].includes(p.outcome)
+              ) {
+                try {
+                  await abortable(this.verifyApplication(run), controller.signal);
+                  assertActive();
+                  const checked = localEvidence()!;
+                  if (checked.gaps.length) {
+                    submissionGaps = run.submissionGaps = checked.gaps;
+                    throw new Error('SUBMISSION_EVIDENCE_REQUIRED');
+                  }
+                } catch (error) {
+                  assertActive();
+                  if (!submissionGaps?.length) {
+                    const tool =
+                      error instanceof WorkspaceApplicationError ? error.tool : 'workspace';
+                    const artifact = tool === 'prepare_report' || tool === 'prepare_export';
+                    submissionGaps = run.submissionGaps = [
+                      {
+                        tool,
+                        labels: [artifact ? 'handle' : 'application'],
+                        reason: artifact ? 'artifact_not_ready' : 'view_not_applied',
+                        detail: error instanceof Error ? error.message : String(error),
+                      },
+                    ];
+                  }
+                  run.completion = checkCompletion(run, citations, this.registry);
+                  for (const gap of submissionGaps) {
+                    const name = {
+                      set_chart_view: 'view',
+                      prepare_report: 'report',
+                      prepare_export: 'export',
+                    }[gap.tool];
+                    if (name && run.completion.satisfied.includes(name)) {
+                      run.completion.satisfied = run.completion.satisfied.filter(
+                        (item) => item !== name,
+                      );
+                      run.completion.missing.push(name);
+                    }
+                  }
+                  if (run.completion.state === 'ready') run.completion.state = 'partial';
+                  throw new Error('WORKSPACE_APPLICATION_REQUIRED：图表或成果核对失败。', {
+                    cause: error,
+                  });
+                }
+              }
               assertActive();
+              if (local) run.submissionGaps = local.gaps;
               run.citations = citations;
               run.message = MESSAGE_TEXT[p.messageCode];
               run.status =
@@ -694,7 +934,35 @@ export class AgentRuntime {
                 throw new Error(
                   'INTENT_RANGE_UNAVAILABLE：保留区间在当前来源不可用，请澄清，不执行裁剪后的查询或写入。',
                 );
-              output = this.registry.execute(call.name, call.arguments);
+              if (
+                this.reviewRom &&
+                run.task &&
+                isRomComparison(run.task.spec) &&
+                !run.romReview?.confirmation &&
+                call.name !== 'get_session_info'
+              )
+                throw new Error('ROM_CONFIRMATION_REQUIRED：请先补齐参数并确认。');
+              const last =
+                (run.romReview?.confirmation || run.localSubmission) &&
+                call.name === 'set_chart_view'
+                  ? [...run.calls]
+                      .reverse()
+                      .find(
+                        (record) =>
+                          record.name === call.name && record.output.ok && !record.reusedCallId,
+                      )
+                  : undefined;
+              if (
+                last?.output.ok &&
+                same(last.arguments, call.arguments) &&
+                same(
+                  (last.output.result as { view: unknown }).view,
+                  this.registry.readWorkspace().chart,
+                )
+              ) {
+                reusedCallId = last.id;
+                output = last.output;
+              } else output = this.registry.execute(call.name, call.arguments);
               checkEvidence(this.registry, output);
             }
             if (control && output.ok) validate(control.outputSchema, output.result);
@@ -720,23 +988,31 @@ export class AgentRuntime {
               },
             };
           }
-          const toolMs = performance.now() - toolStarted;
+          const toolMs = Math.max(
+            0,
+            performance.now() - toolStarted - (timing.manualWaitMs - previousManualWait),
+          );
           timing.toolMs += toolMs;
           assertActive();
           const record = {
             id,
             name: call.name,
             arguments: structuredClone(call.arguments ?? null),
-            ...(adapter ? { modelArguments: structuredClone(modelCall.arguments ?? null) } : {}),
+            ...(local
+              ? { source: 'local-executor' as const }
+              : adapter
+                ? { modelArguments: structuredClone(modelCall.arguments ?? null) }
+                : {}),
             output,
+            ...(reusedCallId ? { reusedCallId } : {}),
             elapsedMs: toolMs,
-            ...(output.ok && call.name !== 'inspect_result'
+            ...(output.ok && !reusedCallId && call.name !== 'inspect_result'
               ? {
                   evidenceCatalog: directory.add(
                     id,
                     // Model-understood TaskSpec numbers are not measured facts.
                     // Its acceptance flag is the only citable control scalar.
-                    ['set_task_spec', 'set_task_patch'].includes(call.name)
+                    ['set_task_spec', 'set_task_patch', ROM_INTENT_TOOL.name].includes(call.name)
                       ? { accepted: (output.result as { accepted: boolean }).accepted }
                       : output.result,
                   ),
@@ -744,9 +1020,12 @@ export class AgentRuntime {
               : {}),
           };
           run.calls.push(record);
-          run.phase = output.ok
-            ? `${call.name} 已完成，结果将反馈模型`
-            : `${call.name} 被拒绝，正在反馈错误`;
+          run.phase =
+            output.ok && boundRom
+              ? `${call.name} 已完成`
+              : output.ok
+                ? `${call.name} 已完成，结果将反馈模型`
+                : `${call.name} 被拒绝，正在反馈错误`;
           emit();
           if (
             !output.ok &&

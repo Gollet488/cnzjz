@@ -1,15 +1,16 @@
 // Classic worker: MediaPipe 0.10.32 loads its WASM glue with importScripts.
 // The installed CJS distribution exposes exports; no CDN or eval shim is used.
 self.exports = {};
-importScripts('/mediapipe/vision_bundle.js');
+const assets = new URL('./mediapipe/', self.location.href).href;
+importScripts(`${assets}vision_bundle.js`);
 let engine;
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === 'init') {
-      const vision = await self.exports.FilesetResolver.forVisionTasks('/mediapipe/wasm');
+      const vision = await self.exports.FilesetResolver.forVisionTasks(`${assets}wasm`);
       engine = await self.exports.PoseLandmarker.createFromOptions(vision, {
         canvas: new OffscreenCanvas(1, 1),
-        baseOptions: { modelAssetPath: '/mediapipe/pose_landmarker_lite.task', delegate: 'CPU' },
+        baseOptions: { modelAssetPath: `${assets}pose_landmarker_lite.task`, delegate: 'CPU' },
         runningMode: 'VIDEO',
         numPoses: 1,
         minPoseDetectionConfidence: 0.5,

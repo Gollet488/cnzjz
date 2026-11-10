@@ -47,5 +47,20 @@ export interface ModelProvider {
   }): Promise<ModelReply>;
 }
 
-// Stable compatibility entry; runtime imports this module's types only.
+// Providers may ignore abort signals. Stop waiting and discard late replies.
+export async function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  let listener: () => void = () => {};
+  const stopped = new Promise<never>((_, reject) => {
+    listener = () => reject(new Error(String(signal.reason)));
+    if (signal.aborted) listener();
+    else signal.addEventListener('abort', listener, { once: true });
+  });
+  try {
+    return await Promise.race([work, stopped]);
+  } finally {
+    signal.removeEventListener('abort', listener);
+  }
+}
+
+// Stable compatibility entry.
 export { OllamaProvider, localOllamaURL } from './providers/ollama.ts';

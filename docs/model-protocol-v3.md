@@ -5,6 +5,7 @@
 请求提供当前会话、当前用户来源、可继承任务、绑定标识和受状态约束的工具。模型必须自行声明目标参数与来源，本地适配器不按运动关键词代填业务意图。
 
 - set_task_spec：首次声明完整任务及来源。同源时可提交一项 `{field:"task",origin:"derived",sourceId}`，适配器只将该来源展开为全部顶层业务字段（包括空值与 report=false），不补业务值；有推导选 derived。混合来源仍用互不重叠的原有字段，不可与 task 同时提交。展开后仍通过完整 TaskSpec、历史同值继承与来源校验。不相关字段仍显式声明 null/空数组，未要求报告声明 false，未要求 CSV 声明 null。首次只有当前用户来源时，origin 枚举仅允许 explicit/derived，采样范围不是历史用户意图。
+- Ollama 在没有前序规格且只有本轮用户来源时，工具 schema 要求 sources 恰好一项，field 固定为 task，sourceId 必须是本轮用户 ID，origin 仍由模型选择。多项来源在参数 schema 处拒绝，未进入任务锁定。追问、待恢复来源和 DeepSeek 使用原有声明接口。审计记录每次实际提供的 schema、指纹与模型参数。
 - 模型侧 goalTypes 是三个必填布尔值 `{metrics,comparison,quality}`：分别选择独立单段统计、两段指标差值分析、数据质量/缺失/限制。仅比较 ROM 时不另外选择 metrics；用户确实要求混合分析时可多选。无分析仅定位/交付时三个值全部 false；定位由 time 独立声明，交付由 deliveries 独立声明。首次声明及 patch 的 goalTypes 都要求此对象，不接受旧数组、遗漏项、字符串布尔值或交付字段。适配器仅将显式 true 按 metrics/comparison/quality 顺序展开到底层分析数组；acceptedTask 和 previousTask 向模型投影同一布尔接口。底层 TaskSpec、控制协议、真实结果及审计保留数组，原始 modelArguments 保留模型布尔对象；来源字段仍为 goalTypes，不新增叶字段别名。只有分析/定位/交付全部为空才缺少目标；适配器不从用户文字推导选择，不补业务值、目标或来源。
 - set_task_patch：接续修改，只列改变字段，未列字段保留。非空 time 必须实际定位并引用，不能仅保存参数便宣称完成。
 - 模型侧全部 interval（统计前段、comparison.second、view/export.interval）可选绝对 `[起秒,止秒]`、`"sampled"` 或 `{anchor:"start"|"end",seconds:时长}`。相对选择必须有 derived 用户来源；本地仅按本轮冻结 range 展开为全部、开头或结尾，不分析用户文字，不裁剪超长时长，不修改绝对区间。审计同时保留原始选择和展开后参数；底层 TaskSpec、页面和工具仍接收绝对秒，覆盖/版本/引用检查不变。patch 在实际字段上展开后仍通过原有合并、来源和需求保留检查。

@@ -1454,16 +1454,20 @@ for (const provider of ['ollama', 'deepseek'] as const)
   test(`scripted protocol only (${provider}): Agent final chart, report/CSV saves, stale disabled`, async ({
     page,
   }, info) => {
-    const requests = await scriptedOllama(page, provider);
+    const archive =
+      provider === 'ollama' && process.env.QA_QWEN_ARCHIVE
+        ? JSON.parse(await readFile(process.env.QA_QWEN_ARCHIVE, 'utf8'))
+        : null;
+    const requests = await scriptedOllama(
+      page,
+      provider,
+      archive?.requests[0].reply.calls[0].arguments,
+    );
     let downloads = 0;
     page.on('download', () => downloads++);
-    // A real running demo supplies synthetic data. No session injection/test hook.
-    await page.getByRole('button', { name: '开始分析', exact: true }).click();
-    await expect(page.locator('.transport-time')).toContainText('00:21', { timeout: 25_000 });
-    await page.getByRole('button', { name: '暂停分析', exact: true }).click();
-    const rows = await fullCSV(page, info, 'agent-session.csv');
+    const { rows, material } = await fixedRomSession(page, info);
+    expect(material).toBe('7d36f29193f07c8dcf0b8169254545eb2486814c5e691e3bb84a4093eaec0858');
     replayCSV(rows);
-    await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
     if (provider === 'deepseek') await page.getByLabel('模型服务').selectOption('deepseek');
     else await page.getByLabel('模型名', { exact: true }).fill('scripted-protocol-only');
     await page.getByRole('button', { name: '验证并连接', exact: true }).click();
@@ -1481,7 +1485,33 @@ for (const provider of ['ollama', 'deepseek'] as const)
     for (const [turn, goal] of goals.entries()) {
       await page.getByRole('textbox', { name: '分析目标或后续修改' }).fill(goal);
       await page.getByRole('button', { name: '执行目标', exact: true }).click();
-      await expect(page.locator('.run-panel').first().locator('h3').first()).toHaveText(goal);
+      const run = page.locator('.run-panel').first();
+      const review = romCard(page);
+      await expect(run.locator('h3').first()).toHaveText(goal);
+      await expect(review.getByText('自由目标 · 请核对或编辑模型声明后确认')).toBeVisible();
+      await expect(run.locator('.evidence-card')).toHaveCount(0);
+      await expect(run.locator('.artifact-card')).toHaveCount(0);
+      const requestCount = requests.length;
+      if (turn === 0) await expect(chart).toContainText('图表区间 完整会话');
+      if (archive && turn === 0) {
+        await expect(review.getByLabel('统计后段类型', { exact: true })).toHaveValue('end');
+        await expect(review.getByLabel('统计后段时长', { exact: true })).toHaveValue('5');
+        await expect(review.locator('[data-rom-range="second"]')).toHaveText(
+          '实际区间 16.5–21.5 s',
+        );
+        await review.screenshot({ path: info.outputPath('free-goal-archived-before-confirm.png') });
+        await setAbsolute(page, '统计后段', 15, 20);
+        await review.getByLabel('图表范围类型', { exact: true }).selectOption('cover');
+        await review.getByLabel('单独统计前段').uncheck();
+      }
+      await expect(review.locator('[data-rom-range="second"]')).toHaveText(
+        turn ? '实际区间 12–17 s' : '实际区间 15–20 s',
+      );
+      await expect(review.locator('[data-rom-range="chart"]')).toHaveText(
+        turn ? '实际区间 0–17 s' : '实际区间 0–20 s',
+      );
+      expect(requests.length).toBe(requestCount);
+      await review.getByRole('button', { name: '确认并运行比较', exact: true }).click();
       await expect(page.locator('.run-panel').first().locator('.run-status')).toHaveText('已完成');
       // A completed model outcome precedes the application/audit barrier.
       // Wait for the end-to-end receipt before hovering the final chart.
@@ -1572,6 +1602,8 @@ for (const provider of ['ollama', 'deepseek'] as const)
       ).bytes,
     );
     expect(exported).toEqual(rows.filter((r) => Number(r.time_s) <= 17));
+    expect(exported).toHaveLength(305);
+    expect(Object.keys(exported[0])).toHaveLength(354);
     const auditFile = await downloadFile(
       page,
       info,
@@ -1591,7 +1623,11 @@ for (const provider of ['ollama', 'deepseek'] as const)
     expect(audit.run.timing.audit).toBe('saved');
     expect(audit.run.timing.completedAt).toBeGreaterThanOrEqual(audit.run.timing.submittedAt);
     expect(audit.run.timing.wallMs).toBeGreaterThanOrEqual(audit.run.elapsedMs);
-    expect(audit.run.timing.computeMs).toBe(audit.run.timing.wallMs);
+    expect(audit.run.timing.manualWaitMs).toBeGreaterThan(0);
+    expect(audit.run.timing.computeMs + audit.run.timing.manualWaitMs).toBeCloseTo(
+      audit.run.timing.wallMs,
+      6,
+    );
     expect(audit.run.conversationCosts.turns).toBe(3);
     expect(verifyAudit(rows, audit)).toEqual([
       'get_session_info',
@@ -1636,6 +1672,43 @@ for (const provider of ['ollama', 'deepseek'] as const)
       contentType: 'application/json',
     });
   });
+
+test('ROM free-goal review: recalculate invalidates the pending confirmation', async ({
+  page,
+}, info) => {
+  const requests = await scriptedOllama(page, 'deepseek');
+  await fixedRomSession(page, info);
+  await page.getByLabel('模型服务').selectOption('deepseek');
+  await page.getByRole('button', { name: '验证并连接', exact: true }).click();
+  await expect(page.locator('.connection-status')).toHaveText('模型已连接');
+  await page.getByRole('textbox', { name: '分析目标或后续修改' }).fill(goals[0]);
+  await page.getByRole('button', { name: '执行目标', exact: true }).click();
+  const card = romCard(page);
+  await expect(card.getByText('自由目标 · 请核对或编辑模型声明后确认')).toBeVisible();
+  expect(requests).toHaveLength(1);
+  await page.locator('nav').getByRole('button', { name: '采集与分析' }).click();
+  await page.getByRole('button', { name: '重算指标', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
+  await expect(card.getByRole('button', { name: '确认并运行比较', exact: true })).toHaveCount(0);
+  const run = page.locator('.run-panel').first();
+  await expect(run.locator('.run-status')).toContainText('已过期');
+  expect(requests).toHaveLength(1);
+  const audit: RunAudit = JSON.parse(
+    (
+      await downloadFile(
+        page,
+        info,
+        run.getByRole('button', { name: '保存完整本地审计', exact: true }),
+        'free-goal-stale-review.json',
+      )
+    ).bytes.toString(),
+  );
+  expect(audit.run.romReview?.confirmation).toBeUndefined();
+  expect(audit.run.calls.filter((c) => c.output.ok).map((c) => c.name)).toEqual([
+    'get_session_info',
+  ]);
+  expect(audit.run.citations).toEqual([]);
+});
 
 test('scripted DeepSeek cancel never applies a late response or exposes a save entry', async ({
   page,

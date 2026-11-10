@@ -4,12 +4,16 @@ import type { AnalysisSession, SessionInfo } from '../analysis/session.ts';
 import type { createToolRegistry } from '../analysis/tools.ts';
 import { OllamaProvider } from '../agent/provider.ts';
 import { DeepSeekPageProvider } from '../agent/providers/deepseekPage.ts';
-import type { ModelReply } from '../agent/provider.ts';
+import type { ModelProvider, ModelReply } from '../agent/provider.ts';
 import { AgentRuntime } from '../agent/runtime.ts';
 import type { AgentRun } from '../agent/runtime.ts';
 import AgentEvidence from './AgentEvidence.vue';
 import AgentArtifact from './AgentArtifact.vue';
 import AgentTaskSpec from './AgentTaskSpec.vue';
+import RomTaskCard from './RomTaskCard.vue';
+import { executeRomCard } from '../agent/romTaskCard.ts';
+import type { FreeRomConfirmation, FreeRomReview } from '../agent/freeRomReview.ts';
+import type { RomCardExecution, RomConfirmation } from '../agent/romTaskCard.ts';
 import type { CallRecord } from '../agent/runtime.ts';
 import { readRunAudit, saveRunAudit } from '../agent/audit.ts';
 import { download } from '../utils/download.ts';
@@ -25,16 +29,43 @@ const address = ref('http://127.0.0.1:11434'),
   model = ref(''),
   models = ref<string[]>([]);
 const providerKind = ref<'ollama' | 'deepseek'>('ollama');
+const pageOrigin = window.location.origin;
+const localPage = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
 const probeResponse = ref<{ model: string; systemFingerprint: string | null } | null>(null);
 const connected = ref(false),
   connecting = ref(false),
-  running = ref(false),
   connectionMessage = ref('未连接 · 真实模型验收未完成');
+const runKind = ref<'free' | 'rom' | null>(null);
+const running = computed(() => runKind.value !== null);
 const goal = ref('比较前后各 5 秒的左右膝 ROM，并展示差异');
 const runs = shallowRef<AgentRun[]>([]);
 const responseMetadata = shallowRef<Record<string, NonNullable<ModelReply['response']>[]>>({});
 const error = ref('');
 const dismissedRuns = new Set<string>();
+const draftProvider = shallowRef<ModelProvider>();
+const lastRomCard = shallowRef<RomCardExecution & { runId: string }>();
+const freeReview = shallowRef<FreeRomReview>();
+let confirmFree: ((confirmation: FreeRomConfirmation) => void) | undefined;
+async function requestRomReview(review: FreeRomReview, signal: AbortSignal) {
+  signal.throwIfAborted();
+  let abort: () => void;
+  const confirmed = new Promise<FreeRomConfirmation>((resolve, reject) => {
+    confirmFree = resolve;
+    abort = () => reject(new Error(String(signal.reason)));
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  freeReview.value = review;
+  void nextTick(() =>
+    document.getElementById('rom-card-title')?.scrollIntoView({ block: 'start' }),
+  );
+  try {
+    return await confirmed;
+  } finally {
+    signal.removeEventListener('abort', abort!);
+    freeReview.value = undefined;
+    confirmFree = undefined;
+  }
+}
 let runtime: AgentRuntime | undefined;
 let connection: AbortController | undefined;
 const statusNames: Record<string, string> = {
@@ -59,7 +90,9 @@ const stale = (run: AgentRun) =>
   run.reference.sessionId !== props.info.sessionId ||
   run.reference.revision !== props.info.revision;
 const invalid = (run: AgentRun) =>
-  stale(run) || ['cancelled', 'stale', 'timeout'].includes(run.status);
+  stale(run) ||
+  ['cancelled', 'stale', 'timeout'].includes(run.status) ||
+  Boolean(run.romCard && (run.status === 'running' || run.status === 'failed'));
 const evidenceCalls = (run: AgentRun) =>
   run.calls.filter(
     (c) =>
@@ -95,6 +128,7 @@ function disconnect() {
   connection?.abort();
   runtime?.clear();
   runtime = undefined;
+  draftProvider.value = undefined;
   connected.value = false;
   probeResponse.value = null;
   connectionMessage.value = '未连接 · 请重新验证模型连接';
@@ -136,6 +170,8 @@ async function connect(discover = false) {
       provider,
       session: props.session,
       registry: props.tools,
+      reviewRom: requestRomReview,
+      verifyApplication: props.waitForApplication,
       limits: providerKind.value === 'deepseek' ? { timeoutMs: 120_000 } : undefined,
       onAudit: async (audit) => {
         responseMetadata.value = {
@@ -161,6 +197,7 @@ async function connect(discover = false) {
         else runs.value = runs.value.map((r, i) => (i === index ? run : r));
       },
     });
+    draftProvider.value = provider;
     connected.value = true;
     connectionMessage.value = `已连接 ${providerKind.value === 'deepseek' ? 'DeepSeek 官方 API（本机代理）' : 'Ollama'} / ${probeResponse.value?.model ?? provider.model} · 结构化调用探测通过；目标验收见实际运行结果`;
   } catch (e) {
@@ -178,7 +215,7 @@ async function submit() {
   if (!runtime || !connected.value || running.value) return;
   const submission = { submittedAt: Date.now(), monotonicAt: performance.now() };
   const activeRuntime = runtime;
-  running.value = true;
+  runKind.value = 'free';
   emit('pause');
   await nextTick();
   error.value = '';
@@ -187,7 +224,55 @@ async function submit() {
   } catch (e) {
     error.value = e instanceof Error ? e.message : '任务启动失败';
   } finally {
-    running.value = false;
+    runKind.value = null;
+  }
+}
+async function runRomCard(confirmation: RomConfirmation) {
+  if (running.value) return;
+  runKind.value = 'rom';
+  error.value = '';
+  try {
+    emit('pause');
+    const audit = executeRomCard(
+      props.tools,
+      props.session.info(),
+      props.session.frames,
+      confirmation,
+    );
+    const run = audit.run;
+    const executedStatus = run.status;
+    if (run.romCard?.resolved) lastRomCard.value = { ...run.romCard, runId: run.id };
+    run.status = 'running';
+    run.phase = '核对图表和准备成果';
+    runs.value = [run, ...runs.value].slice(0, 8);
+    try {
+      await nextTick();
+      if (executedStatus === 'completed' || executedStatus === 'not_comparable') {
+        props.session.assertCurrent(run.reference);
+        await props.waitForApplication?.(run);
+        props.session.assertCurrent(run.reference);
+      }
+      run.status = executedStatus;
+    } catch (e) {
+      const info = props.session.info();
+      run.status =
+        info.sessionId !== run.reference.sessionId || info.revision !== run.reference.revision
+          ? 'stale'
+          : 'failed';
+      run.message = e instanceof Error ? e.message : '图表或成果核对失败。';
+    }
+    run.phase = '本地执行结束';
+    try {
+      await saveRunAudit(audit);
+      run.auditStatus = 'saved';
+    } catch {
+      run.auditStatus = 'failed';
+    }
+    runs.value = runs.value.map((item) => (item.id === run.id ? { ...run } : item));
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '任务卡启动失败。';
+  } finally {
+    runKind.value = null;
   }
 }
 function clear() {
@@ -238,7 +323,7 @@ onBeforeUnmount(() => {
             :disabled="connecting || running"
           >
             <option value="ollama">Ollama（本地）</option>
-            <option value="deepseek">DeepSeek 官方 API（本机代理）</option>
+            <option value="deepseek" :disabled="!localPage">DeepSeek 官方 API（本机代理）</option>
           </select></label
         >
         <p v-if="providerKind === 'deepseek'"
@@ -288,13 +373,33 @@ onBeforeUnmount(() => {
       <details
         ><summary>连接要求</summary
         ><p
-          >DeepSeek 需使用此项目的本机开发或生产预览服务，并在 Windows 用户环境或 Node 进程配置
-          DEEPSEEK_API_KEY；页面不接收密钥。静态托管不包含代理。 Ollama
-          服务需在此电脑运行，并声明模型 tools 能力。跨域受限时，在 Ollama 的 OLLAMA_ORIGINS
-          中允许当前页面的精确来源后重启服务。连接验证只发送测试文本，不发送会话数据；本页不自动安装或下载模型。</p
+          >在此电脑启动仅监听回环的 Ollama，选择支持 tools 的本地模型。设置 OLLAMA_ORIGINS 包含
+          <code>{{ pageOrigin }}</code> 后重启 Ollama。在 Chrome
+          请求回环网络权限时选择允许，再读取模型并验证连接。</p
+        ><p
+          >连接失败时，先访问 <code>http://127.0.0.1:11434/api/tags</code> 确认服务在线，再检查
+          Chrome 的站点权限和 Ollama
+          的来源配置。浏览器无法开放回环访问时，可运行本项目的本机生产预览， 从
+          <code>http://127.0.0.1:4173/</code> 进入 Agent。</p
+        ><p
+          >DeepSeek 使用本机开发或生产预览代理，从 Node 环境读取 DEEPSEEK_API_KEY。
+          连接验证仅发送测试文本。请在终端安装模型，并在浏览器选择模型名。</p
         ></details
       >
     </div>
+
+    <RomTaskCard
+      :provider="draftProvider"
+      :session="session"
+      :info="info"
+      :running="running"
+      :last="lastRomCard"
+      :free-review="freeReview"
+      @confirm-free="confirmFree?.($event)"
+      @cancel-free="runtime?.cancel()"
+      @pause="emit('pause')"
+      @confirm="runRomCard"
+    />
 
     <div class="panel goal-panel">
       <div class="agent-header"
@@ -345,12 +450,13 @@ onBeforeUnmount(() => {
             >每次最多 12 轮 / 24 次调用 / 3 次纠错 · 请求 60 秒 / 总计
             {{ providerKind === 'deepseek' ? '2' : '4' }} 分钟</span
           ><el-button :disabled="running || !runs.length" @click="clear">清空上下文</el-button
-          ><el-button v-if="running" type="danger" @click="runtime?.cancel()">取消分析</el-button
+          ><el-button v-if="runKind === 'free'" type="danger" @click="runtime?.cancel()"
+            >取消分析</el-button
           ><el-button
             v-else
             type="primary"
             native-type="submit"
-            :disabled="!connected || !goal.trim()"
+            :disabled="running || !connected || !goal.trim()"
             >执行目标</el-button
           ></div
         ></form
@@ -361,9 +467,7 @@ onBeforeUnmount(() => {
     <slot />
     <div v-if="!runs.length" class="agent-empty panel"
       ><h3>分析结果将包含可复核的本地证据</h3
-      ><p
-        >连接模型并执行目标后，在这里查看步骤、实际调用、区间比较表、质量区间与数值引用。未连接时不生成模拟回答。</p
-      ></div
+      ><p>确认任务卡或连接模型并执行目标后，在这里查看实际调用、区间比较表与数值引用。</p></div
     >
     <article
       v-for="run in runs"
@@ -435,6 +539,12 @@ onBeforeUnmount(() => {
         >保存完整本地审计</el-button
       >
       <AgentTaskSpec v-if="run.task" :task="run.task" />
+      <p v-if="run.romCard" class="run-meta"
+        >{{
+          run.romCard.entry === 'model-draft' ? '模型草拟，用户审阅确认' : '手动填写，用户确认'
+        }}
+        · 证据由浏览器本地工作流关联</p
+      >
       <div v-if="run.completion" class="citation-list">
         <strong>本地完成检查 · {{ run.completion.state }}</strong>
         <p>已满足：{{ run.completion.satisfied.join('、') || '暂无' }}</p>
@@ -444,9 +554,19 @@ onBeforeUnmount(() => {
       <ol v-if="run.steps.length" class="agent-steps"
         ><li v-for="(step, index) in run.steps" :key="index">{{ step }}</li></ol
       >
+      <ul v-if="run.submissionGaps?.length" class="citation-list">
+        <li v-for="(gap, i) in run.submissionGaps" :key="i">
+          {{ gap.tool }} · {{ gap.labels.join(' / ') }} · {{ gap.reason }}
+          <template v-if="gap.detail"> · {{ gap.detail }}</template>
+        </li>
+      </ul>
       <p v-if="run.message" class="run-message">{{ run.message }}</p>
       <div v-if="run.citations.length" class="citation-list"
-        ><strong>已核验引用 · 值直接来自本地工具</strong
+        ><strong>{{
+          run.romCard
+            ? '本地工作流关联引用 · 值直接来自本地工具'
+            : '已核验引用 · 值直接来自本地工具'
+        }}</strong
         ><p v-for="(citation, i) in run.citations" :key="i"
           >{{ citation.callId }} {{ citation.path }} =
           {{ citation.value === null ? '缺失' : citation.value }}</p

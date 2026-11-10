@@ -137,7 +137,7 @@ async function play() {
       if (!current()) return;
       for (let i = 0; i < 2; i++) {
         const model = await PoseLandmarker.createFromOptions(wasm, {
-          baseOptions: { modelAssetPath: '/mediapipe/pose_landmarker_lite.task' },
+          baseOptions: { modelAssetPath: `${assets}pose_landmarker_lite.task` },
           runningMode: 'VIDEO',
           numPoses: 1,
         });

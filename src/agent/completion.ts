@@ -10,13 +10,21 @@ export interface CompletionCheck {
   missing: string[];
   limitations: string[];
 }
+type ApplicationTool = 'set_chart_view' | 'prepare_report' | 'prepare_export';
+export class WorkspaceApplicationError extends Error {
+  readonly tool: ApplicationTool;
+  constructor(tool: ApplicationTool, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.tool = tool;
+  }
+}
 export const completionSchema = object({
   state: enumeration('ready', 'partial', 'not_comparable', 'needs_input'),
   satisfied: array(string),
   missing: array(string),
   limitations: array(string),
 });
-const metricPaths: Record<Metric, string> = {
+export const metricPaths: Record<Metric, string> = {
   rom: 'rom',
   meanAngle: 'angle/mean',
   peakAbsoluteVelocity: 'peakAbsoluteVelocity',
@@ -31,7 +39,7 @@ const metricPaths: Record<Metric, string> = {
 function at(value: any, path: string): unknown {
   return path.split('/').reduce((v, key) => v?.[key], value);
 }
-function sameView(a: ChartView | null | undefined, b: ChartView) {
+export function sameView(a: ChartView | null | undefined, b: ChartView) {
   return (
     !!a &&
     a.joint === b.joint &&
@@ -51,7 +59,8 @@ export function checkCompletion(
   const missing = missingTaskFields(spec);
   if (missing.length) return { ...check, state: 'needs_input', missing };
   const calls = run.calls.filter(
-    (c): c is CallRecord & { output: { ok: true; tool: string; result: any } } => c.output.ok,
+    (c): c is CallRecord & { output: { ok: true; tool: string; result: any } } =>
+      c.output.ok && !c.reusedCallId,
   );
   const cited = (c: CallRecord, path: (p: string) => boolean) =>
     citations.some((x) => x.callId === c.id && path(x.path));
@@ -87,6 +96,7 @@ export function checkCompletion(
   const reports = calls.filter(
     (c) =>
       c.name === 'prepare_report' &&
+      c.output.result.state === 'ready' &&
       fact(c.output.result.facts, spec.interval) &&
       (spec.comparison
         ? matchComparison(c.output.result.comparison)

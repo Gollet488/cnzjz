@@ -14,6 +14,7 @@ const emit = defineEmits<{
   locate: [call: CallRecord, second?: boolean, interval?: [number, number]];
 }>();
 const error = ref('');
+const reportDownloadStarted = ref(false);
 const result = computed<any>(() => (props.call.output.ok ? props.call.output.result : null));
 const sections = computed<CallRecord[]>(() => {
   if (props.call.name !== 'prepare_report' || !result.value) return [];
@@ -35,11 +36,13 @@ function save() {
   try {
     const artifact = props.tools.getArtifact(result.value.handle);
     if (artifact.kind === 'csv') emit('export', result.value.handle);
-    else
+    else {
       download(
         new Blob([JSON.stringify(artifact, null, 2)], { type: 'application/json;charset=utf-8' }),
         `analysis-report-${artifact.reference.revision}.json`,
       );
+      reportDownloadStarted.value = true;
+    }
   } catch (e) {
     error.value = String(e);
   }
@@ -70,12 +73,13 @@ function save() {
       ><p v-for="line in result.limitations" :key="line">{{ line }}</p>
     </template>
     <p v-else
-      >{{ result.rows }} 行 / {{ result.columns }} 列 · 含
-      raw/filtered、参数和采集状态。尚未开始下载；保存时复用分块 CSV、进度与取消。</p
+      >{{ result.rows }} 行 / {{ result.columns }} 列 · 含 raw/filtered、参数和采集状态。保存时显示
+      CSV 写入或浏览器下载进度。</p
     >
     <el-button :disabled="stale" @click="save">{{
       call.name === 'prepare_report' ? '保存报告 JSON' : '保存 CSV'
     }}</el-button>
+    <p v-if="reportDownloadStarted" role="status">已发起报告的浏览器下载。</p>
     <p v-if="error" role="alert">{{ error }}</p>
   </section>
 </template>

@@ -3,14 +3,19 @@ import { modelGoalTypes } from '../../src/agent/modelProtocol.ts';
 import { taskFixture } from '../agentFixtures.ts';
 
 export const goals = [
-  '比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表',
+  // Exercise the general declaration path, including explicit source rejection.
+  '请比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表',
   '只看右侧，第二段改成 12–17 秒',
   '准备当前右膝 filtered 0–5 秒与 12–17 秒比较报告，并准备 0–17 秒 CSV，保留图表',
 ];
 
 // Test-only HTTP fixture. The real provider, runtime, tools and Vue UI still run.
 // This script proves protocol/UI behavior, never natural-language model quality.
-export async function scriptedOllama(page: Page, provider: 'ollama' | 'deepseek' = 'ollama') {
+export async function scriptedOllama(
+  page: Page,
+  provider: 'ollama' | 'deepseek' = 'ollama',
+  archivedDeclaration?: object,
+) {
   const requests: any[] = [];
   const steps = new Map<string, number>();
   await page.route(
@@ -44,7 +49,9 @@ export async function scriptedOllama(page: Page, provider: 'ollama' | 'deepseek'
               ...c,
               arguments: {
                 ...c.arguments,
-                goalTypes: modelGoalTypes(c.arguments.goalTypes),
+                goalTypes: Array.isArray(c.arguments.goalTypes)
+                  ? modelGoalTypes(c.arguments.goalTypes)
+                  : c.arguments.goalTypes,
                 sources: [
                   {
                     field: 'task',
@@ -124,15 +131,16 @@ export async function scriptedOllama(page: Page, provider: 'ollama' | 'deepseek'
             call('get_session_info', {}),
             call(
               'set_task_spec',
-              taskFixture(input.goal, {
-                goalTypes: ['comparison'],
-                comparison: { second: [15, 20], direction: 'second_minus_first' },
-                deliveries: {
-                  view: { ...view, interval: 'comparison' } as any,
-                  report: false,
-                  export: null,
-                },
-              }),
+              archivedDeclaration ??
+                taskFixture(input.goal, {
+                  goalTypes: ['comparison'],
+                  comparison: { second: [15, 20], direction: 'second_minus_first' },
+                  deliveries: {
+                    view: { ...view, interval: 'comparison' } as any,
+                    report: false,
+                    export: null,
+                  },
+                }),
             ),
           ]);
         const changes =
@@ -176,6 +184,9 @@ export async function scriptedOllama(page: Page, provider: 'ollama' | 'deepseek'
               ]
             : []),
           call('set_chart_view', { taskRef: input.bindings.taskRef }),
+          ...(archivedDeclaration && turn === 0
+            ? [call('set_chart_view', { taskRef: input.bindings.taskRef })]
+            : []),
           ...(turn === 2
             ? [
                 call('prepare_report', { taskRef: input.bindings.taskRef }),
@@ -207,7 +218,11 @@ export async function scriptedOllama(page: Page, provider: 'ollama' | 'deepseek'
       if (citations.length !== (turn === 2 ? 4 : 2))
         throw new Error(`Missing actual evidence ${JSON.stringify(feedback)}`);
       return calls([
-        call('finish_analysis', { outcome: 'completed', messageCode: 'evidence_ready', citations }),
+        call('finish_analysis', {
+          outcome: 'completed',
+          messageCode: 'evidence_ready',
+          citations: [],
+        }),
       ]);
     },
   );

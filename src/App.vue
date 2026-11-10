@@ -115,12 +115,21 @@ const agentTimeChart = ref<InstanceType<typeof TimeChart>>();
 async function waitForAgentApplication(run: AgentRun) {
   await nextTick();
   if (run.calls.some((c) => c.name === 'set_chart_view' && c.output.ok)) {
-    if (!agentTimeChart.value) throw new Error('AGENT_CHART_NOT_MOUNTED');
-    await agentTimeChart.value.waitUntilRendered();
+    try {
+      if (!agentTimeChart.value) throw new Error('AGENT_CHART_NOT_MOUNTED');
+      await agentTimeChart.value.waitUntilRendered();
+    } catch (error) {
+      throw new WorkspaceApplicationError('set_chart_view', error);
+    }
   }
   for (const call of run.calls) {
-    if (call.output.ok && ['prepare_report', 'prepare_export'].includes(call.name))
-      analysisTools.getArtifact((call.output.result as { handle: string }).handle);
+    if (call.output.ok && (call.name === 'prepare_report' || call.name === 'prepare_export')) {
+      try {
+        analysisTools.getArtifact((call.output.result as { handle: string }).handle);
+      } catch (error) {
+        throw new WorkspaceApplicationError(call.name, error);
+      }
+    }
   }
 }
 const syntheticFile = ref(false);

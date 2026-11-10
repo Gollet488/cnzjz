@@ -4,9 +4,10 @@ let engine: Promise<PoseLandmarker> | undefined;
 export function getPoseEngine() {
   if (!engine)
     engine = (async () => {
-      const vision = await FilesetResolver.forVisionTasks('/mediapipe/wasm');
+      const assets = `${import.meta.env.BASE_URL}mediapipe/`;
+      const vision = await FilesetResolver.forVisionTasks(`${assets}wasm`);
       return PoseLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: '/mediapipe/pose_landmarker_lite.task', delegate: 'CPU' },
+        baseOptions: { modelAssetPath: `${assets}pose_landmarker_lite.task`, delegate: 'CPU' },
         runningMode: 'VIDEO',
         numPoses: 1,
         minPoseDetectionConfidence: 0.5,

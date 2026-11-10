@@ -61,7 +61,7 @@ node scripts/start-demo.mjs --production
 
 浏览器回归在安装 Playwright Chromium 后运行 `pnpm test:browser`；已有 Chrome 时可在 PowerShell 中先设置 `$env:BROWSER_CHANNEL='chrome'`。真实模型测试为独立可选检查，本轮没有发起真实模型请求。
 
-## 手动上传 GitHub
+## 2026-10-31 历史手动上传说明
 
 参赛要求保留完整 Git 提交历史，应从**当前项目根目录**提交和推送。本地目前有 13 条可达提交（本次检查时），远程已配置为 `https://github.com/Gollet488/cnzjz.git`。不要在副本中重新 `git init`，也不要只通过网页上传文件或 ZIP 来替代现有历史。
 
