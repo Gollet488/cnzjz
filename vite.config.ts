@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [vue(), demoHealth(), deepSeekProxy()],
   server: {
     host: '127.0.0.1',
-    watch: { ignored: ['**/.qa/**', '**/.delivery/**', '**/test-results/**'] },
+    watch: { ignored: ['**/.qa/**', '**/.delivery/**', '**/test-results/**', '**/.pnpm-store/**'] },
   },
   preview: { host: '127.0.0.1' },
   // Prebundle worker-only MP4 and lazy FFmpeg imports before the first upload.

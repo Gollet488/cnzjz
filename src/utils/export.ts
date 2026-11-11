@@ -24,13 +24,13 @@ export function createReportCanvas(
   report.height = size.height;
   const ctx = report.getContext('2d')!;
   const { margin, imageTop } = REPORT_LAYOUT;
-  ctx.fillStyle = '#f3f6f5';
+  ctx.fillStyle = '#f6f7fb';
   ctx.fillRect(0, 0, report.width, report.height);
-  ctx.fillStyle = '#172e2b';
+  ctx.fillStyle = '#202336';
   ctx.font = 'bold 38px sans-serif';
   ctx.fillText('KINETIC / 动观 · 姿态量化报告', margin, 76);
   ctx.font = '20px sans-serif';
-  ctx.fillStyle = '#64807a';
+  ctx.fillStyle = '#626b82';
   ctx.fillText(
     `${isDemo ? '合成演示数据' : '本地采集数据'} · filtered · 画面 ${context.time?.toFixed(3) ?? '—'} s · ${new Date().toLocaleString('zh-CN')}`,
     margin,
@@ -42,7 +42,7 @@ export function createReportCanvas(
   const avg = (v: number[]) => (v.length ? v.reduce((s, n) => s + n, 0) / v.length : null);
   const centers = frames.flatMap((f) => (f.center ? [f.center.y] : [])),
     asym = frames.flatMap((f) => (f.asymmetry === null ? [] : [f.asymmetry]));
-  ctx.fillStyle = '#172e2b';
+  ctx.fillStyle = '#202336';
   ctx.font = '24px sans-serif';
   ctx.fillText(
     `统计区间 ${frames[0]?.time.toFixed(3) ?? '—'}–${frames.at(-1)?.time.toFixed(3) ?? '—'} s    样本 ${frames.length}    平均不对称 ${avg(asym)?.toFixed(2) ?? '—'}%`,
@@ -73,7 +73,7 @@ export function createReportCanvas(
       top + 150 + Math.floor(i / 2) * 40,
     );
   });
-  ctx.fillStyle = '#64807a';
+  ctx.fillStyle = '#626b82';
   ctx.font = '17px sans-serif';
   const reference = context.reference;
   ctx.fillText(
@@ -93,7 +93,7 @@ export function createReportCanvas(
       top + 382,
     );
   }
-  ctx.fillStyle = '#7a8c87';
+  ctx.fillStyle = '#626b82';
   ctx.fillText(
     '单人单目 2D 平面投影；髋中点仅为重心近似。仅供相对对比，不用于动作对错判定。',
     margin,

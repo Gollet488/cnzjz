@@ -1,3 +1,4 @@
+import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { readMP4 } from './mp4.ts';
 
 // Extensions supplement video/* because Windows often reports no video MIME for
@@ -5,6 +6,8 @@ import { readMP4 } from './mp4.ts';
 export const VIDEO_ACCEPT =
   'video/*,.mp4,.m4v,.mov,.qt,.webm,.mkv,.avi,.flv,.f4v,.wmv,.asf,.mpg,.mpeg,.mpe,.m2v,.ts,.mts,.m2ts,.m2t,.3gp,.3g2,.ogv,.ogg,.vob,.rm,.rmvb,.divx,.dv,.mxf,.nut';
 export const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
+const CONVERTER_STARTUP_MS = 15_000;
+const CONVERSION_MS = 10 * 60_000;
 
 export interface PreparedVideo {
   file: File;
@@ -35,21 +38,18 @@ export async function prepareVideo(
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
   }
   status('正在加载本地视频转换器…');
-  const { FFmpeg } = await import('@ffmpeg/ffmpeg');
-  signal.throwIfAborted();
   const ffmpeg = new FFmpeg();
   const abort = () => ffmpeg.terminate();
   signal.addEventListener('abort', abort, { once: true });
   // Terminate, rather than merely rejecting a promise, so cancellation releases
   // the WASM heap even while the synchronous encoder is running in its worker.
+  let initializing = true;
   let timedOut = false;
-  const timer = setTimeout(
-    () => {
-      timedOut = true;
-      abort();
-    },
-    10 * 60 * 1000,
-  );
+  const expire = () => {
+    timedOut = true;
+    abort();
+  };
+  let timer = setTimeout(expire, CONVERTER_STARTUP_MS);
   let diagnostic = '';
   ffmpeg.on('log', ({ message }) => {
     if (
@@ -69,6 +69,9 @@ export async function prepareVideo(
       wasmURL: `${import.meta.env.BASE_URL}ffmpeg/ffmpeg-core.wasm`,
     });
     signal.throwIfAborted();
+    clearTimeout(timer);
+    initializing = false;
+    timer = setTimeout(expire, CONVERSION_MS);
     // Do not use user-provided names as virtual FS paths or command options.
     const suffix = /\.([a-z0-9]{1,8})$/i.exec(file.name)?.[1] ?? 'video';
     const input = `input.${suffix}`;
@@ -120,8 +123,16 @@ export async function prepareVideo(
     return { file: converted, transcoded: true };
   } catch (error) {
     signal.throwIfAborted();
+    const detail = error instanceof Error ? error.message : String(error);
+    if (initializing)
+      throw new Error(
+        timedOut
+          ? '视频转换器初始化超时（15 秒），已停止。请重新选择视频重试。'
+          : `视频转换器加载失败：${detail}。请刷新页面或重新选择视频重试。`,
+        { cause: error },
+      );
     throw new Error(
-      `视频转换失败：${timedOut ? '转换超过 10 分钟，已停止' : error instanceof Error ? error.message : String(error)}。请检查文件是否损坏、加密或包含不受支持的编码；也可尝试缩短视频后重试。`,
+      `视频转换失败：${timedOut ? '转换超过 10 分钟，已停止' : detail}。请检查文件是否损坏、加密或包含不受支持的编码；也可尝试缩短视频后重试。`,
       { cause: error },
     );
   } finally {

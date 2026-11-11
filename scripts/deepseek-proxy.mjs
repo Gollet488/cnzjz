@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { ProviderResponseError } from '../src/agent/provider.ts';
 import { DeepSeekProvider, DeepSeekRequestError } from '../src/agent/providers/deepseek.ts';
+import { cloudConfiguration } from './cloud-model-config.mjs';
 
 export const PROXY_BODY_LIMIT = 256_000;
 const loopback = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -43,7 +44,7 @@ function failureCode(error) {
   return 'DEEPSEEK_PROXY_UNKNOWN';
 }
 
-function validInput(value) {
+function validInput(value, nativeIds = false) {
   if (!value || Object.keys(value).sort().join() !== 'messages,tools') return false;
   if (
     !Array.isArray(value.messages) ||
@@ -59,7 +60,11 @@ function validInput(value) {
         m &&
         ['system', 'user', 'assistant', 'tool'].includes(m.role) &&
         typeof m.content === 'string' &&
-        Object.keys(m).every((k) => ['role', 'content', 'calls', 'toolName'].includes(k)) &&
+        Object.keys(m).every(
+          (k) =>
+            ['role', 'content', 'calls', 'toolName'].includes(k) ||
+            (nativeIds && k === 'toolCallId' && validId(m[k])),
+        ) &&
         (m.toolName === undefined || typeof m.toolName === 'string') &&
         (m.calls === undefined ||
           (Array.isArray(m.calls) &&
@@ -68,7 +73,11 @@ function validInput(value) {
               (c) =>
                 c &&
                 typeof c.name === 'string' &&
-                Object.keys(c).sort().join() === 'arguments,name',
+                Object.hasOwn(c, 'arguments') &&
+                Object.keys(c).every(
+                  (k) =>
+                    ['arguments', 'name'].includes(k) || (nativeIds && k === 'id' && validId(c[k])),
+                ),
             ))),
     ) &&
     value.tools.every(
@@ -85,13 +94,20 @@ function validInput(value) {
   );
 }
 
+const validId = (id) => typeof id === 'string' && id.length > 0 && id.length <= 200;
+const validTaskId = (id) => typeof id === 'string' && /^[\da-f-]{36}$/i.test(id);
+
 export function createDeepSeekMiddleware({
   providerFactory = () => new DeepSeekProvider(userApiKey()),
+  cloud,
   timeoutMs = 60_000,
 } = {}) {
   const active = new Set();
+  const responses = new Map();
   const middleware = async (req, res, next) => {
-    if (!req.url?.startsWith('/__deepseek/')) return next();
+    const cloudRoute = cloud && req.url?.startsWith('/__models/');
+    if (!cloudRoute && !req.url?.startsWith('/__deepseek/')) return next();
+    const prefix = cloudRoute ? 'CLOUD' : 'DEEPSEEK_PROXY';
     const send = (status, data) => {
       if (res.destroyed || res.writableEnded) return;
       res.writeHead(status, {
@@ -113,10 +129,12 @@ export function createDeepSeekMiddleware({
       req.headers.origin !== `http://${host}` ||
       (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin')
     )
-      return send(403, { error: 'DEEPSEEK_PROXY_ORIGIN_REJECTED' });
+      return send(403, { error: prefix + '_ORIGIN_REJECTED' });
     if (req.method !== 'POST') return send(405, { error: 'DEEPSEEK_PROXY_POST_REQUIRED' });
-    if (!['/__deepseek/probe', '/__deepseek/complete'].includes(req.url))
-      return send(404, { error: 'DEEPSEEK_PROXY_ROUTE_REJECTED' });
+    const routes = cloudRoute
+      ? ['/__models/catalog', '/__models/probe', '/__models/complete', '/__models/release']
+      : ['/__deepseek/probe', '/__deepseek/complete'];
+    if (!routes.includes(req.url)) return send(404, { error: 'DEEPSEEK_PROXY_ROUTE_REJECTED' });
     if (req.headers['content-type'] !== 'application/json' || req.headers['content-encoding'])
       return send(415, { error: 'DEEPSEEK_PROXY_JSON_REQUIRED' });
     if (Number(req.headers['content-length']) > PROXY_BODY_LIMIT)
@@ -128,7 +146,7 @@ export function createDeepSeekMiddleware({
       controller.abort('timeout');
       // Let the 504 flush before closing a connection with an unfinished upload.
       if (!req.complete) res.once('finish', () => req.destroy());
-      send(504, { error: 'DEEPSEEK_PROXY_TIMEOUT' });
+      send(504, { error: prefix + '_TIMEOUT' });
     }, timeoutMs);
     req.once('aborted', stop);
     res.once('close', stop);
@@ -150,7 +168,63 @@ export function createDeepSeekMiddleware({
       } catch {
         return send(400, { error: 'DEEPSEEK_PROXY_INVALID_JSON' });
       }
-      const probe = req.url === '/__deepseek/probe';
+      if (req.url === '/__models/catalog') return send(200, cloud.catalog);
+      if (req.url === '/__models/release') {
+        if (!validTaskId(input?.task) || Object.keys(input).join() !== 'task')
+          return send(400, { error: 'CLOUD_INVALID_INPUT' });
+        const state = responses.get(input.task);
+        if (state) {
+          clearTimeout(state.expiry);
+          responses.delete(input.task);
+          state.controller?.abort();
+        }
+        return send(200, { released: true });
+      }
+      const probe = req.url.endsWith('/probe');
+      if (cloudRoute) {
+        const { provider, model, task, ...inputFields } = input ?? {};
+        if (
+          !validId(provider) ||
+          !validId(model) ||
+          (probe
+            ? task !== undefined || Object.keys(inputFields).length !== 0
+            : !validInput(inputFields, provider !== 'deepseek') || !validTaskId(task))
+        )
+          return send(400, { error: 'CLOUD_INVALID_INPUT' });
+        let adapter = cloud.create(provider, model);
+        if (!adapter) return send(409, { error: 'CLOUD_CONFIGURATION' });
+        let state;
+        if (provider === 'openai' && !probe) {
+          state = responses.get(task);
+          if (state?.controller || (state && state.adapter.model !== model))
+            return send(409, { error: 'CLOUD_TASK_CONFLICT' });
+          if (!state && responses.size >= 32) return send(429, { error: 'CLOUD_TASK_LIMIT' });
+          if (!state && inputFields.messages.some((message) => message.toolCallId))
+            return send(409, { error: 'CLOUD_TASK_EXPIRED' });
+          state ??= { adapter };
+          clearTimeout(state.expiry);
+          adapter = state.adapter;
+          state.controller = controller;
+          responses.set(task, state);
+        }
+        try {
+          const result = probe
+            ? await adapter.probe(controller.signal)
+            : await adapter.complete({ ...inputFields, signal: controller.signal });
+          if (!controller.signal.aborted) send(200, result);
+          else if (state && responses.get(task) === state) responses.delete(task);
+        } catch (error) {
+          if (state && responses.get(task) === state) responses.delete(task);
+          throw error;
+        } finally {
+          if (state && responses.get(task) === state) {
+            state.controller = undefined;
+            state.expiry = setTimeout(() => responses.delete(task), 240_000);
+            state.expiry.unref();
+          }
+        }
+        return;
+      }
       if (
         probe
           ? !input || Array.isArray(input) || Object.keys(input).length !== 0
@@ -169,9 +243,19 @@ export function createDeepSeekMiddleware({
       if (!controller.signal.aborted) send(200, result);
     } catch (error) {
       // Do not propagate upstream bodies, network diagnostics, headers or credentials.
-      if (controller.signal.reason === 'timeout') send(504, { error: 'DEEPSEEK_PROXY_TIMEOUT' });
-      else if (controller.signal.aborted) send(503, { error: 'DEEPSEEK_PROXY_CANCELLED' });
-      else send(502, { error: failureCode(error) });
+      if (controller.signal.reason === 'timeout') send(504, { error: prefix + '_TIMEOUT' });
+      else if (controller.signal.aborted) send(503, { error: prefix + '_CANCELLED' });
+      else {
+        const legacy = failureCode(error);
+        const code = cloudRoute
+          ? /^CLOUD_(TRANSPORT|RESPONSE_PROTOCOL|RESPONSE_LIMIT|CONTEXT_LIMIT|TOOL_PROBE_FAILED)$/.test(
+              error?.message,
+            )
+            ? error.message
+            : legacy.replace('DEEPSEEK_PROXY_', 'CLOUD_')
+          : legacy;
+        send(502, { error: code });
+      }
     } finally {
       clearTimeout(timer);
       active.delete(controller);
@@ -183,6 +267,8 @@ export function createDeepSeekMiddleware({
     middleware,
     close: () => {
       for (const c of active) c.abort();
+      for (const state of responses.values()) clearTimeout(state.expiry);
+      responses.clear();
     },
   };
 }
@@ -190,7 +276,15 @@ export function createDeepSeekMiddleware({
 export function deepSeekProxy() {
   const proxies = new Set();
   const install = (server) => {
-    const proxy = createDeepSeekMiddleware();
+    const proxy = createDeepSeekMiddleware({
+      cloud: cloudConfiguration(server.config.root, () => {
+        try {
+          return userApiKey();
+        } catch {
+          return '';
+        }
+      }),
+    });
     proxies.add(proxy);
     server.middlewares.use(proxy.middleware);
     server.httpServer?.once('close', proxy.close);

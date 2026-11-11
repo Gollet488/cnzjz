@@ -46,6 +46,7 @@ import {
   modelSchemaDiagnostic,
   MODEL_INSTRUCTION_VERSION,
   MODEL_SYSTEM_PROMPT,
+  CONSTRAINED_SYSTEM_PROMPT,
   MODEL_PROTOCOL_SCHEMAS,
   modelGoalTypes,
   taskToolArguments,
@@ -90,6 +91,7 @@ export type RunStatus =
   | 'limit';
 export interface CallRecord {
   id: string;
+  modelCallId?: string;
   name: string;
   arguments: unknown;
   modelArguments?: unknown;
@@ -120,11 +122,6 @@ export interface SubmissionEvidenceGap {
     | 'artifact_not_ready'
     | 'invalid_reference';
   detail?: string;
-}
-export interface SubmissionEvidenceGap {
-  tool: string;
-  labels: string[];
-  reason: 'missing_tool_or_scope' | 'fact_mismatch' | 'missing_citation';
 }
 export interface AgentRun {
   romCard?: RomCardExecution;
@@ -280,7 +277,7 @@ export function checkEvidence(registry: ReturnType<typeof createToolRegistry>, o
 
 export class AgentRuntime {
   private readonly legacy: boolean;
-  private provider: ModelProvider;
+  private readonly provider?: ModelProvider;
   private readonly session: AnalysisSession;
   private readonly registry: ReturnType<typeof createToolRegistry>;
   private readonly onChange: (run: AgentRun) => void;
@@ -291,6 +288,12 @@ export class AgentRuntime {
   private readonly onAudit?: (audit: RunAudit) => void | Promise<void>;
   private readonly onReady?: (run: AgentRun) => void | Promise<void>;
   private readonly beforeRequest?: () => void;
+  private readonly reviewRom?: (
+    review: FreeRomReview,
+    signal: AbortSignal,
+  ) => Promise<FreeRomConfirmation>;
+  private readonly verifyApplication?: (run: AgentRun) => Promise<void>;
+  private readonly submissionRequirements?: EvidenceRequirement[];
   private readonly submissionEvidence?: (
     run: AgentRun,
     citations: Citation[],
@@ -306,7 +309,7 @@ export class AgentRuntime {
   constructor(options: {
     // Explicit offline historical regression only. Product callers use v3.
     modelProtocol?: 'legacy-v2';
-    provider: ModelProvider;
+    provider?: ModelProvider;
     session: AnalysisSession;
     registry: ReturnType<typeof createToolRegistry>;
     onChange?: (run: AgentRun) => void;
@@ -314,6 +317,9 @@ export class AgentRuntime {
     onReady?: (run: AgentRun) => void | Promise<void>;
     beforeRequest?: () => void;
     submissionEvidence?: AgentRuntime['submissionEvidence'];
+    submissionRequirements?: EvidenceRequirement[];
+    reviewRom?: AgentRuntime['reviewRom'];
+    verifyApplication?: AgentRuntime['verifyApplication'];
     limits?: Partial<AgentRuntime['limits']>;
   }) {
     this.legacy = options.modelProtocol === 'legacy-v2';
@@ -325,6 +331,9 @@ export class AgentRuntime {
     this.onReady = options.onReady;
     this.beforeRequest = options.beforeRequest;
     this.submissionEvidence = options.submissionEvidence;
+    this.submissionRequirements = options.submissionRequirements;
+    this.reviewRom = options.reviewRom;
+    this.verifyApplication = options.verifyApplication;
     this.limits = {
       rounds: 12,
       calls: 24,
@@ -354,11 +363,13 @@ export class AgentRuntime {
 
   async run(
     goal: string,
-    submission?: { submittedAt: number; monotonicAt: number },
+    submission?: { submittedAt: number; monotonicAt: number; timeoutMs?: number },
+    provider = this.provider,
   ): Promise<AgentRun> {
     const monotonicAt = submission?.monotonicAt ?? performance.now();
     const timing = beginTiming(submission?.submittedAt);
     if (this.active) throw new Error('AGENT_BUSY');
+    if (!provider) throw new Error('请先选择模型。');
     if (!goal.trim() || goal.length > 2000) throw new Error('目标需为非空文本且不超过 2000 字。');
     const reference = this.session.info();
     const context = this.context;
@@ -376,8 +387,8 @@ export class AgentRuntime {
       id: runId,
       goal: goal.trim(),
       reference,
-      provider: this.provider.id,
-      model: this.provider.model,
+      provider: provider.id,
+      model: provider.model,
       status: 'running',
       phase: '正在请求模型选择步骤或工具',
       steps: [],
@@ -398,7 +409,7 @@ export class AgentRuntime {
     const romIntent =
       !this.legacy &&
       this.reviewRom &&
-      ['ollama-local', 'deepseek-api'].includes(this.provider.id) &&
+      ['ollama-local', 'deepseek-api'].includes(provider.id) &&
       (!previousTask || previousRom)
         ? parseRomIntent(run.goal, previousRom)
         : undefined;
@@ -413,11 +424,13 @@ export class AgentRuntime {
           contextSnapshot.pendingUserIntents,
           contextSnapshot.referenceChanged,
         );
+    const constrained = provider.toolMode === 'constrained';
+    const modelPrompt = constrained ? CONSTRAINED_SYSTEM_PROMPT : MODEL_SYSTEM_PROMPT;
     if (adapter)
       run.protocolFingerprint = await protocolDigest({
         version: MODEL_PROTOCOL_VERSION,
         instructions: MODEL_INSTRUCTION_VERSION,
-        prompt: romIntent ? ROM_INTENT_PROMPT : MODEL_SYSTEM_PROMPT,
+        prompt: romIntent ? ROM_INTENT_PROMPT : modelPrompt,
         schemas: MODEL_PROTOCOL_SCHEMAS,
         definitions,
       });
@@ -451,8 +464,10 @@ export class AgentRuntime {
       },
     ];
     let correction: ModelMessage | undefined;
-    let deadline = performance.now() + this.limits.timeoutMs;
-    let timer = setTimeout(() => controller.abort('timeout'), this.limits.timeoutMs);
+    let pendingNativeCalls: Set<string> | undefined;
+    const timeoutMs = Math.min(this.limits.timeoutMs, submission?.timeoutMs ?? Infinity);
+    let deadline = performance.now() + timeoutMs;
+    let timer = setTimeout(() => controller.abort('timeout'), timeoutMs);
     const localEvidence = () => {
       if (!run.task) return;
       const requirements =
@@ -510,7 +525,7 @@ export class AgentRuntime {
           : [
               ...(adapter
                 ? [
-                    { role: 'system' as const, content: MODEL_SYSTEM_PROMPT },
+                    { role: 'system' as const, content: modelPrompt },
                     {
                       role: 'user' as const,
                       content: JSON.stringify({
@@ -527,19 +542,26 @@ export class AgentRuntime {
                     },
                   ]
                 : baseMessages),
-              ...(adapter ? compactModelFeedback(run) : selectFeedback(run.calls, run.completion)),
+              ...(adapter
+                ? compactModelFeedback(run, pendingNativeCalls)
+                : selectFeedback(run.calls, run.completion)),
               ...(correction ? [correction] : []),
             ];
         const offered = boundRom
           ? [ROM_INTENT_TOOL]
           : adapter
-            ? adapter.tools(run, definitions)
+            ? adapter.tools(run, definitions, constrained)
             : definitions;
+        if (constrained && offered.some((tool) => tool.name === 'set_task_patch'))
+          messages.push({
+            role: 'user',
+            content: `本轮用户原文 ${JSON.stringify(run.goal)}。上轮规格用于继承。按原文提取本轮的起止秒和侧别，写入 changes；明确区间用 [起秒,止秒]。只改变被要求的字段。`,
+          });
         const input = { messages, tools: offered };
         const toolFingerprint = adapter ? await protocolDigest(offered) : undefined;
         assertActive();
         const inputBytes = jsonBytes(input);
-        const wireBytes = this.provider.requestBytes?.(input) ?? null;
+        const wireBytes = provider.requestBytes?.(input) ?? null;
         if (
           inputBytes > CONTEXT_LIMITS.requestBytes ||
           (wireBytes ?? 0) > CONTEXT_LIMITS.requestBytes
@@ -577,7 +599,7 @@ export class AgentRuntime {
         try {
           assertActive();
           reply = await abortable(
-            this.provider.complete({
+            provider.complete({
               messages: structuredClone(messages),
               tools: structuredClone(offered),
               signal: controller.signal,
@@ -603,6 +625,8 @@ export class AgentRuntime {
         run.rounds++;
         assertActive();
         if (boundRom) verifyRomIntent(reply.calls, boundRom, this.session.info());
+        if (provider.id === 'openai-api')
+          pendingNativeCalls = new Set(reply.calls.flatMap((call) => (call.id ? [call.id] : [])));
         if (!reply.calls.length) {
           if (++recoveries > this.limits.recoveries) throw new Error('RECOVERY_LIMIT');
           correction = {
@@ -673,6 +697,7 @@ export class AgentRuntime {
           run.phase = `正在校验并执行 ${call.name}`;
           emit();
           let output: ToolResult;
+          let reusedCallId: string | undefined;
           let submissionGaps: SubmissionEvidenceGap[] | undefined;
           let submissionBudget:
             | { submitted: number; maximum: number; minimumReplacements: number }
@@ -757,6 +782,12 @@ export class AgentRuntime {
                 runId: run.id,
                 goal: run.goal,
                 spec,
+                ...(constrained &&
+                spec.comparison &&
+                spec.deliveries.view &&
+                adapter?.comparisonViewLinked(modelCall)
+                  ? { comparisonViewLinked: true }
+                  : {}),
                 validation: 'structure_and_provenance_only',
               };
               context.accept(
@@ -839,6 +870,16 @@ export class AgentRuntime {
                   if (record.output.ok) checkEvidence(this.registry, record.output);
               run.completion = checkCompletion(run, citations, this.registry);
               if (['completed', 'not_comparable', 'limited'].includes(p.outcome)) {
+                if (local) {
+                  run.submissionGaps = local.gaps;
+                  submissionGaps = local.gaps.filter((gap) => gap.reason !== 'invalid_reference');
+                  if (submissionGaps.length) {
+                    if (run.completion.state === 'ready') run.completion.state = 'partial';
+                    throw new Error(
+                      'SUBMISSION_EVIDENCE_REQUIRED：按 submissionGaps 补齐本地工具证据。',
+                    );
+                  }
+                }
                 submissionGaps = this.submissionEvidence?.(run, citations);
                 if (submissionGaps?.length) {
                   const missingCitations = submissionGaps.filter(
@@ -996,6 +1037,7 @@ export class AgentRuntime {
           assertActive();
           const record = {
             id,
+            ...(modelCall.id ? { modelCallId: modelCall.id } : {}),
             name: call.name,
             arguments: structuredClone(call.arguments ?? null),
             ...(local
@@ -1027,6 +1069,7 @@ export class AgentRuntime {
                 ? `${call.name} 已完成，结果将反馈模型`
                 : `${call.name} 被拒绝，正在反馈错误`;
           emit();
+          if (boundRom && !output.ok) throw new Error(output.error.message);
           if (
             !output.ok &&
             (submissionGaps?.length ? ++submissionRecoveries : ++recoveries) >

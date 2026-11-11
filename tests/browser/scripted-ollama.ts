@@ -19,15 +19,22 @@ export async function scriptedOllama(
   const requests: any[] = [];
   const steps = new Map<string, number>();
   await page.route(
-    provider === 'ollama' ? 'http://127.0.0.1:11434/api/**' : '**/__deepseek/**',
+    provider === 'ollama' ? 'http://127.0.0.1:11434/api/**' : '**/__models/**',
     async (route) => {
       let body = route.request().postDataJSON();
       const path = new URL(route.request().url()).pathname;
       const reply = (data: unknown) => route.fulfill({ json: data });
-      if (provider === 'deepseek' && path === '/__deepseek/probe')
+      if (path === '/api/tags') return reply({ models: [{ name: 'scripted-protocol-only' }] });
+      if (path === '/__models/catalog')
         return reply({
-          requests: 1,
-          response: { model: 'deepseek-flash', systemFingerprint: null },
+          providers: [
+            {
+              provider: 'deepseek',
+              models: ['deepseek-flash', 'deepseek-v4-pro'],
+              missing: [],
+              endpoint: 'https://api.deepseek.com/chat/completions',
+            },
+          ],
         });
       if (provider === 'deepseek')
         body = {
@@ -39,29 +46,64 @@ export async function scriptedOllama(
           })),
         };
       if (path === '/api/show') return reply({ capabilities: ['tools'] });
-      if (path !== '/api/chat' && path !== '/__deepseek/complete')
+      if (path !== '/api/chat' && path !== '/__models/complete')
         throw new Error(`Unexpected mock path ${path}`);
       requests.push(body);
       const calls = (items: { name: string; arguments: any }[]) => {
         const mapped = items.map((c) => {
           if (c.name === 'set_task_spec')
+            c =
+              provider === 'ollama'
+                ? {
+                    ...c,
+                    arguments: {
+                      actions: [...c.arguments.goalTypes, 'view'],
+                      joint: c.arguments.joint,
+                      channels: c.arguments.channels,
+                      basis: c.arguments.basis,
+                      interval: c.arguments.interval,
+                      second: c.arguments.comparison.second,
+                      metrics: c.arguments.metrics,
+                      view: c.arguments.deliveries.view.interval,
+                    },
+                  }
+                : {
+                    ...c,
+                    arguments: {
+                      ...c.arguments,
+                      goalTypes: modelGoalTypes(c.arguments.goalTypes),
+                      sources: [
+                        {
+                          field: 'task',
+                          origin: 'derived',
+                          sourceId: input.userSources.find((s: any) => s.kind === 'current')
+                            .sourceId,
+                        },
+                      ],
+                    },
+                  };
+          if (c.name === 'set_task_patch' && provider === 'ollama') {
+            const keys: Record<string, string> = {
+              'comparison.second': 'second',
+              'deliveries.view.channels': 'viewChannels',
+              'deliveries.view.interval': 'viewInterval',
+              'deliveries.report': 'report',
+              'deliveries.export': 'export',
+            };
             c = {
               ...c,
               arguments: {
-                ...c.arguments,
-                goalTypes: Array.isArray(c.arguments.goalTypes)
-                  ? modelGoalTypes(c.arguments.goalTypes)
-                  : c.arguments.goalTypes,
-                sources: [
-                  {
-                    field: 'task',
-                    origin: 'derived',
-                    sourceId: input.userSources.find((s: any) => s.kind === 'current').sourceId,
-                  },
-                ],
+                changes: Object.fromEntries(
+                  c.arguments.changes
+                    .filter(({ field }: any) => !field.startsWith('deliveries.view.'))
+                    .map(({ field, value }: any) => [
+                      keys[field] ?? field,
+                      field === 'deliveries.export' ? value.interval : value,
+                    ]),
+                ),
               },
             };
-          if (c.name === 'set_task_patch')
+          } else if (c.name === 'set_task_patch')
             c = {
               ...c,
               arguments: {
@@ -81,7 +123,7 @@ export async function scriptedOllama(
                 calls: mapped,
                 response: {
                   id: 'scripted-only',
-                  model: 'deepseek-flash',
+                  model: body.model,
                   systemFingerprint: null,
                   finishReason: 'tool_calls',
                 },
@@ -90,13 +132,18 @@ export async function scriptedOllama(
                 done: true,
                 message: {
                   role: 'assistant',
-                  content: '',
-                  tool_calls: mapped.map((c) => ({ function: c })),
+                  content: JSON.stringify({
+                    calls: mapped.map((c) => ({ tool: c.name, values: c.arguments })),
+                  }),
                 },
               },
         );
       };
-      if (body.tools.some((t: any) => t.function.name === 'connection_check'))
+      const names =
+        provider === 'ollama'
+          ? body.format.properties.calls.items.anyOf.map((t: any) => t.properties.tool.enum[0])
+          : body.tools.map((t: any) => t.function.name);
+      if (names.includes('connection_check'))
         return calls([{ name: 'connection_check', arguments: { echo: 'kinetic' } }]);
       const input = body.messages
         .filter((m: any) => m.role === 'user')
@@ -110,8 +157,9 @@ export async function scriptedOllama(
         .findLast((m: any) => m.goal);
       if (!goals.includes(input.goal)) throw new Error(`Unexpected scripted goal ${input.goal}`);
       const turn = goals.indexOf(input.goal);
-      const step = steps.get(input.goal) ?? 0;
-      steps.set(input.goal, step + 1);
+      const requestIndex = steps.get(input.goal) ?? 0;
+      steps.set(input.goal, requestIndex + 1);
+      const step = requestIndex - (provider === 'ollama' ? 1 : 0);
       const reference = {
         sessionId: input.currentSession.sessionId,
         revision: input.currentSession.revision,
@@ -125,10 +173,12 @@ export async function scriptedOllama(
       const selection = { ...reference, joint: 'knee', channels: view.channels, basis: 'filtered' };
       const second = turn ? [12, 17] : [15, 20];
       const call = (name: string, args: any) => ({ name, arguments: args });
+      if (step < 0) return calls([call('get_session_info', {})]);
+      const sessionCall = provider === 'deepseek' ? [call('get_session_info', {})] : [];
       if (step === 0) {
         if (!turn)
           return calls([
-            call('get_session_info', {}),
+            ...sessionCall,
             call(
               'set_task_spec',
               archivedDeclaration ??
@@ -156,7 +206,7 @@ export async function scriptedOllama(
                 ['deliveries.export', { interval: [0, 17], format: 'csv' }],
               ];
         return calls([
-          call('get_session_info', {}),
+          ...sessionCall,
           call('set_task_patch', {
             changes: changes.map(([field, value]) => ({
               field,
@@ -197,8 +247,8 @@ export async function scriptedOllama(
       if (step !== 2)
         throw new Error('Scripted flow needed unexpected recovery; inspect actual feedback');
       const feedback = body.messages
-        .filter((m: any) => m.role === 'tool')
-        .map((m: any) => JSON.parse(m.content));
+        .filter((m: any) => m.role === 'tool' || m.content.startsWith('本地工具反馈：'))
+        .map((m: any) => JSON.parse(m.content.replace(/^本地工具反馈：/, '')));
       if (
         turn === 1 &&
         !feedback.some(
@@ -221,7 +271,20 @@ export async function scriptedOllama(
         call('finish_analysis', {
           outcome: 'completed',
           messageCode: 'evidence_ready',
-          citations: [],
+          ...(provider === 'ollama'
+            ? {
+                evidence: Object.fromEntries(
+                  feedback
+                    .map((f: any) => [
+                      f.tool,
+                      (f.evidenceCatalog?.entries ?? [])
+                        .filter((entry: any) => labels.includes(entry.label))
+                        .map((entry: any) => entry.evidenceId),
+                    ])
+                    .filter(([, ids]: any) => ids.length),
+                ),
+              }
+            : { citations }),
         }),
       ]);
     },

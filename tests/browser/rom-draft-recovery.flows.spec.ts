@@ -68,6 +68,8 @@ async function scripted(page: Page, outcome: Outcome) {
       window.fetch = async (input, init) => {
         const url = String(input);
         if (!url.startsWith('http://127.0.0.1:11434/')) return nativeFetch(input, init);
+        if (url.endsWith('/tags'))
+          return Response.json({ models: [{ name: 'scripted-recovery' }] });
         if (url.endsWith('/show')) return Response.json({ capabilities: ['tools'] });
         if (!url.endsWith('/chat')) throw new Error(url);
         const name = JSON.parse(String(init?.body)).tools[0].function.name;
@@ -113,9 +115,9 @@ async function relative(page: Page) {
   await card.getByLabel('统计后段时长').fill('5');
 }
 async function startDraft(page: Page) {
-  await page.getByLabel('模型名', { exact: true }).fill('scripted-recovery');
-  await choose(page, '验证并连接').click();
-  await expect(page.locator('.connection-status')).toHaveText('模型已连接');
+  await page
+    .getByLabel('模型', { exact: true })
+    .selectOption(JSON.stringify(['ollama', 'scripted-recovery', 'http://127.0.0.1:11434']));
   await choose(page, '用当前模型草拟').click();
   await romCard(page).getByLabel('模型草拟指令').fill(romGoal);
   await choose(page, '生成待审阅草稿').click();
@@ -186,7 +188,7 @@ for (const [outcome, expected] of [
       await page.evaluate(() => window.romDraftScript.expire());
     }
     if (outcome === 'cancel') await choose(page, '取消草拟').click();
-    if (outcome === 'disconnect') await choose(page, '断开').click();
+    if (outcome === 'disconnect') await page.getByLabel('模型', { exact: true }).selectOption('');
     const attempt = await recover(page, info, expected);
     if (outcome === 'timeout') await page.evaluate(() => window.romDraftScript.reply());
     await verifyManual(page, info, attempt);

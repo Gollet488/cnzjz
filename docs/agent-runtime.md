@@ -1,18 +1,18 @@
 # Agent 执行循环
 
-入口：`src/agent/runtime.ts`。供应商接口位于 `src/agent/provider.ts`；页面可选择本机 Ollama 或通过同源回环代理连接 DeepSeek 官方 API，复用同一个执行器和工具注册表。
+执行入口为 `src/agent/runtime.ts`，供应商接口位于 `src/agent/provider.ts`。页面可直连本机 Ollama，或通过同源回环代理调用 DeepSeek、OpenAI、Claude、智谱和 Kimi。各模型共用同一个执行器和本地工具注册表。[模型配置与验收](agent-model-selection.md)
 
 模型根据用户目标选择结构化工具；本地执行器负责参数校验、工具执行、证据映射、完成检查和审计。自由文本与模型内部思考不会直接作为已验证分析呈现。
 
 默认每轮限制：12 个模型轮次、24 次工具调用、3 次错误恢复、240 秒总超时、60 秒单请求超时。错误、取消、超时和引用失效均有独立状态。
 
-DeepSeek 页面总超时为 120 秒，仍最多 12 次模型请求、24 次工具调用和 3 次恢复，无自动重试。浏览器 `DeepSeekPageProvider` 仅 POST 同源 `/__deepseek/probe`（空对象）或 `/__deepseek/complete`（`{messages,tools}`）。代理内嵌于 Vite 开发/生产预览进程，不另开端口；固定调用 `https://api.deepseek.com/chat/completions` 和 `deepseek-flash`，不接受地址、模型、推理设置或凭据覆盖。校验 socket 回环、本机精确 Host、相同 Origin 和 Sec-Fetch-Site，无 CORS 开放；请求体上限 256000 字节、单请求 60 秒、响应由现有适配器限制 1 MB。浏览器断开、取消和服务关闭时中止上游；上游失败仅返回固定错误，不回传诊断正文。代理不记录请求内容。
+DeepSeek 页面总超时为 120 秒，最多 12 次模型请求、24 次工具调用和 3 次恢复。页面通过 `/__models/catalog` 读取已配置模型，并用同源 `/__models/probe` 或 `/__models/complete` 发起请求。代理嵌入 Vite 开发及生产预览进程，校验 socket 回环、本机精确 Host、相同 Origin 和 Sec-Fetch-Site。模型和官方端点由 Node 配置，请求体上限 256000 字节，单请求上限 60 秒，供应商响应上限 1 MB。浏览器断开、取消和服务关闭时中止上游。供应商错误以固定代码返回，代理不记录请求内容。既有 `/__deepseek/*` 路由保留兼容原 DeepSeek 客户端。
 
-启动开发：`node scripts/start-demo.mjs --no-open`；生产先 `pnpm build`，再 `node scripts/start-demo.mjs --production --no-open --port 5173`；二者均通过 `node scripts/stop-demo.mjs` 核对 PID/命令行后退出。也可 `pnpm dev` / `pnpm preview` 前台运行并 Ctrl+C 结束。服务只能绑定回环；将 host 改为外网地址会拒绝启动。纯静态部署没有此代理，不能直接使用 API。Node 优先读取进程环境，Windows 可回退读取真实用户环境中的 `DEEPSEEK_API_KEY`，无需重启 Codex；不把密钥放到 VITE_*、页面输入、文件或命令参数中。连接探测单列，逐次实际 model/system_fingerprint 进入本地审计和页面，缺失指纹保持 null。
+本机可用 `pnpm dev` 或构建后用 `pnpm preview`，通过 Ctrl+C 结束。项目也提供 `node scripts/start-demo.mjs --no-open`、生产预览及 `node scripts/stop-demo.mjs`。云端代理需要回环 Node 服务。Node 优先读取进程环境，其次读取项目根目录的 `.env`，DeepSeek 在 Windows 上还可读取用户级环境变量。密钥由 Node 管理，页面获取模型配置状态。逐次供应商实际返回的模型标识及指纹进入本地审计，缺失指纹记为 null。
 
 完成分析需要匹配当前任务的真实工具结果；比较、最终视图、报告和导出分别核验。UI 应用和审计失败不能被模型的一次 completed 声明掩盖。
 
-模型连接先检查 tools 能力，再执行真实结构化探测。地址限本机根地址，不接受凭据、任意路径或 cloud 模型。原始媒体在浏览器本地处理。
+Ollama 连接测试检查本地模型的 tools 能力，再发起结构化探测。页面使用 Ollama 的 JSON Schema 模式约束工具调用，按会话读取、规格声明、业务执行和结果提交开放工具。模型声明的动作与变更被转换为原有任务规格和补丁。模型用 `view: "comparison"` 绑定图表时，追问中的比较范围和侧别变更会同步到该图表。最终提交按工具选本轮真实证据，交由同一完成检查校验。原始媒体在浏览器本地处理。
 
 Node 对照评测使用 `node scripts/evaluate-agent.mjs --provider deepseek --model deepseek-flash --case compare --repeat 1 --max-business-requests 12 --max-business-ms 120000 --output .qa/core-work/<唯一目录>/compare.json`；quality 必须另开一次独立评测。凭据仅从该 Node 进程的 `DEEPSEEK_API_KEY` 环境变量读取，不支持密钥命令行参数，不进入配置/正文/审计，不导入页面。地址固定为 `https://api.deepseek.com`；现有 run-agent-screen.mjs 原始记录器仍仅支持 Ollama，并在 IO 前拒绝其他 provider。
 

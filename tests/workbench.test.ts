@@ -910,10 +910,12 @@ test('evaluation request budget retains partial multi-turn evidence without send
 
 test('evaluation wall budget aborts an in-flight request and retains its unknown token cost', async () => {
   const provider = protocolProvider();
-  provider.complete = async ({ signal }: any) =>
-    new Promise((_resolve, reject) => {
+  provider.complete = async ({ signal }: any) => {
+    signal.throwIfAborted();
+    return new Promise((_resolve, reject) => {
       signal.addEventListener('abort', () => reject(new Error('budget_abort')), { once: true });
     });
+  };
   const { record, exitCode } = await runEvaluation(
     parseEvaluationArgs([
       '--case',

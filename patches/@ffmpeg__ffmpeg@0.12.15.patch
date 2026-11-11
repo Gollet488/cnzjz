@@ -1,0 +1,30 @@
+diff --git a/dist/esm/classes.js b/dist/esm/classes.js
+index fae4753..e3b5e38 100644
+--- a/dist/esm/classes.js
++++ b/dist/esm/classes.js
+@@ -25,6 +25,10 @@ export class FFmpeg {
+      */
+     #registerHandlers = () => {
+         if (this.#worker) {
++            this.#worker.onerror = (event) => {
++                event.preventDefault();
++                this.#terminate(new Error(event.message || "FFmpeg Worker failed to start or load its scripts"));
++            };
+             this.#worker.onmessage = ({ data: { id, type, data }, }) => {
+                 switch (type) {
+                     case FFMessageType.LOAD:
+@@ -183,11 +187,12 @@ export class FFmpeg {
+      *
+      * @category FFmpeg
+      */
+-    terminate = () => {
++    terminate = () => this.#terminate(ERROR_TERMINATED);
++    #terminate = (error) => {
+         const ids = Object.keys(this.#rejects);
+         // rejects all incomplete Promises.
+         for (const id of ids) {
+-            this.#rejects[id](ERROR_TERMINATED);
++            this.#rejects[id](error);
+             delete this.#rejects[id];
+             delete this.#resolves[id];
+         }

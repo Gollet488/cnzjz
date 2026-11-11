@@ -2,18 +2,19 @@ name: GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: github-pages
+  group: github-pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,15 +25,25 @@ jobs:
         with:
           version: 11.25.0
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
+      - run: pnpm prepare:assets
+      - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm test
       - run: pnpm build --base /cnzjz/
+      - run: pnpm exec playwright install --with-deps chrome
+      - run: pnpm test:browser:pages
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: pages-smoke-results
+          path: test-results/
       - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main'
         with:
           path: dist
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:

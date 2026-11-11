@@ -58,16 +58,24 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
   };
   await persist();
   await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
-  await page.getByLabel('本地 Ollama 地址', { exact: true }).fill(address);
-  await page.getByLabel('模型名', { exact: true }).fill(model);
-  await page.getByRole('button', { name: '验证并连接', exact: true }).click();
-  await expect(page.locator('.connection-status')).toHaveText('模型已连接', { timeout: 70_000 });
-  summary.connection = 'probe-passed';
+  const choice = JSON.stringify(['ollama', model, 'http://127.0.0.1:11434']);
+  await expect(
+    page.getByLabel('模型', { exact: true }).locator('option').filter({ hasText: model }),
+  ).toBeAttached();
+  await page.getByLabel('模型', { exact: true }).selectOption(choice);
+  await page.getByRole('button', { name: '模型设置', exact: true }).click();
+  const settings = page.getByRole('region', { name: '模型设置' });
+  await settings.getByRole('button', { name: '测试连接', exact: true }).click();
+  await expect(settings.getByText('结构化工具调用通过')).toBeVisible({ timeout: 65_000 });
+  await page.getByRole('button', { name: '模型设置', exact: true }).click();
+  summary.connection = 'structured_probe_passed';
   await persist();
   const goals = [
     '比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表',
     '只看右侧，第二段改成 12–17 秒',
-    '准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表',
+    process.env.REAL_AGENT_FLOW === 'concise_delivery'
+      ? '沿用上一轮比较和图表。准备报告，并准备 0–17 秒 CSV。'
+      : '准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表',
   ];
   summary.config = {
     goals,
@@ -110,7 +118,7 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
       await page.getByRole('textbox', { name: '分析目标或后续修改' }).fill(goal);
       const submitted = performance.now();
       budget.startTarget();
-      await page.getByRole('button', { name: '执行目标', exact: true }).click();
+      await page.getByRole('button', { name: '发送', exact: true }).click();
       const panel = page.locator('.run-panel').first();
       await expect(panel.locator('h3').first()).toHaveText(goal);
       await reviewExpectedFreeGoal(page, index);

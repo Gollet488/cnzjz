@@ -133,7 +133,8 @@ async function play() {
   busy.value = true;
   try {
     if (models.length !== 2) {
-      const wasm = await FilesetResolver.forVisionTasks('/mediapipe/wasm');
+      const assets = `${import.meta.env.BASE_URL}mediapipe/`;
+      const wasm = await FilesetResolver.forVisionTasks(`${assets}wasm`);
       if (!current()) return;
       for (let i = 0; i < 2; i++) {
         const model = await PoseLandmarker.createFromOptions(wasm, {

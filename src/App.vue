@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, reactive, watch, nextTick } from 'vue';
+import { computed, ref, shallowRef, shallowReactive, reactive, watch, nextTick } from 'vue';
 import {
-  Activity,
   LayoutDashboard,
   ChartNoAxesCombined,
   ArrowLeftRight,
@@ -44,6 +43,7 @@ import MarkerTimeline from './components/MarkerTimeline.vue';
 import PoseCompare from './components/PoseCompare.vue';
 import AgentPanel from './components/AgentPanel.vue';
 import PoseCorrection from './components/PoseCorrection.vue';
+import { WorkspaceApplicationError } from './agent/completion.ts';
 import type { AgentRun } from './agent/runtime.ts';
 import { DEFAULT_SETTINGS, JOINTS, MAX_FRAMES, POINT_NAMES } from './config';
 import { DEMO_SIZE } from './utils/dimensions';
@@ -56,9 +56,10 @@ import { useSessionStore } from './composables/useSessionStore';
 import { useCSVExport } from './composables/useCSVExport';
 import { demoPose } from './utils/demo';
 import { exportReport } from './utils/export';
-import type { Landmark, Joint, Marker, Source, Channel } from './types';
+import type { Landmark, Joint, Marker, PoseFrame, Source, Channel } from './types';
 import type { OfflineState, OfflineMetadata } from './video/protocol';
 
+const brandMark = `${import.meta.env.BASE_URL}favicon.svg`;
 const nav = [
   { id: 'workspace', label: '采集与分析', icon: LayoutDashboard },
   { id: 'analysis', label: '时序可视化', icon: ChartNoAxesCombined },
@@ -162,9 +163,16 @@ const analysisTools = createToolRegistry(session, {
   },
 });
 let origin: number | null = null;
+// Corrections need every accepted camera sample, including invalid readings
+// between the batched publications used by charts and the rest of the workspace.
+const correctionCamera = shallowReactive<{ frame?: PoseFrame }>({});
+const liveCorrection = computed(
+  () => source.value === 'camera' && playing.value && selectedIndex.value < 0,
+);
 watch(
   playing,
   () => {
+    correctionCamera.frame = undefined;
     if (!playing.value) publication.flush();
   },
   { flush: 'sync' },
@@ -282,6 +290,7 @@ function capture(
       ElMessage.error(`样本未写入：${error instanceof Error ? error.message : '未知错误'}`);
       return;
     }
+    if (source.value === 'camera') correctionCamera.frame = session.frames.at(-1);
     publication.schedule();
     selectedIndex.value = -1;
     if (session.frames.length >= MAX_FRAMES && source.value !== 'file') {
@@ -508,30 +517,27 @@ defineExpose({ analysisTools, sessionInfo });
     </div>
     <div v-if="sidebarOpen" class="sidebar-shade" @click="sidebarOpen = false" />
     <aside class="sidebar" :class="{ opened: sidebarOpen }">
-      <a class="brand" href="#" @click.prevent="page = 'workspace'"
-        ><div class="brand-symbol"><Activity :size="24" stroke-width="2.3" /></div
-        ><div
-          ><strong>kinetic<span>动观</span></strong
-          ><small>HUMAN MOTION LAB</small></div
-        ></a
-      >
-      <div class="workspace-label"
-        ><span class="workspace-avatar">K</span
-        ><span>我的研究工作空间<small>个人空间 · 本地分析</small></span
-        ><ChevronDown :size="14"
-      /></div>
-      <div class="nav-label">工作台 <span>WORKSPACE</span></div>
-      <nav
-        ><button
+      <a class="brand" href="#" @click.prevent="page = 'workspace'">
+        <img class="brand-symbol" :src="brandMark" alt="" width="44" height="44" />
+        <span class="brand-name">
+          <strong>Kinetic<span>动观</span></strong>
+          <small>HUMAN MOTION LAB</small>
+        </span>
+      </a>
+      <div class="nav-label">工作台</div>
+      <nav>
+        <button
           v-for="item in nav"
           :key="item.id"
           :class="{ active: page === item.id }"
+          :aria-current="page === item.id ? 'page' : undefined"
           @click="page = item.id"
-          ><component :is="item.icon" :size="19" /><span>{{ item.label }}</span
-          ><span v-if="item.id === 'workspace'" class="nav-count">01</span
-          ><ChevronRight v-else :size="13" class="nav-chevron" /></button
-      ></nav>
-      <div class="nav-label session-label">当前会话 <i /></div>
+        >
+          <component :is="item.icon" :size="18" />
+          <span>{{ item.label }}</span>
+        </button>
+      </nav>
+      <div class="nav-label session-label">当前会话</div>
       <button class="session-item" @click="page = 'workspace'"
         ><span class="session-dot" /><div
           >{{ sessionName
@@ -541,19 +547,23 @@ defineExpose({ analysisTools, sessionInfo });
           ></div
         ><ChevronRight :size="13"
       /></button>
-      <div class="sidebar-bottom"
-        ><div class="privacy-card"
-          ><div><ShieldCheck :size="19" /><b>让数据留在你手中</b></div
-          ><p>所有姿态推理在浏览器内完成，<br />视频与原始画面不会上传。</p
-          ><span>本地计算，隐私优先 <ArrowUpRight :size="13" /></span></div
-        ><button class="utility-link" @click="guideOpen = true"
-          ><BookOpen :size="17" />使用指南 <ArrowUpRight :size="14" /></button
-        ><button class="utility-link" @click="settingsOpen = true"
-          ><Settings2 :size="17" />分析设置 <span class="version">v0.1 DEMO</span></button
-        ><div class="user-row"
-          ><div class="avatar">研</div><div><b>研究者</b><small>本地研究工作空间</small></div
-          ><span class="user-online" /></div
-      ></div>
+      <div class="sidebar-bottom">
+        <div class="privacy-card">
+          <div><ShieldCheck :size="17" /><b>本地姿态分析</b></div>
+          <p>视频与原始画面留在浏览器内。</p>
+        </div>
+        <button class="utility-link" @click="guideOpen = true">
+          <BookOpen :size="17" />使用指南 <ArrowUpRight :size="14" />
+        </button>
+        <button class="utility-link" @click="settingsOpen = true">
+          <Settings2 :size="17" />分析设置 <span class="version">v0.1 DEMO</span>
+        </button>
+        <div class="user-row">
+          <div class="avatar">研</div>
+          <div><b>研究者</b><small>本地研究工作空间</small></div>
+          <span class="user-online" />
+        </div>
+      </div>
     </aside>
 
     <div class="main-shell">
@@ -561,7 +571,8 @@ defineExpose({ analysisTools, sessionInfo });
         ><div class="breadcrumbs"
           ><button class="mobile-toggle" aria-label="展开导航" @click="sidebarOpen = !sidebarOpen"
             ><PanelLeftClose :size="19" /></button
-          ><span>工作空间</span><ChevronRight :size="13" /><b>{{
+          ><img class="mobile-brand" :src="brandMark" alt="" width="24" height="24" />
+          <span>工作空间</span><ChevronRight :size="13" /><b>{{
             nav.find((n) => n.id === page)?.label
           }}</b></div
         ><div class="topbar-right"
@@ -573,7 +584,7 @@ defineExpose({ analysisTools, sessionInfo });
       <main>
         <div class="page-heading"
           ><div
-            ><div class="eyebrow">OBSERVE. MEASURE. UNDERSTAND.</div
+            ><div class="eyebrow">HUMAN MOTION LAB</div
             ><h1>{{
               page === 'workspace'
                 ? '每一帧，都有迹可循。'
@@ -835,7 +846,12 @@ defineExpose({ analysisTools, sessionInfo });
           >
         </div>
 
-        <PoseCorrection v-show="page === 'workspace'" :frame="latest" />
+        <PoseCorrection
+          v-show="page === 'workspace'"
+          :frame="liveCorrection ? undefined : latest"
+          :live="liveCorrection"
+          :camera="correctionCamera"
+        />
 
         <div v-if="message && page === 'workspace'" class="status-message"
           ><Info :size="15" />{{ message
@@ -1053,6 +1069,8 @@ defineExpose({ analysisTools, sessionInfo });
 
         <AgentPanel
           v-show="page === 'agent'"
+          :active="page === 'agent'"
+          @manual="page = 'workspace'"
           @invalidate-view="agentChart = null"
           :session="session"
           :tools="analysisTools"
@@ -1164,7 +1182,9 @@ defineExpose({ analysisTools, sessionInfo });
           ><button @click="guideOpen = true">了解分析边界 <ArrowUpRight :size="13" /></button
         ></div>
         <footer
-          ><span><Activity :size="12" />KINETIC 动观 <span>·</span> 通用人体姿态量化分析平台</span
+          ><span
+            ><img :src="brandMark" alt="" width="14" height="14" />KINETIC 动观
+            <span>·</span> 通用人体姿态量化分析平台</span
           ><span>Vue 3 <i /> MediaPipe <i /> ECharts <b>FRONTEND ONLY</b></span></footer
         >
       </main>

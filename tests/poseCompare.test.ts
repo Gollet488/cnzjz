@@ -97,9 +97,12 @@ async function mount(t: any) {
     'utf8',
   );
   const compiled = compileScript(parse(source).descriptor, { id: 'compare-unit' });
-  const js = ts.transpileModule(compiled.content, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
-  }).outputText;
+  const js = ts.transpileModule(
+    compiled.content.replaceAll('import.meta.env.BASE_URL', '"/cnzjz/"'),
+    {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    },
+  ).outputText;
   const key = `compareUnit${Math.random().toString(36).slice(2)}`;
   (globalThis as any)[key] = modules;
   const injected = js.replace(
@@ -309,14 +312,16 @@ for (const invalidate of ['parameters', 'source', 'unmount']) {
 
 test('comparison pauses late play promises after invalidation and ignores duplicate starts', async (t) => {
   const q = await mount(t),
-    pending = deferred();
+    pending = deferred(),
+    started = deferred();
   q.videos[1].play = async function () {
+    started.resolve();
     await pending.promise;
     this.paused = false;
   };
   const playing = q.s.play();
-  // Wait until both model promises have completed and play() has begun.
-  while (!q.state.models.length || q.videos[0].paused) await Promise.resolve();
+  await Promise.race([started.promise, playing]);
+  assert.equal(q.videos[0].paused, false);
   await q.s.play();
   assert.equal(q.state.models.length, 2);
   q.settings.threshold = 0.7;
@@ -330,16 +335,19 @@ test('comparison pauses late play promises after invalidation and ignores duplic
 
 test('comparison keeps start locked until every playback promise settles after one rejects', async (t) => {
   const q = await mount(t),
-    pending = deferred();
+    pending = deferred(),
+    started = deferred();
   q.videos[0].play = async () => {
     throw new Error('play denied');
   };
   q.videos[1].play = async function () {
+    started.resolve();
     await pending.promise;
     this.paused = false;
   };
   const playing = q.s.play();
-  while (q.state.models.length < 2) await Promise.resolve();
+  await Promise.race([started.promise, playing]);
+  assert.equal(q.state.models.length, 2);
   for (let i = 0; i < 8; i++) await Promise.resolve();
   assert.equal(q.s.busy, true);
   await q.s.play();

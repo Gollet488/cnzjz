@@ -86,11 +86,11 @@ test('REAL DeepSeek page: independent compare/quality then fixed configuration 3
     let businessStarted: number | null = null;
     page.on('request', (req) => {
       const path = new URL(req.url()).pathname;
-      if (path === '/__deepseek/probe') record.probes++;
-      if (path === '/__deepseek/complete') record.businessRequests++;
+      if (path === '/__models/probe') record.probes++;
+      if (path === '/__models/complete') record.businessRequests++;
     });
     page.on('response', (res) => {
-      if (new URL(res.url()).pathname.startsWith('/__deepseek/'))
+      if (new URL(res.url()).pathname.startsWith('/__models/'))
         record.http.push({ path: new URL(res.url()).pathname, status: res.status() });
     });
     try {
@@ -130,19 +130,15 @@ test('REAL DeepSeek page: independent compare/quality then fixed configuration 3
       record.material.sha256 = sha(material);
       await writeFile(info.outputPath(record.material.file), material, { flag: 'wx' });
       await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
-      await page.getByLabel('模型服务').selectOption('deepseek');
-      const probeWaiting = page.waitForResponse(
-        (res) => new URL(res.url()).pathname === '/__deepseek/probe',
-      );
-      await page.getByRole('button', { name: '验证并连接', exact: true }).click();
-      const probeResponse = await probeWaiting;
-      record.probe = { status: probeResponse.status(), ...(await probeResponse.json()) };
-      summary.probes.push({ label, ...record.probe });
-      await expect(page.locator('.connection-status')).toHaveText('模型已连接', { timeout: 65000 });
+      await page
+        .getByLabel('模型', { exact: true })
+        .selectOption(JSON.stringify(['deepseek', 'deepseek-flash', '']));
+      expect(record.probes).toBe(0);
+
       await expect(page.locator('.connection-note')).toContainText('DeepSeek 官方 API');
       await page.getByRole('textbox', { name: '分析目标或后续修改' }).fill(goals[kind]);
       businessStarted = performance.now();
-      await page.getByRole('button', { name: '执行目标', exact: true }).click();
+      await page.getByRole('button', { name: '发送', exact: true }).click();
       const panel = page.locator('.run-panel').first();
       if (kind === 'compare') await reviewExpectedFreeGoal(page, 0);
       await expect(panel.locator('.run-status')).not.toHaveText('执行中', { timeout: 125000 });

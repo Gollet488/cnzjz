@@ -12,6 +12,7 @@ import {
 } from '../../src/agent/evaluation.ts';
 import { resolveCitation } from '../../src/agent/runtime.ts';
 import { MODEL_INSTRUCTION_VERSION, MODEL_SYSTEM_PROMPT } from '../../src/agent/modelProtocol.ts';
+import { cloudProviders } from '../../src/agent/modelCatalog.ts';
 import { DEEPSEEK_ADDRESS, DEEPSEEK_INFERENCE } from '../../src/agent/providers/deepseek.ts';
 import {
   fullCSV,
@@ -25,10 +26,13 @@ import {
 } from './files.ts';
 
 const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
-test('REAL DeepSeek three turns and saved report/CSV, bounded fixed configuration sessions', async ({
+test('REAL cloud model three turns and saved report/CSV, bounded fixed configuration sessions', async ({
   browser,
 }, info) => {
-  expect(process.env.REAL_AGENT_PROVIDER).toBe('deepseek');
+  const provider = process.env.REAL_AGENT_PROVIDER ?? '';
+  expect(Object.hasOwn(cloudProviders, provider), 'Choose a supported cloud provider').toBe(true);
+  const model = process.env.REAL_AGENT_MODEL ?? (provider === 'deepseek' ? 'deepseek-flash' : '');
+  expect(model, 'Set REAL_AGENT_MODEL to one enabled model ID').toBeTruthy();
   expect(info.project.use.channel).toBe('chrome');
   expect(info.project.name).toBe('production');
   const plannedSessions = Number(process.env.REAL_AGENT_SESSIONS ?? 3);
@@ -41,8 +45,11 @@ test('REAL DeepSeek three turns and saved report/CSV, bounded fixed configuratio
     synthetic: true,
     startedAt: new Date().toISOString(),
     goals: DELIVERY_GOALS,
-    endpoint: DEEPSEEK_ADDRESS,
-    inference: DEEPSEEK_INFERENCE,
+    provider,
+    model,
+    ...(provider === 'deepseek'
+      ? { endpoint: DEEPSEEK_ADDRESS, inference: DEEPSEEK_INFERENCE }
+      : {}),
     modelInstructionVersion: MODEL_INSTRUCTION_VERSION,
     limits: { targetRequests: 12, targetMs: 120000, sessionRequests: 36, sessionMs: 360000 },
     nativeSave: 'not_tested; Blob downloads only, native picker disabled by QA',
@@ -82,7 +89,7 @@ test('REAL DeepSeek three turns and saved report/CSV, bounded fixed configuratio
     const page = await context.newPage();
     const budget = realAgentBudget(() => void context.close().catch(() => {}));
     // This only admits/aborts; successful traffic and responses are unmodified.
-    await context.route('**/__deepseek/complete', async (route) => {
+    await context.route('**/__models/complete', async (route) => {
       if (!budget.beforeRequest()) return route.abort().catch(() => {});
       record.businessRequests++;
       await route.continue();
@@ -90,11 +97,11 @@ test('REAL DeepSeek three turns and saved report/CSV, bounded fixed configuratio
     let downloads = 0;
     page.on('download', () => downloads++);
     page.on('request', (req) => {
-      if (new URL(req.url()).pathname === '/__deepseek/complete') record.businessAttempts++;
-      if (new URL(req.url()).pathname === '/__deepseek/probe') record.probes++;
+      if (new URL(req.url()).pathname === '/__models/complete') record.businessAttempts++;
+      if (new URL(req.url()).pathname === '/__models/probe') record.probes++;
     });
     page.on('response', (res) => {
-      if (new URL(res.url()).pathname.startsWith('/__deepseek/'))
+      if (new URL(res.url()).pathname.startsWith('/__models/'))
         record.http.push({ path: new URL(res.url()).pathname, status: res.status() });
     });
     try {
@@ -137,14 +144,11 @@ test('REAL DeepSeek three turns and saved report/CSV, bounded fixed configuratio
       };
       await writeFile(info.outputPath(record.material.file), material, { flag: 'wx' });
       await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
-      await page.getByLabel('模型服务').selectOption('deepseek');
-      const probe = page.waitForResponse(
-        (res) => new URL(res.url()).pathname === '/__deepseek/probe',
-      );
-      await page.getByRole('button', { name: '验证并连接', exact: true }).click();
-      const response = await probe;
-      record.probe = { status: response.status(), ...(await response.json()) };
-      await expect(page.locator('.connection-status')).toHaveText('模型已连接', { timeout: 65000 });
+      await page
+        .getByLabel('模型', { exact: true })
+        .selectOption(JSON.stringify([provider, model, '']));
+      expect(record.probes).toBe(0);
+
       for (const [index, goal] of DELIVERY_GOALS.entries()) {
         const requestsBefore = record.businessRequests;
         const downloadsBefore = downloads;
@@ -154,7 +158,7 @@ test('REAL DeepSeek three turns and saved report/CSV, bounded fixed configuratio
         await persist();
         await page.getByRole('textbox', { name: '分析目标或后续修改' }).fill(goal);
         budget.startTarget();
-        await page.getByRole('button', { name: '执行目标', exact: true }).click();
+        await page.getByRole('button', { name: '发送', exact: true }).click();
         const panel = page.locator('.run-panel').first();
         await expect(panel.locator('h3').first()).toHaveText(goal);
         await reviewExpectedFreeGoal(page, index);
@@ -202,6 +206,9 @@ test('REAL DeepSeek three turns and saved report/CSV, bounded fixed configuratio
         expect(turn.requests).toBe(run.requests.length);
         expect(turn.requests).toBeLessThanOrEqual(12);
         expect(run.elapsedMs).toBeLessThanOrEqual(120000);
+        expect(run.provider).toBe(provider + '-api');
+        expect(run.model).toBe(model);
+        expect(record.probes).toBe(0);
         expect(run.status).toBe('completed');
         expect(run.modelProtocolVersion).toBe('3.12.0');
         expect(audit.requests[0].messages[0]).toEqual({

@@ -51,17 +51,14 @@ test('ROM task card: archive-shaped scripted draft stays editable until confirma
   };
   await page.route('http://127.0.0.1:11434/api/**', async (route) => {
     const headers = { 'access-control-allow-origin': 'http://127.0.0.1:5187' };
+    if (route.request().url().endsWith('/tags'))
+      return route.fulfill({ headers, json: { models: [{ name: 'scripted-rom' }] } });
     if (route.request().url().endsWith('/show'))
       return route.fulfill({ headers, json: { capabilities: ['tools'] } });
     const payload = route.request().postDataJSON();
     requests.push(payload);
     const name = payload.tools[0].function.name;
-    const args =
-      name === 'connection_check'
-        ? { echo: 'kinetic' }
-        : requests.length === 2
-          ? { ...raw, second: { mode: 'end' } }
-          : raw;
+    const args = requests.length === 1 ? { ...raw, second: { mode: 'end' } } : raw;
     await route.fulfill({
       headers,
       json: {
@@ -75,9 +72,9 @@ test('ROM task card: archive-shaped scripted draft stays editable until confirma
   await card.getByRole('button', { name: '手动填写' }).click();
   await setAbsolute(page, '统计前段', 0, 5);
   await setAbsolute(page, '统计后段', 12, 17);
-  await page.getByLabel('模型名', { exact: true }).fill('scripted-rom');
-  await page.getByRole('button', { name: '验证并连接', exact: true }).click();
-  await expect(page.locator('.connection-status')).toHaveText('模型已连接');
+  await page
+    .getByLabel('模型', { exact: true })
+    .selectOption(JSON.stringify(['ollama', 'scripted-rom', 'http://127.0.0.1:11434']));
   await card.getByRole('button', { name: '用当前模型草拟' }).click();
   await card.getByLabel('模型草拟指令').fill(romGoal);
   const draftButton = card.getByRole('button', { name: '生成待审阅草稿' });
@@ -108,7 +105,7 @@ test('ROM task card: archive-shaped scripted draft stays editable until confirma
   );
   await setAbsolute(page, '统计前段', 0, 5);
   await setAbsolute(page, '统计后段', 15, 20);
-  await page.getByRole('button', { name: '断开', exact: true }).click();
+  await page.getByLabel('模型', { exact: true }).selectOption('');
   const first = await confirmRom(page, info, rows, 1);
   expect(first.run.romCard?.entry).toBe('model-draft');
   expect(first.run.romCard?.draft?.request.reply?.calls[0].arguments).toEqual(raw);
@@ -116,7 +113,6 @@ test('ROM task card: archive-shaped scripted draft stays editable until confirma
   expect(first.requests).toHaveLength(1);
   await finishRomDelivery(page, info, rows, first, '上传视频');
   expect(requests.map((r) => r.tools.map((tool: any) => tool.function.name))).toEqual([
-    ['connection_check'],
     ['draft_rom_comparison'],
     ['draft_rom_comparison'],
   ]);

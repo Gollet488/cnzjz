@@ -813,8 +813,8 @@ defineExpose({
   align-items: center;
   padding: 9px 12px;
   border-radius: 6px;
-  background: #10262ee8;
-  color: #dcf1eb;
+  background: var(--stage-overlay);
+  color: var(--stage-ink);
   font-size: 12px;
   z-index: 3;
 }
@@ -822,10 +822,10 @@ defineExpose({
   flex: 1;
   min-width: 30px;
   height: 8px;
-  accent-color: #62dbac;
+  accent-color: var(--accent-mid);
 }
 .offline-progress button {
-  border: 1px solid #698d85;
+  border: 1px solid var(--stage-line);
   color: inherit;
   background: transparent;
   border-radius: 4px;

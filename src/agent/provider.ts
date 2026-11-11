@@ -1,6 +1,7 @@
 import type { ToolDefinition } from '../analysis/tools.ts';
 
 export interface ModelCall {
+  id?: string;
   name: string;
   arguments: unknown;
 }
@@ -9,6 +10,7 @@ export interface ModelMessage {
   content: string;
   calls?: ModelCall[];
   toolName?: string;
+  toolCallId?: string;
 }
 export interface ModelReply {
   calls: ModelCall[];
@@ -38,6 +40,7 @@ export class ProviderResponseError extends Error {
 export interface ModelProvider {
   readonly id: string;
   readonly model: string;
+  readonly toolMode?: 'constrained';
   // Exact UTF-8 JSON body size, when the adapter exposes its wire encoding.
   requestBytes?(request: { messages: ModelMessage[]; tools: ToolDefinition[] }): number;
   complete(request: {

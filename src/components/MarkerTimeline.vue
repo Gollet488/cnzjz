@@ -83,15 +83,15 @@ onBeforeUnmount(() => observer?.disconnect());
   position: relative;
   height: 22px;
   margin: 0 5px;
-  border-top: 2px solid #edf2ec;
+  border-top: 2px solid var(--line);
 }
 .marker-pin {
   position: absolute;
   top: -8px;
   transform: translateX(-50%);
-  background: #edf7f0;
-  border: 1px solid #a0c9b6;
-  color: #277d65;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-mid);
+  color: var(--accent-dark);
   border-radius: 4px;
   min-width: 20px;
   height: 20px;
@@ -100,7 +100,7 @@ onBeforeUnmount(() => observer?.disconnect());
   font-size: 10px;
 }
 .marker-pin:focus-visible {
-  outline: 2px solid #18977e;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .marker-selection {
@@ -116,16 +116,16 @@ onBeforeUnmount(() => observer?.disconnect());
   padding-bottom: 8px;
 }
 .marker-choices button {
-  background: #f4f8f5;
-  color: #397b64;
-  border: 1px solid #dce8e0;
+  background: var(--surface-muted);
+  color: var(--accent-dark);
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 5px 8px;
   cursor: pointer;
 }
 .marker-clip {
   font-size: 10px;
-  color: #83968b;
+  color: var(--muted);
   padding-bottom: 6px;
 }
 </style>

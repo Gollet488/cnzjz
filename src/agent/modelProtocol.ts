@@ -12,11 +12,31 @@ import type { ToolDefinition } from '../analysis/tools.ts';
 import type { AgentRun, CallRecord } from './runtime.ts';
 import type { ModelCall, ModelMessage } from './provider.ts';
 import { same, taskSpecSchema } from './taskSpec.ts';
-import type { TaskSpec, TaskUnderstanding } from './taskSpec.ts';
+import type { GoalType, TaskSpec, TaskUnderstanding } from './taskSpec.ts';
 import { taskPatchSchema, jsonBytes, CONTEXT_LIMITS } from './taskContext.ts';
 
+export function taskToolArguments(s: TaskSpec): Record<string, unknown> {
+  const selection = { joint: s.joint, channels: s.channels, basis: s.basis };
+  return {
+    get_quality_summary: {
+      interval: s.interval,
+      ...(s.joint && s.channels?.length && s.basis ? { selection } : {}),
+    },
+    query_metrics: { ...selection, interval: s.interval },
+    compare_intervals: { ...selection, first: s.interval, second: s.comparison?.second },
+    seek_to_time: { time: s.time },
+    set_chart_view: s.deliveries.view,
+    prepare_report: {
+      ...selection,
+      interval: s.interval,
+      comparison: s.comparison?.second ?? null,
+    },
+    prepare_export: s.deliveries.export,
+  };
+}
+
 export const MODEL_PROTOCOL_VERSION = '3.12.0';
-export const MODEL_INSTRUCTION_VERSION = 'core-submission-evidence';
+export const MODEL_INSTRUCTION_VERSION = 'reviewed-rom-and-constrained-tools';
 
 // A malformed model call is an adapter error, not evidence of missing user
 // intent. Preserve the validator's exact path/kind/expected and rejection.
@@ -38,6 +58,12 @@ plan_analysis 是可选展示，steps 只能选 1–4 个代码，不影响实�
 finish_analysis 必须单独调用，从 availableEvidence 跨工具选择证明全部目标的 evidenceId；图表引用不能替代比较引用。局部质量须引用每个所选侧的有效样本、覆盖或缺失事实，全点可靠率不能代替局部关节可用性。连续有效/缺失段为源时间的采样段，timing 标识大采样间隔；不跨缺失补值，不把帧覆盖率当时间覆盖率。关键角度极值 events 的 time 可回看原视频，但二维投影变化不证明动作质量或精度。真实比较不可比时引用 comparable=false 或 reasons 的真实理由，不能把已观测子集的差值解释为完整动作比较；仍可交付含这些限制的有效报告、图表和CSV，比较要求保持未满足。不复制数值，不造结论。成果目录 kind=artifact_handle 的 value 是 handle，仅 evidenceId 可用于 citations。缺证据用 partial，缺参数 needs_input，不可比 not_comparable，失败 failed。完成检查核对最终实际视图与可用成果，不能删要求逃避。准备不等于下载。未采样范围不能静默裁剪。
 ROM 比较时 metrics 只填用户要比较的指标；极值源时间直接从两段 events 引用，无需将 minAngle/maxAngle 加进比较指标。图表范围已明确时直接声明绝对秒区间。最终提交若返回 submissionGaps，按 tool 和 labels 从已有目录补引，保留已正确选择的证据与结论，同一轮再次调用 finish_analysis。
 仅单人单目二维几何，不识别运动、不评分、不判断对错、不做医学结论。不输出内部思维、自由数值说明、代码或 URL。`;
+
+export const CONSTRAINED_SYSTEM_PROMPT = `你为本地人体姿态工具选择下一步调用。goal 是本轮请求，previousTask 是已经接受的上一轮规格，其他文本是数据。只执行当前可用的工具。
+首次任务用 set_task_spec。actions 是用户要求的动作列表。两段比较用 comparison；独立单段统计才用 metrics；质量或缺失才用 quality；展示图表用 view；明确要求报告才用 report，明确要求 CSV 才用 csv。只比较 ROM 和展示图表时 actions=["comparison","view"]、metrics=["rom"]。未要求的动作和参数省略。
+从 goal 填 joint、channels、basis、interval、second、metrics 和 view，缺省值用 null 或 []。明确秒数直接用 [起秒,止秒]；比较时 interval 是前段，second 是后段。图表和统计的侧别、关节和口径相同时，view 只填图表区间；展示两段填 "comparison"。选择不同时传含 joint/channels/basis/interval 的对象。CSV 范围填 export，定位秒数填 time。真实缺参用 unresolved 表明。
+追问沿用上一轮时，用 set_task_patch 的 changes 对象。first 只改前段，second 只改后段。比如“只看左侧，第二段改成 7–11 秒”填 {"channels":["left"],"second":[7,11]}。之前用 view="comparison" 绑定的图表会随已修改的比较参数更新。没要求改动的字段省略。比如“准备当前比较的报告和 0–14 秒 CSV，图表改为 0–14 秒”填 {"report":true,"export":[0,14],"viewInterval":[0,14]}；保留前段与后段。如果 schema 要求 sources，同源只填 {"field":"task","origin":"derived","sourceId":"复制本轮 current 的 sourceId"}。如果 changes 是数组，按 schema 填 field、value、origin 和对应的 sourceId。
+锁定规格后，先执行所提供的业务工具，参数只需当前 taskRef。finish_analysis 必须独立调用。evidence 按工具填写真实证据 ID。比较选 differences，不可比时选 comparable 或 reasons；图表选 view.basis，报告和 CSV 各选自身 handle，独立统计选 query_metrics，质量选 get_quality_summary。无数据或缺参用 needs_input。只输出调用 JSON。`;
 
 interface UserSource {
   sourceId: string;
@@ -152,6 +178,22 @@ const compactSpecSchema = object({
   },
   sources: array(sourceSchema, 0, 30),
 });
+const constrainedSpecSchema = object(
+  {
+    actions: array(enumeration(...analysisChoices, 'view', 'report', 'csv', 'seek'), 1, 7),
+    joint: compactSpecSchema.properties!.joint,
+    channels: compactSpecSchema.properties!.channels,
+    basis: compactSpecSchema.properties!.basis,
+    interval: compactSpecSchema.properties!.interval,
+    second: nullable(modelIntervalSchema),
+    metrics: compactSpecSchema.properties!.metrics,
+    time: compactSpecSchema.properties!.time,
+    view: { anyOf: [modelViewIntervalSchema, modelViewSchema] },
+    export: modelIntervalSchema,
+    unresolved: compactSpecSchema.properties!.unresolved,
+  },
+  ['actions', 'basis', 'channels', 'interval', 'joint', 'metrics', 'second', 'view'],
+);
 const changeSchema = taskPatchSchema.properties!.changes.items!;
 const compactPatchSchema = object({
   changes: array(
@@ -175,6 +217,42 @@ const compactPatchSchema = object({
     24,
   ),
 });
+const constrainedPatchFields = {
+  ...Object.fromEntries(
+    Object.entries(constrainedSpecSchema.properties!).filter(
+      ([key]) => !['actions', 'unresolved', 'interval'].includes(key),
+    ),
+  ),
+  goalTypes: modelGoalSchema,
+  comparison: modelComparisonSchema,
+  first: {
+    ...nullable(modelIntervalSchema),
+    description: '只在用户要求改变比较前段或单段统计范围时填写。',
+  },
+  second: { ...modelIntervalSchema, description: '只改比较后段。明确秒数用 [起秒,止秒]。' },
+  viewJoint: modelViewSchema.anyOf[1]!.properties!.joint,
+  viewChannels: modelViewSchema.anyOf[1]!.properties!.channels,
+  viewBasis: modelViewSchema.anyOf[1]!.properties!.basis,
+  viewInterval: modelViewIntervalSchema,
+  report: { type: 'boolean' as const },
+  export: nullable(modelIntervalSchema),
+};
+const constrainedPatchSchema = object({
+  changes: object(constrainedPatchFields, []),
+});
+const constrainedPatchPaths: Record<string, string> = {
+  first: 'interval',
+  second: 'comparison.second',
+  view: 'deliveries.view',
+  viewJoint: 'deliveries.view.joint',
+  viewChannels: 'deliveries.view.channels',
+  viewBasis: 'deliveries.view.basis',
+  viewInterval: 'deliveries.view.interval',
+  report: 'deliveries.report',
+  export: 'deliveries.export',
+};
+const overridesView = (changes: Record<string, unknown>) =>
+  Object.keys(changes).some((key) => key.startsWith('view'));
 const inspectDefinition: ToolDefinition = {
   name: 'inspect_result',
   description:
@@ -325,6 +403,9 @@ export class ModelProtocolAdapter {
         .filter((c) => c.entries.length),
       previousTask: this.previous
         ? {
+            ...(this.previous.comparisonViewLinked && !this.referenceChanged
+              ? { comparisonViewLinked: true }
+              : {}),
             spec: {
               ...this.previous.spec,
               goalTypes: modelGoalTypes(this.previous.spec.goalTypes),
@@ -350,7 +431,7 @@ export class ModelProtocolAdapter {
       },
     };
   }
-  tools(run: AgentRun, definitions: ToolDefinition[]): ToolDefinition[] {
+  tools(run: AgentRun, definitions: ToolDefinition[], constrained = false): ToolDefinition[] {
     this.assert(run);
     const requested = new Set(['get_session_info', 'plan_analysis']);
     if (run.calls.some((c) => c.name === 'get_session_info' && c.output.ok))
@@ -374,41 +455,84 @@ export class ModelProtocolAdapter {
     const specDescription = singleTaskSource
       ? '声明完整业务 TaskSpec。sources 必须且只能有一项：{field:"task",origin:"explicit"或"derived",sourceId:本轮用户ID}，覆盖整份声明。绝对秒数 A–B 写成 [A,B]，相对采样边界才用 anchor，全部采样才用 sampled。比较时 interval 为前段、comparison.second 为后段，只要求比较时 goalTypes.metrics=false。若 deliveries.view.interval="comparison"，sources[0].origin 必须是 derived，含两段均为绝对秒数的情况。无定位 time=null，无报告 report=false，无 CSV export=null。'
       : '声明完整业务 TaskSpec。goalTypes 仅分析目标，定位/交付只填 time/deliveries。sources 同源只需一项 {field:"task",origin:"derived",sourceId:本轮用户ID}；混合来源拆分互不重叠子字段。interval 为统计前段，comparison.second 为后段；view.interval 覆盖两段。已有规格的局部修改优先 patch。';
+    if (constrained) {
+      requested.delete('plan_analysis');
+      const attempted = (name: string) => run.calls.some((c) => c.name === name);
+      const succeeded = (name: string) => run.calls.some((c) => c.name === name && c.output.ok);
+      if (!succeeded('get_session_info'))
+        return definitions.filter((tool) => tool.name === 'get_session_info');
+      requested.delete('get_session_info');
+      if (!run.task && this.reference.range) requested.delete('finish_analysis');
+      if (run.task) {
+        const spec = run.task.spec;
+        if (!spec.goalTypes.includes('quality')) requested.delete('get_quality_summary');
+        if (!spec.goalTypes.includes('metrics')) requested.delete('query_metrics');
+        const executable = [...requested].filter(
+          (name) => name !== 'get_session_info' && name !== 'finish_analysis',
+        );
+        const needsInput = spec.unresolved.length || run.completion?.state === 'needs_input';
+        if (!needsInput && executable.some((name) => !attempted(name)))
+          requested.delete('finish_analysis');
+        for (const name of executable) {
+          if (needsInput || succeeded(name)) requested.delete(name);
+        }
+      }
+    }
     const tools = definitions
       .filter((t) => requested.has(t.name))
       .map((t) => {
         let schema = t.inputSchema;
         const sourceId = enumeration(...this.userSources.map((s) => s.sourceId));
+        const currentSourcesOnly =
+          constrained && !this.userSources.some((source) => source.kind === 'pending');
         const origin = this.userSources.some((s) => s.kind !== 'current')
           ? sourceSchema.properties!.origin
           : enumeration('explicit', 'derived');
         if (t.name === 'set_task_spec')
-          schema = object(
-            {
-              ...compactSpecSchema.properties,
-              sources: singleTaskSource
-                ? array(object({ field: enumeration('task'), origin, sourceId }), 1, 1)
-                : array(object({ ...sourceSchema.properties, origin, sourceId }), 0, 30),
-            },
-            compactSpecSchema.required,
-          );
+          schema = currentSourcesOnly
+            ? constrainedSpecSchema
+            : object(
+                {
+                  ...compactSpecSchema.properties,
+                  sources: singleTaskSource
+                    ? array(object({ field: enumeration('task'), origin, sourceId }), 1, 1)
+                    : array(object({ ...sourceSchema.properties, origin, sourceId }), 0, 30),
+                },
+                compactSpecSchema.required,
+              );
         else if (t.name === 'set_task_patch')
-          schema = object({
-            changes: array(
-              object({ ...compactPatchSchema.properties!.changes.items!.properties, sourceId }),
-              0,
-              24,
-            ),
-          });
-        else if (schema.properties?.sessionId)
+          schema = currentSourcesOnly
+            ? constrainedPatchSchema
+            : object({
+                changes: array(
+                  object({ ...compactPatchSchema.properties!.changes.items!.properties, sourceId }),
+                  0,
+                  24,
+                ),
+              });
+        else if (constrained && t.name === 'finish_analysis') {
+          const { citations, ...outcome } = schema.properties!;
+          const evidence = Object.fromEntries(
+            run.calls
+              .filter((record) => record.output.ok && record.evidenceCatalog)
+              .map((record) => [record.name, finalEvidenceIds(record, run)] as const)
+              .filter(([, ids]) => ids.length)
+              .map(([name, ids]) => [name, array(enumeration(...ids), 1, citations!.maxItems)]),
+          );
+          schema = object({ ...outcome, evidence: object(evidence) });
+        } else if (schema.properties?.sessionId)
           schema = object({ taskRef: enumeration(this.taskRef) });
         return {
           name: t.name,
           description:
             t.name === 'set_task_spec'
-              ? specDescription
+              ? schema === constrainedSpecSchema
+                ? '用 actions 列出用户明确请求的动作，只填写相关参数。局部修改用 set_task_patch。'
+                : specDescription
               : t.name === 'set_task_patch'
-                ? '只声明修改字段及用户 sourceId；未改前段、口径、关节、比较意图和交付本地继承。侧别与图表侧别、后段与图表范围分别声明。deliveries.view.interval 选 comparison 时，该变更用 origin=derived。新增原为 null 的 view/export 需声明完整对象，不猜缺失字段。'
+                ? schema === constrainedPatchSchema
+                  ? '用 changes 对象只填要修改的字段。second 是比较后段，viewInterval 是图表范围，export 是 CSV 范围。'
+                  : '只声明修改字段及用户 sourceId；未改前段、口径、关节、比较意图和交付本地继承。侧别与图表侧别、后段与图表范围分别声明；新增原为 null 的 view/export 需声明完整对象，不猜缺失字段。'
                 : t.name === 'finish_analysis' &&
                     (run.romReview?.confirmation || run.localSubmission)
                   ? '提交结论。本地组装必需引用，citations 可为空，或选择本轮真实工具的补充 evidenceId。按 submissionGaps 补齐工具或交付缺口。'
@@ -420,7 +544,13 @@ export class ModelProtocolAdapter {
         };
       });
     const successful = run.calls.filter((c) => c.output.ok);
-    if (successful.length) {
+    if (
+      successful.length &&
+      (!constrained ||
+        (run.task &&
+          requested.has('finish_analysis') &&
+          run.calls.some((call) => call.name === 'finish_analysis' && !call.output.ok)))
+    ) {
       // Enumerate actual discoverable paths, including children of an inspected
       // subtree. The model still chooses the call, field and page; no path is
       // repaired or redirected. Full results remain available by drilling down.
@@ -443,6 +573,17 @@ export class ModelProtocolAdapter {
       });
     }
     return tools;
+  }
+  comparisonViewLinked(call: ModelCall) {
+    const args = call.arguments as any;
+    if (call.name === 'set_task_spec')
+      return args.actions?.includes('view') && args.view === 'comparison';
+    const changes = args.changes;
+    if (!changes || Array.isArray(changes)) return false;
+    return (
+      changes.view === 'comparison' ||
+      (this.previous?.comparisonViewLinked && !overridesView(changes))
+    );
   }
   private source(source: any, patch: boolean) {
     const binding = this.userSources.find((s) => s.sourceId === source.sourceId);
@@ -472,13 +613,61 @@ export class ModelProtocolAdapter {
       throw new Error('TOOL_NOT_OFFERED');
     }
     validate(definition.inputSchema, call.arguments);
-    const args = structuredClone(call.arguments) as any;
+    let args = structuredClone(call.arguments) as any;
+    if (call.name === 'finish_analysis' && definition.inputSchema.properties?.evidence) {
+      const { evidence, ...outcome } = args;
+      return {
+        ...outcome,
+        citations: Object.values(evidence)
+          .flat()
+          .map((evidenceId) => ({ evidenceId })),
+      };
+    }
     if (call.name === 'set_task_spec') {
+      const pendingActions: GoalType[] = [];
+      if (definition.inputSchema === constrainedSpecSchema) {
+        const { actions, basis = null, channels = null, joint = null } = args;
+        const view = actions.includes('view') ? args.view : undefined;
+        const viewArgs =
+          typeof view === 'string' || Array.isArray(view) || view?.anchor
+            ? { basis, channels, joint, interval: view }
+            : view;
+        args = {
+          goalTypes: modelGoalTypes(actions),
+          basis,
+          channels,
+          joint,
+          interval: args.interval ?? null,
+          comparison:
+            (actions.includes('comparison') || actions.includes('report')) && args.second
+              ? { second: args.second, direction: 'second_minus_first' }
+              : null,
+          metrics: args.metrics ?? [],
+          time: actions.includes('seek') ? (args.time ?? null) : null,
+          deliveries: {
+            view: viewArgs ?? null,
+            report: actions.includes('report'),
+            export:
+              actions.includes('csv') && args.export
+                ? { format: 'csv', interval: args.export }
+                : null,
+          },
+          sources: [{ field: 'task', origin: 'derived', sourceId: this.userSources[0]!.sourceId }],
+          unresolved: args.unresolved ?? [],
+        };
+        for (const [action, goal, value] of [
+          ['view', 'view', viewArgs],
+          ['csv', 'export', args.deliveries.export],
+          ['seek', 'seek', args.time],
+        ] as const) {
+          if (actions.includes(action) && value == null) pendingActions.push(goal);
+        }
+      }
       if (args.sources.some((s: any) => s.field === 'task') && args.sources.length !== 1)
         throw new Error('TASK_SPEC_SOURCE_OVERLAP:task：整份任务来源不能与其他来源重叠。');
       const expanded = {
         ...args,
-        goalTypes: expandGoalTypes(args.goalTypes),
+        goalTypes: [...expandGoalTypes(args.goalTypes), ...pendingActions],
         sources: args.sources.flatMap((s: any) => {
           const source = this.source(s, false);
           return s.field === 'task'
@@ -492,6 +681,35 @@ export class ModelProtocolAdapter {
     }
     if (call.name === 'set_task_patch') {
       if (this.referenceChanged) throw new Error('STALE_INTENT');
+      if (definition.inputSchema === constrainedPatchSchema) {
+        const changes = args.changes;
+        if (
+          this.previous?.comparisonViewLinked &&
+          !overridesView(changes) &&
+          ['basis', 'channels', 'joint', 'first', 'second', 'comparison'].some((field) =>
+            Object.hasOwn(changes, field),
+          ) &&
+          changes.comparison !== null
+        )
+          changes.view = 'comparison';
+        const selected = { ...this.previous!.spec, ...changes };
+        const view = changes.view;
+        if (typeof view === 'string' || Array.isArray(view) || view?.anchor)
+          changes.view = {
+            basis: selected.basis,
+            channels: selected.channels,
+            joint: selected.joint,
+            interval: view,
+          };
+        args = {
+          changes: Object.entries(changes).map(([key, value]) => ({
+            field: constrainedPatchPaths[key] ?? key,
+            value: key === 'export' && value !== null ? { format: 'csv', interval: value } : value,
+            origin: 'derived',
+            sourceId: this.userSources[0]!.sourceId,
+          })),
+        };
+      }
       for (const change of args.changes)
         if (change.field === 'goalTypes')
           validate(compactSpecSchema.properties!.goalTypes, change.value);
@@ -526,25 +744,7 @@ export class ModelProtocolAdapter {
     if (Object.hasOwn(args, 'taskRef')) {
       if (args.taskRef !== this.taskRef || run.task?.runId !== this.runId)
         throw new Error('INVALID_TASK_REFERENCE');
-      const s = run.task.spec;
-      const selection = { joint: s.joint, channels: s.channels, basis: s.basis };
-      const parameters: Record<string, unknown> = {
-        get_quality_summary: {
-          interval: s.interval,
-          ...(s.joint && s.channels?.length && s.basis ? { selection } : {}),
-        },
-        query_metrics: { ...selection, interval: s.interval },
-        compare_intervals: { ...selection, first: s.interval, second: s.comparison?.second },
-        seek_to_time: { time: s.time },
-        set_chart_view: s.deliveries.view,
-        prepare_report: {
-          ...selection,
-          interval: s.interval,
-          comparison: s.comparison?.second ?? null,
-        },
-        prepare_export: s.deliveries.export,
-      };
-      Object.assign(fixed, parameters[call.name]);
+      Object.assign(fixed, taskToolArguments(run.task.spec)[call.name]);
       delete args.taskRef;
     }
     for (const [key, value] of Object.entries(fixed)) {
@@ -830,7 +1030,22 @@ export function taskCatalog(record: CallRecord, run: AgentRun) {
     fullCatalog: 'inspect_result /evidenceCatalog',
   };
 }
-export function compactModelFeedback(run: AgentRun): ModelMessage[] {
+
+function finalEvidenceIds(record: CallRecord, run: AgentRun) {
+  return taskCatalog(record, run)
+    .entries.filter(({ label }) => {
+      if (record.name === 'compare_intervals' && record.output.ok)
+        return (record.output.result as { comparable: boolean }).comparable
+          ? label.startsWith('differences.')
+          : label === 'comparable' || label.startsWith('reasons.');
+      return true;
+    })
+    .map(({ evidenceId }) => evidenceId);
+}
+export function compactModelFeedback(
+  run: AgentRun,
+  requiredCallIds?: ReadonlySet<string>,
+): ModelMessage[] {
   const latest = new Map<string, CallRecord>();
   const errors: { record: CallRecord; callIds: string[] }[] = [];
   for (const record of run.calls) {
@@ -859,7 +1074,10 @@ export function compactModelFeedback(run: AgentRun): ModelMessage[] {
     .slice(-CONTEXT_LIMITS.recentErrors);
   const selected = new Set([...latest.values(), ...recentErrors.map((e) => e.record)]);
   return run.calls
-    .filter((record) => selected.has(record))
+    .filter(
+      (record) =>
+        selected.has(record) || (record.modelCallId && requiredCallIds?.has(record.modelCallId)),
+    )
     .flatMap((record): ModelMessage[] => {
       let raw: any = record.output.ok ? record.output.result : record.output.error;
       // Exact local equality only: a cross-reference is never a new fact or a
@@ -916,11 +1134,18 @@ export function compactModelFeedback(run: AgentRun): ModelMessage[] {
         {
           role: 'assistant',
           content: '',
-          calls: [{ name: record.name, arguments: record.modelArguments ?? record.arguments }],
+          calls: [
+            {
+              name: record.name,
+              arguments: record.modelArguments ?? record.arguments,
+              ...(record.modelCallId ? { id: record.modelCallId } : {}),
+            },
+          ],
         },
         {
           role: 'tool',
           toolName: record.name,
+          ...(record.modelCallId ? { toolCallId: record.modelCallId } : {}),
           content: JSON.stringify({
             callId: record.id,
             tool: record.name,

@@ -52,7 +52,7 @@ if (values.help || !values.model) {
   process.once('SIGINT', cancel);
   const timer = setTimeout(() => controller.abort('timeout'), 60_000);
   try {
-    const provider = new OllamaProvider(values.address, values.model);
+    const provider = OllamaProvider.forAgent(values.address, values.model);
     record.address = localOllamaURL(values.address);
     await provider.probe(controller.signal);
     clearTimeout(timer);
@@ -79,7 +79,7 @@ if (values.help || !values.model) {
       },
     });
     const goals = [
-      '比较前后各 5 秒的左右膝 filtered ROM，并展示差异。',
+      '比较前后各 5 秒的左右膝 filtered ROM 差值。',
       '只看右侧，第二段改成 12–17 秒，保留前段，重新比较 ROM。',
       '哪些区间不适合比较？请查询整个已采样区间的质量与缺失情况。',
     ];

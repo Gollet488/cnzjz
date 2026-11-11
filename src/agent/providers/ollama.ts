@@ -1,5 +1,28 @@
 import type { ModelProvider, ModelReply } from '../provider.ts';
 import { ProviderResponseError } from '../provider.ts';
+import { array, enumeration, object } from '../../analysis/schema.ts';
+
+type ChatInput = Pick<Parameters<ModelProvider['complete']>[0], 'messages' | 'tools'>;
+
+function callFormat(tools: ChatInput['tools']) {
+  const format = (offered: ChatInput['tools'], maximum: number) =>
+    object({
+      calls: array(
+        {
+          anyOf: offered.map((tool) =>
+            object({ tool: enumeration(tool.name), values: tool.inputSchema }),
+          ),
+        },
+        1,
+        maximum,
+      ),
+    });
+  const finish = tools.filter((tool) => tool.name === 'finish_analysis');
+  const working = tools.filter((tool) => tool.name !== 'finish_analysis');
+  if (!finish.length) return format(working, 8);
+  if (!working.length) return format(finish, 1);
+  return { anyOf: [format(finish, 1), format(working, 8)] };
+}
 export function localOllamaURL(address: string): string {
   const url = new URL(address);
   if (
@@ -67,17 +90,23 @@ async function readJSON(response: Response): Promise<any> {
 export class OllamaProvider implements ModelProvider {
   readonly id = 'ollama-local';
   readonly model: string;
+  readonly toolMode?: 'constrained';
   private readonly baseURL: string;
   private readonly fetcher: typeof fetch;
 
-  constructor(address: string, model: string, fetcher: typeof fetch = fetch) {
+  constructor(address: string, model: string, fetcher: typeof fetch = fetch, constrained = false) {
     this.baseURL = localOllamaURL(address);
+    if (constrained) this.toolMode = 'constrained';
     this.model = model.trim();
     if (!this.model || this.model.length > 200 || /cloud/i.test(this.model))
       throw new Error('请选择已安装的本地模型，不使用 cloud 模型。');
     // Browser fetch requires its Window receiver; storing it as an instance
     // method would otherwise call it with this=provider (Illegal invocation).
     this.fetcher = fetcher.bind(globalThis);
+  }
+
+  static forAgent(address: string, model: string) {
+    return new OllamaProvider(address, model, fetch, true);
   }
 
   private async request(path: string, signal: AbortSignal, body?: unknown) {
@@ -102,12 +131,16 @@ export class OllamaProvider implements ModelProvider {
       .flatMap((m: any) => (typeof m.name === 'string' && !/cloud/i.test(m.name) ? [m.name] : []));
   }
 
-  async probe(signal: AbortSignal): Promise<{ usage: ModelReply['usage']; requests: number }> {
+  async checkConfiguration(signal: AbortSignal) {
     const details = await this.request('/api/show', signal, { model: this.model });
     if (details.remote_host || details.remote_model)
       throw new Error('不允许由本地服务转发至云模型。');
     if (!Array.isArray(details.capabilities) || !details.capabilities.includes('tools'))
       throw new Error('模型未声明 tools 能力；请更新 Ollama 或选择支持结构化工具的本地模型。');
+  }
+
+  async probe(signal: AbortSignal): Promise<{ usage: ModelReply['usage']; requests: number }> {
+    await this.checkConfiguration(signal);
     // Capability metadata alone is insufficient: verify a real structured call.
     const reply = await this.complete({
       signal,
@@ -137,15 +170,35 @@ export class OllamaProvider implements ModelProvider {
     return { usage: reply.usage, requests: 1 };
   }
 
-  private chatBody({
-    messages,
-    tools,
-  }: Pick<Parameters<ModelProvider['complete']>[0], 'messages' | 'tools'>) {
-    return {
+  private chatBody({ messages, tools }: ChatInput) {
+    const options = {
       model: this.model,
       stream: false,
       think: false,
       options: { temperature: 0, num_ctx: 16384, num_predict: 2048 },
+    };
+    if (this.toolMode === 'constrained') {
+      const format = callFormat(tools);
+      const transcript = messages.flatMap((message) => {
+        if (message.role === 'assistant' && message.calls) return [];
+        if (message.role === 'tool')
+          return [{ role: 'user', content: `本地工具反馈：${message.content}` }];
+        return [{ role: message.role, content: message.content }];
+      });
+      const instructionIndex =
+        transcript.length - (tools.some((tool) => tool.name === 'set_task_patch') ? 1 : 0);
+      transcript.splice(instructionIndex, 0, {
+        role: 'user',
+        content: `返回 JSON {"calls":[{"tool":"工具名称","values":{}}]}。可用工具：${JSON.stringify(tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })))}`,
+      });
+      return {
+        ...options,
+        format,
+        messages: transcript,
+      };
+    }
+    return {
+      ...options,
       messages: messages.map((m) => ({
         role: m.role,
         content: m.content,
@@ -166,7 +219,7 @@ export class OllamaProvider implements ModelProvider {
     };
   }
 
-  requestBytes(input: Pick<Parameters<ModelProvider['complete']>[0], 'messages' | 'tools'>) {
+  requestBytes(input: ChatInput) {
     return new TextEncoder().encode(JSON.stringify(this.chatBody(input))).length;
   }
 
@@ -182,7 +235,10 @@ export class OllamaProvider implements ModelProvider {
       (data.message.tool_calls !== undefined && !Array.isArray(data.message.tool_calls))
     )
       throw new Error('OLLAMA_INVALID_RESPONSE');
-    const calls = data.message.tool_calls ?? [];
+    const calls =
+      this.toolMode === 'constrained'
+        ? this.constrainedCalls(data.message.content)
+        : (data.message.tool_calls ?? []);
     if (calls.length > 8) throw new Error('OLLAMA_CALL_BATCH_LIMIT');
     // Neither thinking nor unverified free text enters UI or conversation history.
     return {
@@ -200,6 +256,20 @@ export class OllamaProvider implements ModelProvider {
           Number.isInteger(data.eval_count) && data.eval_count >= 0 ? data.eval_count : undefined,
       },
     };
+  }
+
+  private constrainedCalls(content: unknown) {
+    try {
+      if (typeof content !== 'string') return [];
+      const decoded = JSON.parse(content);
+      if (!Array.isArray(decoded?.calls)) return [];
+      // Argument validation and rejection diagnostics belong to the runtime.
+      return decoded.calls.map((item: { tool?: string; values?: unknown } | null) => ({
+        function: { name: item?.tool, arguments: item?.values },
+      }));
+    } catch {
+      return [];
+    }
   }
 
   // Evaluation baseline only: bounded text is saved as evidence, never rendered

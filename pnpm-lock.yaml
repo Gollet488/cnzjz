@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@ffmpeg/ffmpeg@0.12.15': 049454e7d69ae8caa2937091f331a64d9148bc59ab10ccc2e95d895d0c67851a
+
 importers:
 
   .:
@@ -13,7 +16,7 @@ importers:
         version: 0.12.10
       '@ffmpeg/ffmpeg':
         specifier: 0.12.15
-        version: 0.12.15
+        version: 0.12.15(patch_hash=049454e7d69ae8caa2937091f331a64d9148bc59ab10ccc2e95d895d0c67851a)
       '@mediapipe/tasks-vision':
         specifier: 0.10.32
         version: 0.10.32
@@ -1311,7 +1314,7 @@ snapshots:
 
   '@ffmpeg/core@0.12.10': {}
 
-  '@ffmpeg/ffmpeg@0.12.15':
+  '@ffmpeg/ffmpeg@0.12.15(patch_hash=049454e7d69ae8caa2937091f331a64d9148bc59ab10ccc2e95d895d0c67851a)':
     dependencies:
       '@ffmpeg/types': 0.12.4
 

@@ -16,3 +16,5 @@ minimumReleaseAgeExclude:
   - typescript-eslint@8.72.1
 # 安装显式执行；检查和开发命令不得自动重装或清理依赖。
 verifyDepsBeforeRun: error
+patchedDependencies:
+  '@ffmpeg/ffmpeg@0.12.15': patches/@ffmpeg__ffmpeg@0.12.15.patch

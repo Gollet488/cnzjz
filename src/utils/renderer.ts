@@ -18,8 +18,8 @@ export function renderPose(
     h = canvas.height;
   ctx.clearRect(0, 0, w, h);
   const bg = ctx.createLinearGradient(0, 0, w, h);
-  bg.addColorStop(0, '#182c34');
-  bg.addColorStop(1, '#101d24');
+  bg.addColorStop(0, '#254246');
+  bg.addColorStop(1, '#142629');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
   let ox = 0,
@@ -36,7 +36,7 @@ export function renderPose(
     oy = (h - dh) / 2;
     ctx.drawImage(video, ox, oy, dw, dh);
   } else {
-    ctx.strokeStyle = 'rgba(105,160,166,.08)';
+    ctx.strokeStyle = '#a5c7c71a';
     ctx.lineWidth = 1;
     for (let x = 0; x < w; x += 44) {
       ctx.beginPath();
@@ -51,11 +51,11 @@ export function renderPose(
       ctx.stroke();
     }
     const glow = ctx.createRadialGradient(w / 2, h * 0.47, 10, w / 2, h * 0.47, h * 0.6);
-    glow.addColorStop(0, 'rgba(45,132,118,.2)');
-    glow.addColorStop(1, 'rgba(45,132,118,0)');
+    glow.addColorStop(0, '#6fb4bc33');
+    glow.addColorStop(1, '#6fb4bc00');
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = 'rgba(99,156,158,.14)';
+    ctx.strokeStyle = '#a5c7c724';
     for (let i = -6; i <= 6; i++) {
       ctx.beginPath();
       ctx.moveTo(w / 2 + i * 36, h * 0.76);
@@ -76,9 +76,9 @@ export function renderPose(
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     const body = ctx.createLinearGradient(w * 0.4, 0, w * 0.6, h);
-    body.addColorStop(0, '#3a5156');
-    body.addColorStop(0.5, '#293f45');
-    body.addColorStop(1, '#243940');
+    body.addColorStop(0, '#506a6c');
+    body.addColorStop(0.5, '#3c5558');
+    body.addColorStop(1, '#30484b');
     ctx.strokeStyle = body;
     for (const [a, b] of [
       [11, 13],
@@ -113,13 +113,13 @@ export function renderPose(
     ctx.beginPath();
     ctx.ellipse(head.x, head.y + 9, 29, 39, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#3a5156';
+    ctx.strokeStyle = body;
     ctx.lineWidth = 24;
     ctx.beginPath();
     ctx.moveTo(head.x, head.y + 40);
     ctx.lineTo((xy(points[11]).x + xy(points[12]).x) / 2, xy(points[11]).y);
     ctx.stroke();
-    ctx.strokeStyle = 'rgba(139,191,182,.12)';
+    ctx.strokeStyle = '#a5c7c71f';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.ellipse(w / 2, h * 0.88, 190, 24, 0, 0, Math.PI * 2);
