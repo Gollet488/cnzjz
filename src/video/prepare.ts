@@ -6,7 +6,8 @@ import { readMP4 } from './mp4.ts';
 export const VIDEO_ACCEPT =
   'video/*,.mp4,.m4v,.mov,.qt,.webm,.mkv,.avi,.flv,.f4v,.wmv,.asf,.mpg,.mpeg,.mpe,.m2v,.ts,.mts,.m2ts,.m2t,.3gp,.3g2,.ogv,.ogg,.vob,.rm,.rmvb,.divx,.dv,.mxf,.nut';
 export const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
-const CONVERTER_STARTUP_MS = 15_000;
+// A cold start downloads and compiles the 32 MB WASM core, possibly alongside a second input.
+const CONVERTER_STARTUP_MS = 45_000;
 const CONVERSION_MS = 10 * 60_000;
 
 export interface PreparedVideo {
@@ -127,7 +128,7 @@ export async function prepareVideo(
     if (initializing)
       throw new Error(
         timedOut
-          ? '视频转换器初始化超时（15 秒），已停止。请重新选择视频重试。'
+          ? `视频转换器初始化超时（${CONVERTER_STARTUP_MS / 1000} 秒），已停止。请重新选择视频重试。`
           : `视频转换器加载失败：${detail}。请刷新页面或重新选择视频重试。`,
         { cause: error },
       );
