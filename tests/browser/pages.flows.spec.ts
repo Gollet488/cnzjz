@@ -35,6 +35,23 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
       expect((await request.get(path)).status(), path).toBe(404);
   });
 
+  test('two-video comparison survives a slow FFmpeg WASM response', async ({ page }) => {
+    await page.route('**/ffmpeg/ffmpeg-core.wasm', async (route) => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 17_000));
+      await route.continue();
+    });
+    await page.goto('./');
+    await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
+    const panel = page.locator('.comparison-panel');
+    const files = panel.locator('input[type=file]');
+    await files.nth(0).setInputFiles(resolve('tests/fixtures/format.avi'));
+    await files.nth(1).setInputFiles(resolve('tests/fixtures/format.webm'));
+    await expect(panel.locator('[role=status]')).toHaveText(
+      ['已在本机转换，使用转换后时间轴。', '已在本机转换，使用转换后时间轴。'],
+      { timeout: 30_000 },
+    );
+  });
+
   for (const failure of ['worker 404', 'WASM 404', 'unresponsive initialization'] as const) {
     test(`FFmpeg: ${failure} closes the worker and allows AVI retry`, async ({ page }, info) => {
       const resource =
@@ -76,7 +93,7 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
         const status = page.locator('.status-message');
         await expect(status).toContainText(
           stalled ? '视频转换器初始化超时' : '视频转换器加载失败',
-          { timeout: stalled ? 25_000 : 8_000 },
+          { timeout: stalled ? 55_000 : 8_000 },
         );
         const elapsedMs = Date.now() - start;
         const httpStatus = stalled ? null : (await requested.response())?.status();
