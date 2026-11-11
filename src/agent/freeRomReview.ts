@@ -36,6 +36,15 @@ type DraftRange =
   | 'sampled'
   | 'comparison'
   | { anchor: 'start' | 'end'; seconds: number };
+type ConstrainedRanges = {
+  interval?: DraftRange;
+  first?: DraftRange;
+  second?: DraftRange;
+  comparison?: { second: DraftRange };
+  view?: DraftRange | { interval: DraftRange };
+  viewInterval?: DraftRange;
+  export?: DraftRange;
+};
 function rangeChoice(declared: DraftRange | undefined, expanded: Interval): RangeChoice {
   if (declared === 'comparison') return { mode: 'cover' };
   if (declared === 'sampled') return { mode: 'sampled' };
@@ -53,14 +62,35 @@ export function freeRomReview(
   if (!isRomComparison(spec) || missingTaskFields(spec).length || !info.range) return;
   const { joint, channels, basis, interval, comparison, deliveries } = spec;
   const { view, report, export: csv } = deliveries;
-  const raw = modelArguments as {
-    interval?: DraftRange;
-    comparison?: { second: DraftRange };
+  const raw = modelArguments as ConstrainedRanges & {
+    actions?: string[];
     deliveries?: { view?: { interval: DraftRange }; export?: { interval: DraftRange } };
-    changes?: { field: string; value: unknown }[];
+    changes?: { field: string; value: unknown }[] | ConstrainedRanges;
   };
-  const declared = (path: string): DraftRange | undefined => {
-    const change = raw.changes?.find((c) => path === c.field || path.startsWith(c.field + '.'));
+  const changes = Array.isArray(raw.changes) ? raw.changes : undefined;
+  const compact = Array.isArray(raw.changes)
+    ? undefined
+    : (raw.changes ?? (raw.actions ? raw : undefined));
+  const declared = (
+    path:
+      | 'interval'
+      | 'comparison.second'
+      | 'deliveries.view.interval'
+      | 'deliveries.export.interval',
+  ): DraftRange | undefined => {
+    if (compact) {
+      const viewRange =
+        compact.view && typeof compact.view === 'object' && 'interval' in compact.view
+          ? compact.view.interval
+          : compact.view;
+      return {
+        interval: compact.first ?? compact.interval,
+        'comparison.second': compact.second ?? compact.comparison?.second,
+        'deliveries.view.interval': compact.viewInterval ?? viewRange,
+        'deliveries.export.interval': compact.export,
+      }[path];
+    }
+    const change = changes?.find((c) => path === c.field || path.startsWith(c.field + '.'));
     const root = change ? change.value : raw;
     const suffix = change ? path.slice(change.field.length + 1) : path;
     return (

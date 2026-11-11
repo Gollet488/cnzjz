@@ -13,10 +13,13 @@ test('ROM task card: manual while disconnected, modify and save, recalculate inv
   page,
 }, info) => {
   const requestPaths: string[] = [];
-  await page.route(/(?:127\.0\.0\.1:11434|\/__deepseek)\//, (route) => {
-    requestPaths.push(route.request().url());
-    return route.abort();
-  });
+  await page.route(
+    /(?:127\.0\.0\.1:11434\/api\/(?:chat|show)$|\/__(?:models|deepseek)\/(?:complete|probe)$)/,
+    (route) => {
+      requestPaths.push(route.request().url());
+      return route.abort();
+    },
+  );
   const { rows } = await fixedRomSession(page, info);
   const card = romCard(page);
   await card.getByRole('button', { name: '用当前模型草拟' }).click();
@@ -50,7 +53,7 @@ test('ROM task card: archive-shaped scripted draft stays editable until confirma
     csv: false,
   };
   await page.route('http://127.0.0.1:11434/api/**', async (route) => {
-    const headers = { 'access-control-allow-origin': 'http://127.0.0.1:5187' };
+    const headers = { 'access-control-allow-origin': '*' };
     if (route.request().url().endsWith('/tags'))
       return route.fulfill({ headers, json: { models: [{ name: 'scripted-rom' }] } });
     if (route.request().url().endsWith('/show'))

@@ -8,6 +8,8 @@ import { resolve } from 'node:path';
 import { trackPagesAssets } from './pages-assets.ts';
 import { JOINTS } from '../../src/config.ts';
 import { goals, scriptedOllama } from './scripted-ollama.ts';
+import { fixedRomSession, romCard, setAbsolute } from './rom-card-helpers.ts';
+import type { RunAudit } from '../../src/agent/audit.ts';
 import {
   downloadFile,
   fullCSV,
