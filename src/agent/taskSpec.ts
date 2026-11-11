@@ -51,6 +51,7 @@ export interface TaskUnderstanding {
   runId: string;
   goal: string;
   spec: TaskSpec;
+  comparisonViewLinked?: boolean;
   validation: 'structure_and_provenance_only';
 }
 const fields = [
@@ -153,12 +154,16 @@ export const taskSpecSchema = object({
   ),
   unresolved: array(string, 0, 20),
 });
-export const taskUnderstandingSchema = object({
-  runId: string,
-  goal: string,
-  spec: taskSpecSchema,
-  validation: enumeration('structure_and_provenance_only'),
-});
+export const taskUnderstandingSchema = object(
+  {
+    runId: string,
+    goal: string,
+    spec: taskSpecSchema,
+    comparisonViewLinked: boolean,
+    validation: enumeration('structure_and_provenance_only'),
+  },
+  ['runId', 'goal', 'spec', 'validation'],
+);
 const covers = (source: string, field: string) =>
   source === field || field.startsWith(`${source}.`);
 function fieldValue(spec: TaskSpec, path: string): unknown {

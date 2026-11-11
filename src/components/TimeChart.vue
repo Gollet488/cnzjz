@@ -92,11 +92,14 @@ async function waitUntilRendered() {
   chart.getZr().flush();
 }
 defineExpose({ waitUntilRendered });
+const chartAccent = '#23626a';
+const chartMuted = '#50696b';
+const chartTrack = '#eff6f4';
 const axis = {
   axisLine: { show: false },
   axisTick: { show: false },
-  axisLabel: { color: '#8b9a98', fontSize: 10 },
-  splitLine: { lineStyle: { color: '#edf1ef', type: 'dashed' as const } },
+  axisLabel: { color: chartMuted, fontSize: 10 },
+  splitLine: { lineStyle: { color: '#d8e6e3', type: 'dashed' as const } },
 };
 function locate(time: number) {
   const selected = selection.value;
@@ -191,7 +194,7 @@ function draw() {
           itemHeight: Math.max(70, Math.min(150, chart.getWidth() - 140)),
           precision: 1,
           text: [`${heat.cap.toFixed(1)} °/s`, '0'],
-          textStyle: { color: '#83968b', fontSize: 10 },
+          textStyle: { color: chartMuted, fontSize: 10 },
           inRange: { color: ['#e8f4ed', '#bce4cb', '#7ac79c', '#e3bd76', '#e89461'] },
         },
         {
@@ -201,7 +204,7 @@ function draw() {
           dimension: 2,
           min: 0,
           max: 1,
-          inRange: { color: ['#eef1ef', '#eef1ef'] },
+          inRange: { color: [chartTrack, chartTrack] },
         },
       ],
       series: [
@@ -209,7 +212,7 @@ function draw() {
           id: 'missing-velocity',
           type: 'heatmap',
           data: cellData(true),
-          itemStyle: { color: '#eef1ef', borderColor: '#fff', borderWidth: 1 },
+          itemStyle: { color: chartTrack, borderColor: '#fff', borderWidth: 1 },
         },
         {
           id: 'valid-velocity',
@@ -275,8 +278,8 @@ function draw() {
           showSymbol: valid.length <= 1 || stationary,
           connectNulls: false,
           data: display,
-          lineStyle: { color: '#0f947b', width: 2 },
-          itemStyle: { color: '#0f947b' },
+          lineStyle: { color: chartAccent, width: 2 },
+          itemStyle: { color: chartAccent },
         },
       ],
     });
@@ -303,7 +306,7 @@ function draw() {
       ? [
           {
             name: '重心 Y',
-            color: '#18977e',
+            color: chartAccent,
             data: frames.map((f) => [f.time, f.center?.y ?? null]),
           },
         ]
@@ -401,9 +404,11 @@ function draw() {
         left: grid.left,
         right: grid.right,
         borderColor: 'transparent',
-        backgroundColor: '#f3f7f5',
-        fillerColor: 'rgba(24,151,126,.12)',
-        handleStyle: { color: '#78c3ad', borderWidth: 0 },
+        backgroundColor: chartTrack,
+        fillerColor: 'rgba(111,180,188,.28)',
+        handleStyle: { color: '#43848b', borderWidth: 0 },
+        moveHandleStyle: { color: '#43848b' },
+        emphasis: { handleStyle: { color: chartAccent }, moveHandleStyle: { color: chartAccent } },
         showDetail: false,
         brushSelect: true,
       },
@@ -419,13 +424,13 @@ function draw() {
       connectNulls: false,
       lineStyle: { width: 2, color: s.color },
       itemStyle: { color: s.color },
-      areaStyle: center ? { color: 'rgba(24,151,126,.06)' } : undefined,
+      areaStyle: center ? { color: 'rgba(111,180,188,.16)' } : undefined,
       markLine:
         i === 0
           ? {
               symbol: 'none',
               label: { show: false },
-              lineStyle: { color: '#9db8ac', type: 'dashed' },
+              lineStyle: { color: '#68898b', type: 'dashed' },
               data: props.markers
                 .filter((m) => m.time >= first && m.time <= last)
                 .map((m) => ({ name: m.label, xAxis: m.time })),
@@ -582,14 +587,14 @@ onBeforeUnmount(() => {
   top: 44%;
   left: 50%;
   transform: translateX(-50%);
-  color: #8b9a98;
+  color: var(--muted);
   font-size: 12px;
   pointer-events: none;
 }
 .chart-note {
   font-size: 11px;
   line-height: 1.7;
-  color: #83968b;
+  color: var(--muted);
   margin: 5px 18px 13px;
 }
 .chart-markers {

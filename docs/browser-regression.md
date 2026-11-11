@@ -13,4 +13,13 @@ pnpm test:browser
 
 Agent 的脚本化 HTTP 响应只证明协议与 UI 集成。真实模型、摄像头、长运动视频、原生保存选择器及其他设备需分别验证。playwright.real.config.ts 提供独立真实模型入口。
 
+## GitHub Pages 发布检查
+
+```powershell
+pnpm build --base /cnzjz/
+pnpm test:browser:pages
+```
+
+需要已安装的 Chrome。测试用严格的静态服务器挂载 `dist/`，验证 MP4 逐帧时间戳、AVI 转码、双视频同步、回看与导出，以及转码资源加载失败后的重试。根路径请求直接返回 404。提交到 `main` 的 PR 会运行这组检查，合并后 Pages 通过同一检查再上传已测试的 `dist/`。
+
 当前实际结果见 [项目评估](project-assessment.md)。

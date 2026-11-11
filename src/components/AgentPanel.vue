@@ -3,8 +3,16 @@ import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue
 import type { AnalysisSession, SessionInfo } from '../analysis/session.ts';
 import type { createToolRegistry } from '../analysis/tools.ts';
 import { OllamaProvider } from '../agent/provider.ts';
-import { DeepSeekPageProvider } from '../agent/providers/deepseekPage.ts';
-import type { ModelProvider, ModelReply } from '../agent/provider.ts';
+import { cloudProviders } from '../agent/modelCatalog.ts';
+import type { ProviderId } from '../agent/modelCatalog.ts';
+import {
+  choiceKey,
+  createProvider,
+  providerNames,
+  useAgentModels,
+} from '../agent/useAgentModels.ts';
+import { CloudPageProvider, modelError } from '../agent/providers/cloudPage.ts';
+import type { ModelReply } from '../agent/provider.ts';
 import { AgentRuntime } from '../agent/runtime.ts';
 import type { AgentRun } from '../agent/runtime.ts';
 import AgentEvidence from './AgentEvidence.vue';
@@ -22,27 +30,77 @@ const props = defineProps<{
   session: AnalysisSession;
   tools: ReturnType<typeof createToolRegistry>;
   info: SessionInfo;
+  active: boolean;
   waitForApplication?: (run: AgentRun) => Promise<void>;
 }>();
-const emit = defineEmits<{ pause: []; export: [handle: string]; invalidateView: [] }>();
-const address = ref('http://127.0.0.1:11434'),
-  model = ref(''),
-  models = ref<string[]>([]);
-const providerKind = ref<'ollama' | 'deepseek'>('ollama');
-const pageOrigin = window.location.origin;
-const localPage = ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
-const probeResponse = ref<{ model: string; systemFingerprint: string | null } | null>(null);
-const connected = ref(false),
-  connecting = ref(false),
-  connectionMessage = ref('未连接 · 真实模型验收未完成');
-const runKind = ref<'free' | 'rom' | null>(null);
-const running = computed(() => runKind.value !== null);
-const goal = ref('比较前后各 5 秒的左右膝 ROM，并展示差异');
+const emit = defineEmits<{ pause: []; export: [handle: string]; invalidateView: []; manual: [] }>();
+const {
+  addressInput,
+  cloudError,
+  localError,
+  envFile,
+  refreshing,
+  loaded,
+  settings,
+  settingsProvider,
+  settingsConfig,
+  settingsOptions,
+  testModel,
+  target,
+  testResult,
+  testing,
+  settingsStatus,
+  choice,
+  selected,
+  options,
+  cloud,
+  select,
+  openSettings,
+  refresh,
+  applyAddress,
+  recordResult,
+  testConnection,
+  cancelTest,
+  dispose,
+} = useAgentModels();
+const localOptions = computed(() => options.value.filter((item) => item.provider === 'ollama'));
+const cloudOptions = computed(() => options.value.filter((item) => item.provider !== 'ollama'));
+const unconfigured = computed(
+  () =>
+    Object.keys(cloudProviders).filter(
+      (id) => !cloud.value.some((p) => p.provider === id && p.models.length),
+    ) as (keyof typeof cloudProviders)[],
+);
+const running = ref(false);
+let submissionCheck: AbortController | undefined;
+watch(
+  () => props.active,
+  (active) => {
+    if (active) void refresh();
+  },
+  { immediate: true },
+);
+function changeModel(event: Event) {
+  const menu = event.target as HTMLSelectElement;
+  if (menu.value.startsWith('settings:')) {
+    openSettings(menu.value.slice('settings:'.length) as ProviderId);
+    menu.value = choice.value ? choiceKey(choice.value) : '';
+  } else {
+    select(menu.value);
+    if (!running.value) error.value = '';
+  }
+}
+const exampleGoal = '比较已采样数据前后各 5 秒的左右膝 filtered ROM，并展示覆盖两段的图表';
+const goal = ref(exampleGoal);
 const runs = shallowRef<AgentRun[]>([]);
 const responseMetadata = shallowRef<Record<string, NonNullable<ModelReply['response']>[]>>({});
 const error = ref('');
 const dismissedRuns = new Set<string>();
-const draftProvider = shallowRef<ModelProvider>();
+const draftProvider = computed(() => {
+  const item = selected.value;
+  if (item?.provider === 'ollama') return new OllamaProvider(item.address!, item.model);
+  return item?.provider === 'deepseek' ? createProvider(item) : undefined;
+});
 const lastRomCard = shallowRef<RomCardExecution & { runId: string }>();
 const freeReview = shallowRef<FreeRomReview>();
 let confirmFree: ((confirmation: FreeRomConfirmation) => void) | undefined;
@@ -66,8 +124,6 @@ async function requestRomReview(review: FreeRomReview, signal: AbortSignal) {
     confirmFree = undefined;
   }
 }
-let runtime: AgentRuntime | undefined;
-let connection: AbortController | undefined;
 const statusNames: Record<string, string> = {
   running: '执行中',
   completed: '已完成',
@@ -124,112 +180,95 @@ function locate(call: CallRecord, second = false, interval?: [number, number]) {
   error.value = failed && !failed.ok ? failed.error.message : '';
   if (!failed) document.getElementById('agent-chart-view')?.scrollIntoView({ block: 'center' });
 }
-function disconnect() {
-  connection?.abort();
-  runtime?.clear();
-  runtime = undefined;
-  draftProvider.value = undefined;
-  connected.value = false;
-  probeResponse.value = null;
-  connectionMessage.value = '未连接 · 请重新验证模型连接';
-}
-watch([address, model, providerKind], disconnect);
+const runtime = new AgentRuntime({
+  session: props.session,
+  registry: props.tools,
+  reviewRom: requestRomReview,
+  verifyApplication: props.waitForApplication,
+  onAudit: async (audit) => {
+    responseMetadata.value = {
+      ...responseMetadata.value,
+      [audit.run.id]: audit.requests.flatMap((r) => (r.reply?.response ? [r.reply.response] : [])),
+    };
+    await saveRunAudit(audit);
+  },
+  onReady: async (run) => {
+    await nextTick();
+    await props.waitForApplication?.(run);
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  },
+  onChange: (run) => {
+    if (dismissedRuns.has(run.id)) return;
+    if (['cancelled', 'stale', 'timeout'].includes(run.status)) emit('invalidateView');
+    const index = runs.value.findIndex((r) => r.id === run.id);
+    if (index < 0) runs.value = [run, ...runs.value].slice(0, 8);
+    else runs.value = runs.value.map((r, i) => (i === index ? run : r));
+  },
+});
 watch(
   () => [props.info.sessionId, props.info.revision],
-  () => runtime?.invalidate(),
+  () => runtime.invalidate(),
   { flush: 'sync' },
 );
-
-async function connect(discover = false) {
-  if (connecting.value) return;
-  disconnect();
-  connecting.value = true;
-  error.value = '';
-  const controller = new AbortController();
-  connection = controller;
-  const timer = setTimeout(() => controller.abort(), 60_000);
-  try {
-    if (discover) {
-      const discovered = await OllamaProvider.models(address.value, controller.signal);
-      if (controller.signal.aborted) return;
-      models.value = discovered;
-      connectionMessage.value = models.value.length
-        ? '已读取本地模型，请选择并验证结构化工具连接。'
-        : '服务中没有本地模型，请先安装支持 tools 的模型。';
-      return;
-    }
-    const provider =
-      providerKind.value === 'deepseek'
-        ? new DeepSeekPageProvider()
-        : new OllamaProvider(address.value, model.value);
-    connectionMessage.value = '正在验证模型能力与真实结构化工具调用…';
-    const probe = await provider.probe(controller.signal);
-    if (provider instanceof DeepSeekPageProvider) probeResponse.value = probe.response;
-    if (controller.signal.aborted) return;
-    runtime = new AgentRuntime({
-      provider,
-      session: props.session,
-      registry: props.tools,
-      reviewRom: requestRomReview,
-      verifyApplication: props.waitForApplication,
-      limits: providerKind.value === 'deepseek' ? { timeoutMs: 120_000 } : undefined,
-      onAudit: async (audit) => {
-        responseMetadata.value = {
-          ...responseMetadata.value,
-          [audit.run.id]: audit.requests.flatMap((r) =>
-            r.reply?.response ? [r.reply.response] : [],
-          ),
-        };
-        await saveRunAudit(audit);
-      },
-      onReady: async (run) => {
-        await nextTick();
-        await props.waitForApplication?.(run);
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        );
-      },
-      onChange: (run) => {
-        if (dismissedRuns.has(run.id)) return;
-        if (['cancelled', 'stale', 'timeout'].includes(run.status)) emit('invalidateView');
-        const index = runs.value.findIndex((r) => r.id === run.id);
-        if (index < 0) runs.value = [run, ...runs.value].slice(0, 8);
-        else runs.value = runs.value.map((r, i) => (i === index ? run : r));
-      },
-    });
-    draftProvider.value = provider;
-    connected.value = true;
-    connectionMessage.value = `已连接 ${providerKind.value === 'deepseek' ? 'DeepSeek 官方 API（本机代理）' : 'Ollama'} / ${probeResponse.value?.model ?? provider.model} · 结构化调用探测通过；目标验收见实际运行结果`;
-  } catch (e) {
-    connectionMessage.value = '未连接 · 真实模型验收未完成';
-    error.value = controller.signal.aborted
-      ? '连接已取消或超时。'
-      : `连接失败：${e instanceof Error ? e.message : '未知错误'}。请确认服务、模型、跨域权限及浏览器本地网络权限。`;
-  } finally {
-    clearTimeout(timer);
-    connecting.value = false;
-    if (connection === controller) connection = undefined;
-  }
-}
 async function submit() {
-  if (!runtime || !connected.value || running.value) return;
-  const submission = { submittedAt: Date.now(), monotonicAt: performance.now() };
-  const activeRuntime = runtime;
-  runKind.value = 'free';
-  emit('pause');
-  await nextTick();
+  const item = selected.value;
+  const task = goal.value;
+  if (!item || !task.trim() || running.value || testing.value) return;
+  const submission = {
+    submittedAt: Date.now(),
+    monotonicAt: performance.now(),
+    timeoutMs: item.provider === 'deepseek' ? 120_000 : undefined,
+  };
+  const controller = new AbortController();
+  submissionCheck = controller;
+  running.value = true;
   error.value = '';
+  let provider: ReturnType<typeof createProvider> | undefined;
   try {
-    await activeRuntime.run(goal.value, submission);
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '任务启动失败';
+    provider = createProvider(item);
+    if (provider instanceof OllamaProvider)
+      await provider.checkConfiguration(
+        AbortSignal.any([controller.signal, AbortSignal.timeout(8000)]),
+      );
+    controller.signal.throwIfAborted();
+    emit('pause');
+    await nextTick();
+    controller.signal.throwIfAborted();
+    const run = await runtime.run(task, submission, provider);
+    if (run.status === 'cancelled' || run.status === 'stale') return;
+    if (run.requests?.some((request) => request.status === 'failed')) {
+      error.value =
+        run.status === 'timeout'
+          ? run.message
+          : modelError(run.message, item.provider === 'ollama');
+      recordResult(item, false, error.value);
+    } else if (run.calls.length) {
+      recordResult(item, true, '已在任务中收到结构化工具调用。');
+      if (run.status === 'failed' || run.status === 'limit') {
+        const last = run.calls.at(-1)?.output;
+        const reason = last && !last.ok ? last.error.message : run.message;
+        error.value = `任务未完成。${reason} 请调整任务或更换模型后重试。`;
+      }
+    } else if (run.rounds) {
+      error.value = modelError('NO_TOOL', item.provider === 'ollama');
+      recordResult(item, false, error.value);
+    }
+  } catch (reason) {
+    error.value = controller.signal.aborted
+      ? '已取消分析。'
+      : modelError(reason, item.provider === 'ollama');
+    if (!controller.signal.aborted) recordResult(item, false, error.value);
   } finally {
-    runKind.value = null;
+    if (provider instanceof CloudPageProvider) void provider.release();
+    submissionCheck = undefined;
+    running.value = false;
   }
 }
 async function runRomCard(confirmation: RomConfirmation) {
   if (running.value) return;
-  runKind.value = 'rom';
+  running.value = true;
   error.value = '';
   try {
     emit('pause');
@@ -272,12 +311,16 @@ async function runRomCard(confirmation: RomConfirmation) {
   } catch (e) {
     error.value = e instanceof Error ? e.message : '任务卡启动失败。';
   } finally {
-    runKind.value = null;
+    running.value = false;
   }
+}
+function cancel() {
+  submissionCheck?.abort();
+  runtime.cancel();
 }
 function clear() {
   for (const run of runs.value) if (run.status === 'running') dismissedRuns.add(run.id);
-  runtime?.clear();
+  runtime.clear();
   runs.value = [];
   error.value = '';
 }
@@ -296,98 +339,14 @@ async function saveAudit(run: AgentRun) {
   }
 }
 onBeforeUnmount(() => {
-  connection?.abort();
-  runtime?.clear();
+  dispose();
+  cancel();
+  runtime.clear();
 });
 </script>
 
 <template>
   <section class="agent-panel">
-    <div class="panel connection-panel">
-      <div class="agent-header"
-        ><div><span class="eyebrow">GOAL → TOOLS → EVIDENCE</span><h2>AI Agent 分析</h2></div
-        ><span :class="['connection-status', { connected }]" role="status">{{
-          connected ? '模型已连接' : '模型未连接'
-        }}</span></div
-      >
-      <p
-        >视频、画面、完整关键点与姿态推理留在浏览器。所选模型会收到用户指令和现有有界工具反馈。
-        DeepSeek 通过本机回环代理连接官方 API，密钥仅由 Node 读取；Ollama 保留本地连接。
-        意图仅存内存；完整工具与请求审计保存在本机浏览器 IndexedDB，不自动恢复为模型上下文。</p
-      >
-      <form class="connection-form" @submit.prevent="connect()">
-        <label
-          >模型服务<select
-            v-model="providerKind"
-            aria-label="模型服务"
-            :disabled="connecting || running"
-          >
-            <option value="ollama">Ollama（本地）</option>
-            <option value="deepseek" :disabled="!localPage">DeepSeek 官方 API（本机代理）</option>
-          </select></label
-        >
-        <p v-if="providerKind === 'deepseek'"
-          >deepseek-flash · thinking disabled · temperature 0 · max_tokens 2048 · stream false ·
-          tool_choice auto</p
-        >
-        <label v-if="providerKind === 'ollama'"
-          >本地 Ollama 地址<input
-            v-model="address"
-            :disabled="connecting || running"
-            aria-label="本地 Ollama 地址"
-            type="url"
-            required
-        /></label>
-        <label v-if="providerKind === 'ollama'"
-          >模型名<input
-            v-model="model"
-            :disabled="connecting || running"
-            aria-label="模型名"
-            list="ollama-models"
-            placeholder="选择已安装且支持 tools 的模型"
-            required
-            maxlength="200" /><datalist id="ollama-models"
-            ><option v-for="name in models" :key="name" :value="name" /></datalist
-        ></label>
-        <el-button
-          v-if="providerKind === 'ollama'"
-          :disabled="connecting || running"
-          @click="connect(true)"
-          >读取模型</el-button
-        >
-        <el-button
-          type="primary"
-          native-type="submit"
-          :disabled="connecting || running || (providerKind === 'ollama' && !model.trim())"
-          >验证并连接</el-button
-        >
-        <el-button v-if="connecting" @click="connection?.abort()">取消连接</el-button>
-        <el-button v-if="connected && !running" @click="disconnect">断开</el-button>
-      </form>
-      <p class="connection-note" role="status">{{ connectionMessage }}</p>
-      <p v-if="probeResponse"
-        >连接探测实际返回 model={{ probeResponse.model }} · system_fingerprint={{
-          probeResponse.systemFingerprint ?? '服务未提供，不能据此冻结权重'
-        }}；探测不计业务请求。</p
-      >
-      <details
-        ><summary>连接要求</summary
-        ><p
-          >在此电脑启动仅监听回环的 Ollama，选择支持 tools 的本地模型。设置 OLLAMA_ORIGINS 包含
-          <code>{{ pageOrigin }}</code> 后重启 Ollama。在 Chrome
-          请求回环网络权限时选择允许，再读取模型并验证连接。</p
-        ><p
-          >连接失败时，先访问 <code>http://127.0.0.1:11434/api/tags</code> 确认服务在线，再检查
-          Chrome 的站点权限和 Ollama
-          的来源配置。浏览器无法开放回环访问时，可运行本项目的本机生产预览， 从
-          <code>http://127.0.0.1:4173/</code> 进入 Agent。</p
-        ><p
-          >DeepSeek 使用本机开发或生产预览代理，从 Node 环境读取 DEEPSEEK_API_KEY。
-          连接验证仅发送测试文本。请在终端安装模型，并在浏览器选择模型名。</p
-        ></details
-      >
-    </div>
-
     <RomTaskCard
       :provider="draftProvider"
       :session="session"
@@ -396,7 +355,7 @@ onBeforeUnmount(() => {
       :last="lastRomCard"
       :free-review="freeReview"
       @confirm-free="confirmFree?.($event)"
-      @cancel-free="runtime?.cancel()"
+      @cancel-free="runtime.cancel()"
       @pause="emit('pause')"
       @confirm="runRomCard"
     />
@@ -414,8 +373,7 @@ onBeforeUnmount(() => {
         CSV，成果卡保存文件；只分析不会下载。</p
       >
       <div class="goal-examples"
-        ><button :disabled="running" @click="goal = '比较前后各 5 秒的左右膝 ROM，并展示差异'"
-          >比较左右膝 ROM</button
+        ><button :disabled="running" @click="goal = exampleGoal">比较左右膝 ROM</button
         ><button
           :disabled="running"
           @click="goal = '哪些区间不适合比较？请查询整个已采样区间的质量与缺失情况'"
@@ -439,35 +397,174 @@ onBeforeUnmount(() => {
       >
       <form @submit.prevent="submit"
         ><label for="agent-goal">分析目标或后续修改</label
-        ><textarea
-          id="agent-goal"
-          v-model="goal"
-          :disabled="running"
-          maxlength="2000"
-          rows="3"
-        /><div class="goal-actions"
-          ><span
-            >每次最多 12 轮 / 24 次调用 / 3 次纠错 · 请求 60 秒 / 总计
-            {{ providerKind === 'deepseek' ? '2' : '4' }} 分钟</span
-          ><el-button :disabled="running || !runs.length" @click="clear">清空上下文</el-button
-          ><el-button v-if="runKind === 'free'" type="danger" @click="runtime?.cancel()"
-            >取消分析</el-button
-          ><el-button
+        ><textarea id="agent-goal" v-model="goal" :disabled="running" maxlength="2000" rows="3" />
+        <div class="goal-actions">
+          <label class="agent-model-picker"
+            >模型
+            <select
+              aria-label="模型"
+              :value="choice ? choiceKey(choice) : ''"
+              @change="changeModel"
+            >
+              <option value="">{{ choice ? '取消选择模型' : '请选择模型' }}</option>
+              <option v-if="choice && !selected" :value="choiceKey(choice)" disabled>
+                {{ choice.model }} · {{ providerNames[choice.provider] }}（{{
+                  loaded ? '不可用' : '读取中'
+                }}）
+              </option>
+              <optgroup label="本地">
+                <option
+                  v-for="item in localOptions"
+                  :key="choiceKey(item)"
+                  :value="choiceKey(item)"
+                >
+                  {{ item.model }} · Ollama
+                </option>
+                <option v-if="!localOptions.length" value="settings:ollama"
+                  >Ollama · 查看配置</option
+                >
+              </optgroup>
+              <optgroup label="云端">
+                <option
+                  v-for="item in cloudOptions"
+                  :key="choiceKey(item)"
+                  :value="choiceKey(item)"
+                >
+                  {{ item.model }} · {{ providerNames[item.provider] }}
+                </option>
+                <option v-for="id in unconfigured" :key="id" :value="'settings:' + id">
+                  {{ providerNames[id] }} · 待配置
+                </option>
+              </optgroup>
+            </select>
+          </label>
+          <el-button
+            :aria-expanded="settings"
+            aria-controls="agent-model-settings"
+            @click="settings = !settings"
+            >模型设置</el-button
+          >
+          <el-button :disabled="running || !runs.length" @click="clear">清空上下文</el-button>
+          <el-button v-if="running" type="danger" @click="cancel">取消分析</el-button>
+          <el-button
             v-else
             type="primary"
             native-type="submit"
-            :disabled="running || !connected || !goal.trim()"
-            >执行目标</el-button
-          ></div
-        ></form
+            :disabled="!selected || !goal.trim() || testing"
+            >发送</el-button
+          >
+        </div>
+      </form>
+      <p v-if="choice && !selected && loaded && !refreshing" class="agent-error" role="status">
+        上次选择的模型当前不可用，请刷新模型列表或重新选择。
+      </p>
+      <p v-else-if="!selected && !refreshing && loaded && localError" class="connection-note">{{
+        localError
+      }}</p>
+      <p
+        v-else-if="!selected && !refreshing && loaded && !localOptions.length"
+        class="connection-note"
       >
+        Ollama 暂无可用模型。运行 <code>ollama list</code> 检查安装，然后在模型设置刷新列表。
+      </p>
       <p v-if="error" class="agent-error" role="alert">{{ error }}</p>
+      <el-button v-if="!selected || error" text @click="emit('manual')">前往采集与分析</el-button>
+
+      <section
+        v-if="settings"
+        id="agent-model-settings"
+        class="agent-model-settings"
+        aria-label="模型设置"
+      >
+        <div class="agent-header">
+          <h3>模型设置</h3>
+          <span
+            class="connection-status"
+            :class="{ connected: settingsStatus === '可发送' }"
+            role="status"
+            >{{ settingsStatus }}</span
+          >
+        </div>
+        <div class="connection-form">
+          <label
+            >供应商
+            <select
+              aria-label="模型设置供应商"
+              :value="settingsProvider"
+              @change="openSettings(($event.target as HTMLSelectElement).value as ProviderId)"
+            >
+              <option v-for="(name, id) in providerNames" :key="id" :value="id">{{ name }}</option>
+            </select>
+          </label>
+          <template v-if="settingsProvider === 'ollama'">
+            <label
+              >本地 Ollama 地址<input
+                v-model="addressInput"
+                aria-label="本地 Ollama 地址"
+                type="url"
+                @keydown.enter.prevent="applyAddress"
+            /></label>
+            <el-button @click="applyAddress">应用地址</el-button>
+          </template>
+          <label v-if="settingsOptions.length"
+            >模型 ID
+            <select v-model="testModel" aria-label="设置中的模型 ID">
+              <option value="">{{ target?.model }}（当前测试目标）</option>
+              <option v-for="item in settingsOptions" :key="item.model" :value="item.model">{{
+                item.model
+              }}</option>
+            </select>
+          </label>
+        </div>
+        <p v-if="settingsProvider === 'ollama' && localError">{{ localError }}</p>
+        <p v-else-if="settingsProvider === 'ollama' && loaded && !localOptions.length">
+          未找到已安装的本地模型。运行 <code>ollama list</code> 检查，安装支持 tools 的模型后刷新。
+        </p>
+        <template v-if="settingsProvider !== 'ollama'">
+          <p v-if="settingsConfig"
+            >官方地址 <code>{{ settingsConfig.endpoint }}</code></p
+          >
+          <p v-if="cloudError">{{ cloudError }}</p>
+          <p v-if="settingsConfig?.missing.length"
+            >请检查 <code>{{ settingsConfig.missing.join('、') }}</code
+            >。</p
+          >
+          <p>
+            在 <code>{{ envFile }}</code> 设置
+            <code>{{ cloudProviders[settingsProvider].prefix }}_API_KEY</code> 与
+            <code>{{ cloudProviders[settingsProvider].prefix }}_MODELS</code>（账户可用的模型
+            ID，多个用逗号分隔）。
+            {{
+              settingsProvider === 'deepseek' ? 'DeepSeek 的模型列表默认包含 deepseek-flash。' : ''
+            }}
+            如需指定官方端点，设置
+            <code>{{ cloudProviders[settingsProvider].prefix }}_ENDPOINT</code>。 保存后重启本机
+            Node 服务（<code>pnpm dev</code> 或 <code>pnpm preview</code>），然后刷新模型列表。
+          </p>
+          <p
+            >云端接收任务指令和必要的有界工具反馈。姿态数据、计算、图表与导出留在本机。测试连接会发送一条探测请求，可能产生费用。</p
+          >
+        </template>
+        <div class="goal-actions">
+          <el-button :disabled="refreshing || testing" @click="refresh(true)">{{
+            refreshing ? '正在刷新…' : '刷新模型列表'
+          }}</el-button>
+          <el-button v-if="testing" @click="cancelTest">取消测试</el-button>
+          <el-button v-else :disabled="!target || running" @click="testConnection"
+            >测试连接</el-button
+          >
+        </div>
+        <p v-if="testResult" role="status">{{ testResult.message }}</p>
+        <p v-else-if="settingsStatus === '可发送'"
+          >配置已就绪。发送任务或测试连接可验证模型的工具能力。</p
+        >
+      </section>
     </div>
 
     <slot />
     <div v-if="!runs.length" class="agent-empty panel"
       ><h3>分析结果将包含可复核的本地证据</h3
-      ><p>确认任务卡或连接模型并执行目标后，在这里查看实际调用、区间比较表与数值引用。</p></div
+      ><p>确认任务卡或发送分析目标后，在这里查看实际工具调用、区间比较、质量与数值引用。</p></div
     >
     <article
       v-for="run in runs"
@@ -482,8 +579,11 @@ onBeforeUnmount(() => {
         }}</span></div
       >
       <p class="run-meta"
-        >{{ run.provider }} / {{ run.model }} · {{ run.rounds }} 轮 · {{ run.calls.length }} 次调用
-        · {{ (run.elapsedMs / 1000).toFixed(1) }} s<template v-if="run.usage.reportedRequests">
+        >{{
+          providerNames[run.provider.replace(/-(local|api)$/, '') as ProviderId] ?? run.provider
+        }}
+        / {{ run.model }} · {{ run.rounds }} 轮 · {{ run.calls.length }} 次调用 ·
+        {{ (run.elapsedMs / 1000).toFixed(1) }} s<template v-if="run.usage.reportedRequests">
           · API 已报告 token：输入 {{ run.usage.inputTokens ?? '未提供' }} / 输出
           {{ run.usage.outputTokens ?? '未提供' }}（{{
             run.usage.reportedRequests
@@ -493,7 +593,7 @@ onBeforeUnmount(() => {
       >
       <p v-if="run.status === 'running'" role="status">{{ run.phase }}</p>
       <p v-if="run.conversationCosts" class="run-meta">
-        本场累计（自最近清空或连接起）：{{ run.conversationCosts.turns }} 次用户目标 /
+        本场累计（自最近清空起）：{{ run.conversationCosts.turns }} 次用户目标 /
         {{ run.conversationCosts.requests }} 次请求 /
         {{ run.conversationCosts.rounds }} 次模型响应轮次 /
         {{ (run.conversationCosts.elapsedMs / 1000).toFixed(1) }} s；输入 token
@@ -610,7 +710,6 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 18px;
 }
-.connection-panel,
 .goal-panel,
 .run-panel,
 .agent-empty {
@@ -636,7 +735,7 @@ p,
 details {
   font-size: 12px;
   line-height: 1.9;
-  color: #667d71;
+  color: var(--muted);
 }
 .connection-status,
 .run-status {
@@ -648,7 +747,7 @@ details {
 }
 .connected,
 .completed {
-  color: var(--green);
+  color: var(--success);
   background: #eaf6f0;
 }
 .connection-form {
@@ -661,7 +760,7 @@ details {
 label {
   display: block;
   font-size: 12px;
-  color: #456353;
+  color: var(--text);
 }
 .connection-form label {
   flex: 1;
@@ -672,12 +771,12 @@ select,
 textarea {
   display: block;
   width: 100%;
-  border: 1px solid #dce6df;
+  border: 1px solid var(--line-strong);
   border-radius: 6px;
   padding: 10px 12px;
   margin-top: 7px;
-  background: #fcfdfc;
-  color: #243932;
+  background: var(--surface);
+  color: var(--ink);
   font-family: inherit;
   font-size: 13px;
 }
@@ -685,7 +784,7 @@ textarea {
   resize: vertical;
 }
 .connection-note {
-  color: var(--green);
+  color: var(--accent);
 }
 summary {
   cursor: pointer;
@@ -697,11 +796,11 @@ summary {
   margin: 18px 0;
 }
 .goal-examples button {
-  background: #edf5f0;
+  background: var(--accent-soft);
   padding: 7px 12px;
   font-size: 12px;
   border-radius: 5px;
-  color: var(--green);
+  color: var(--accent);
 }
 .goal-actions {
   display: flex;
@@ -711,11 +810,23 @@ summary {
   flex-wrap: wrap;
   margin-top: 14px;
 }
-.goal-actions span {
+.agent-model-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.agent-model-picker select {
   flex: 1;
-  font-size: 11px;
-  color: #81958a;
-  min-width: 240px;
+  min-width: 0;
+  margin-top: 0;
+}
+.agent-model-settings {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  overflow-wrap: anywhere;
 }
 .goal-actions :deep(.el-button) {
   margin-left: 0;
@@ -738,20 +849,20 @@ summary {
   font-size: 13px;
   line-height: 2;
   padding-left: 20px;
-  background: #f5f9f6;
+  background: var(--surface-muted);
   padding-top: 10px;
   padding-bottom: 10px;
   border-radius: 5px;
 }
 .run-message {
-  color: #294d39;
+  color: var(--ink);
   margin: 14px 0;
   white-space: pre-wrap;
 }
 .citation-list {
   font-size: 12px;
-  background: #f1f7f3;
-  border-left: 3px solid var(--green);
+  background: var(--surface-muted);
+  border-left: 3px solid var(--accent);
   padding: 12px 16px;
   overflow-wrap: anywhere;
 }
@@ -764,7 +875,7 @@ summary {
 pre {
   max-height: 280px;
   overflow: auto;
-  background: #f4f7f5;
+  background: var(--surface-muted);
   font-size: 11px;
   padding: 12px;
 }
@@ -775,12 +886,11 @@ pre {
   color: #7c715a;
 }
 @media (max-width: 700px) {
-  .connection-panel,
   .goal-panel,
   .run-panel {
     padding: 16px;
   }
-  .goal-actions span {
+  .agent-model-picker {
     width: 100%;
     flex-basis: 100%;
   }

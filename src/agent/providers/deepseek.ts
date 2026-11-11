@@ -22,11 +22,14 @@ export class DeepSeekRequestError extends Error {
   }
 }
 
-function wireMessages(messages: ModelMessage[]) {
-  let pending: { id: string; name: string }[] = [];
+export function chatMessages(messages: ModelMessage[]) {
+  let pending: { id: string; nativeId?: string; name: string }[] = [];
+  const used = new Set<string>();
   const result = messages.map((message, index) => {
     if (message.role === 'tool') {
-      const match = pending.findIndex((call) => call.name === message.toolName);
+      const match = pending.findIndex((call) =>
+        message.toolCallId ? call.nativeId === message.toolCallId : call.name === message.toolName,
+      );
       if (match < 0) throw new DeepSeekRequestError('request', 'DEEPSEEK_ORPHAN_TOOL_RESULT');
       const [call] = pending.splice(match, 1);
       return { role: 'tool', content: message.content, tool_call_id: call!.id };
@@ -35,12 +38,14 @@ function wireMessages(messages: ModelMessage[]) {
     if (message.calls?.length) {
       if (message.role !== 'assistant')
         throw new DeepSeekRequestError('request', 'DEEPSEEK_INVALID_HISTORY_ROLE');
-      // The history is a stateless projection. Rebind IDs in assistant/result
-      // pairs deterministically; never change arguments or invent tool results.
-      pending = message.calls.map((call, callIndex) => ({
-        id: `call_${index}_${callIndex}`,
-        name: call.name,
-      }));
+      // Some Chat Completions services reuse IDs in separate response batches.
+      // Keep native IDs when unique in the compact projection.
+      pending = message.calls.map((call, callIndex) => {
+        let id = call.id ?? `call_${index}_${callIndex}`;
+        while (used.has(id)) id = `p_${id}`;
+        used.add(id);
+        return { id, nativeId: call.id, name: call.name };
+      });
       return {
         role: message.role,
         content: message.content || null,
@@ -78,7 +83,7 @@ export class DeepSeekProvider implements ModelProvider {
     return {
       model: this.model,
       ...DEEPSEEK_INFERENCE,
-      messages: wireMessages(input.messages),
+      messages: chatMessages(input.messages),
       tools: input.tools.map((tool) => ({
         type: 'function',
         function: {

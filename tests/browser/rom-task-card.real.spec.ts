@@ -87,9 +87,9 @@ test('REAL ROM task card: one fixed Qwen draft, review and local delivery', asyn
     await page.locator('.csv-status').getByRole('button', { name: '关闭', exact: true }).click();
     summary.fixedSampleFingerprint = material;
     expect(material).toBe(preflight.fixedSampleFingerprint);
-    await page.getByLabel('模型名', { exact: true }).fill(fixedTag);
-    await page.getByRole('button', { name: '验证并连接', exact: true }).click();
-    await expect(page.locator('.connection-status')).toHaveText('模型已连接', { timeout: 65_000 });
+    await page
+      .getByLabel('模型', { exact: true })
+      .selectOption(JSON.stringify(['ollama', fixedTag, 'http://127.0.0.1:11434']));
     await card.getByRole('button', { name: '用当前模型草拟' }).click();
     await card.getByLabel('模型草拟指令').fill(romGoal);
     budget.startTarget();
@@ -163,7 +163,7 @@ test('REAL ROM task card: one fixed Qwen draft, review and local delivery', asyn
     if (changed.includes('report')) await card.getByLabel('准备比较报告').uncheck();
     if (changed.includes('csv')) await card.getByLabel('准备 CSV').uncheck();
     await card.screenshot({ path: info.outputPath('real-confirmed-review.png') });
-    await page.getByRole('button', { name: '断开', exact: true }).click();
+    await page.getByLabel('模型', { exact: true }).selectOption('');
 
     const first = await confirmRom(page, info, rows, 1);
     expect(first.run.romCard?.entry).toBe('model-draft');

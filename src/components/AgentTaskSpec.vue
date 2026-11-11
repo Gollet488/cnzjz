@@ -66,7 +66,7 @@ summary {
   cursor: pointer;
 }
 p {
-  color: #667d71;
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 .task-table {

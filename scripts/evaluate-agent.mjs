@@ -50,7 +50,6 @@ const hash = (value) => createHash('sha256').update(value).digest('hex');
 const HUMAN_INPUTS = [
   {
     id: 'human-720',
-    path: 'D:/Users/Legion/Desktop/testvideo/下载 (1).mp4',
     sha256: '4619fc6b5571dfeac86420cea76e3ee27506c4b8c571ad0058d72c3138c38303',
     frames: 2011,
     joint: 'elbow',
@@ -61,7 +60,6 @@ const HUMAN_INPUTS = [
   },
   {
     id: 'human-1080',
-    path: 'D:/Users/Legion/Desktop/testvideo/跳舞使人心情愉悦～#查尔斯顿舞 #魔性律动舞#快乐就这么简单 - 1080p.mp4',
     sha256: '38d02deb423e756eedd24a5af1bc24b34568d75692c9da4da2f4261bf4672264',
     frames: 1000,
     joint: 'knee',
@@ -167,7 +165,8 @@ async function humanReplayMaterials(indexPath, caseIds) {
   const indexBytes = await readFile(indexPath);
   const index = JSON.parse(indexBytes.toString('utf8'));
   if (
-    resolve(index.authorizedDirectory) !== resolve('D:/Users/Legion/Desktop/testvideo') ||
+    typeof index.authorizedDirectory !== 'string' ||
+    !index.authorizedDirectory ||
     !Array.isArray(index.videos) ||
     index.videos.length !== HUMAN_INPUTS.length
   )
@@ -175,11 +174,16 @@ async function humanReplayMaterials(indexPath, caseIds) {
   const { parseCSV, replayCSV } = await import('../tests/browser/files.ts');
   const materials = new Map();
   for (const allowed of HUMAN_INPUTS.filter(({ id }) => caseIds.includes(id))) {
-    const entry = index.videos.find((video) => resolve(video.path) === resolve(allowed.path));
-    if (!entry || entry.sha256 !== allowed.sha256 || entry.frames !== allowed.frames)
+    const entry = index.videos.find((video) => video.sha256 === allowed.sha256);
+    if (
+      !entry ||
+      typeof entry.path !== 'string' ||
+      entry.frames !== allowed.frames ||
+      resolve(dirname(entry.path)) !== resolve(index.authorizedDirectory)
+    )
       throw new Error(`HUMAN_INPUT_IDENTITY:${allowed.id}`);
     // Read only this exact authorized file. Never enumerate testvideo.
-    const videoBytes = await readFile(allowed.path);
+    const videoBytes = await readFile(entry.path);
     if (videoBytes.length !== entry.bytes || hash(videoBytes) !== allowed.sha256)
       throw new Error(`HUMAN_INPUT_HASH:${allowed.id}`);
     const directory = resolve(
@@ -197,7 +201,7 @@ async function humanReplayMaterials(indexPath, caseIds) {
     if (
       !verification.passed ||
       verification.input.sha256 !== allowed.sha256 ||
-      resolve(verification.input.path) !== resolve(allowed.path) ||
+      resolve(verification.input.path) !== resolve(entry.path) ||
       verification.fullCSV.rows !== entry.frames ||
       verification.fullCSV.columns !== 354 ||
       rows.length !== entry.frames ||
@@ -255,7 +259,7 @@ async function humanReplayMaterials(indexPath, caseIds) {
       kind: 'historical-human-inference-replay',
       newPageInference: false,
       original: {
-        path: allowed.path,
+        path: entry.path,
         bytes: entry.bytes,
         sha256: allowed.sha256,
         display: entry.display,
@@ -295,7 +299,6 @@ export async function frozenHumanMaterials(indexPath, caseIds = HUMAN_INPUTS.map
     if (
       !entry ||
       resolve(root, entry.index.path) !== resolve(indexPath) ||
-      resolve(entry.original.path) !== resolve(allowed.path) ||
       entry.original.sha256 !== allowed.sha256 ||
       entry.original.frames !== allowed.frames ||
       !entry.historicalComplete ||
@@ -666,7 +669,7 @@ async function writeHumanLocalOutputs(materials, output) {
     const markdown = [
       `# ${allowed.id}：旧人体推理数据的当前产品分析`,
       '',
-      `原件：${allowed.path}；SHA-256 ${allowed.sha256}。`,
+      `原件 SHA-256 ${allowed.sha256}。`,
       '',
       `源 PTS ${info.range.join('–')} s；解析 completed，${info.sampleCount}/${provenance.original.frames} 帧，与索引全部 PTS 一致。未检出 ${data.quality.missingSamples} 帧。当前回放版本 ${info.sessionId}@${info.revision}。`,
       '',

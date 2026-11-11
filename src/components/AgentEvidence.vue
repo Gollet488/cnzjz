@@ -261,13 +261,13 @@ header strong {
   font-size: 15px;
 }
 header span {
-  color: var(--green);
+  color: var(--accent);
   font-size: 11px;
 }
 .evidence-meta,
 footer {
   display: block;
-  color: #73857c;
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 .evidence-table {
@@ -287,7 +287,7 @@ td {
   border-bottom: 1px solid var(--line);
 }
 th {
-  background: #f4f8f6;
+  background: var(--surface-muted);
   font-weight: 500;
 }
 footer {
@@ -308,9 +308,9 @@ footer {
 .quality-values b {
   display: block;
   font-size: 23px;
-  color: var(--green);
+  color: var(--accent);
 }
 .quality-values span {
-  color: #73857c;
+  color: var(--muted);
 }
 </style>

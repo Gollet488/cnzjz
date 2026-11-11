@@ -1,6 +1,6 @@
 # Kinetic Pose Lab
 
-浏览器端通用人体姿态分析应用，使用 Vue 3、TypeScript、MediaPipe、ECharts 和 Element Plus。支持单人摄像头采集、多格式本地视频分析、时序指标、姿态对比、CSV/PNG 导出，以及 Ollama / DeepSeek Agent。
+浏览器端通用人体姿态分析应用，使用 Vue 3、TypeScript、MediaPipe、ECharts 和 Element Plus。支持单人摄像头采集、多格式本地视频分析、时序指标、姿态对比、CSV/PNG 导出，以及支持本地与云端模型的 Agent。
 
 本项目面向通用人体运动的姿态采集与量化分析，提供本地推理、可追溯数值和 Agent 工具调用。启动、保留 Git 历史的上传步骤和已知限制见 [构建与交付](docs/delivery.md)，参赛要求核对见 [仓库提交清单](docs/submission-checklist.md)，目标需求见 [requirement.md](requirement.md)。
 
@@ -10,7 +10,7 @@ HTTPS 发布候选已推送至 [codex/https-release](https://github.com/Gollet48
 
 Vue 3 / TypeScript 负责页面和状态，Element Plus 提供交互组件，ECharts 展示时序图表。MediaPipe Pose Landmarker Lite 在浏览器内提取人体关键点；本地视频经过 MP4Box 索引、WebCodecs 解码与 Worker 推理，其他格式先由 FFmpeg WebAssembly 转换。分析层计算通用几何与时序指标，Agent 通过受控工具读取分析结果并交付带证据的报告、视图或导出。
 
-Ollama 由浏览器连接本机服务；DeepSeek 通过本机 Node 代理访问官方 API。系统数据流、模块职责和部署结构见 [系统架构](docs/architecture.md)，全部技术资料见 [文档索引](docs/README.md)。
+Ollama 由浏览器连接本机服务。DeepSeek、OpenAI GPT、Anthropic Claude、智谱 GLM 和 Moonshot Kimi 通过本机 Node 代理访问官方 API。系统数据流、模块职责和部署结构见 [系统架构](docs/architecture.md)，全部技术资料见 [文档索引](docs/README.md)。
 
 ## 启动
 
@@ -26,7 +26,7 @@ pnpm dev
 
 `prepare:assets` 将锁定版本的 MediaPipe 运行文件和固定哈希的 Lite 模型放入 public，模型缺失时需要联网下载。已有资源可以用 `pnpm check:assets` 校验。
 
-基础分析无需 API 密钥。使用 DeepSeek 时，将 [.env.example](.env.example) 复制为 `.env`，在本机填入密钥后运行 `pnpm dev:env`；生产构建后使用 `pnpm preview:env`。普通 `pnpm dev` / `pnpm preview` 使用进程环境或 Windows 用户环境中的密钥。环境变量、浏览器条件和排错见 [环境配置](docs/environment.md)。
+基础分析无需 API 密钥。云端配置可将 [.env.example](.env.example) 复制为项目根目录下的 `.env`，按所选供应商填写密钥和模型 ID，重启本机 Node 服务后在 Agent 模型设置中刷新。配置与生产页面验收命令见 [Agent 模型配置与验收](docs/agent-model-selection.md)。
 
 ## 使用
 
@@ -35,11 +35,11 @@ pnpm dev
 3. 本地视频支持 MP4、MOV、MKV、AVI、WebM、FLV、WMV、MPEG、TS、3GP、OGV 等容器，不按扩展名拒绝文件。可直接分析的 H.264 视频保留原流程；其他输入自动使用本地 FFmpeg WebAssembly 转为 H.264 后分析，双视频对比使用同一流程。转换资源随 `prepare:assets` 准备，无需上传视频或连接 CDN。支持范围仍受实际编码、文件完整性与设备内存限制；加密文件无法保证支持。单文件最高 500 MB；转换可能耗时较长，可取消，转换结果缩放至不超过 1920×1080，时间轴与完整性以转换后视频为准。CSV 的 `acquisition_mode=webcodecs-transcoded` 标识转换流程。
 4. 分析页可选关节、raw/filtered、区间与关键点，查看角度、速度、轨迹和左右差异。
 5. 导出页保存 CSV 或 PNG；CSV 支持取消和进度，支持原生文件写入时使用文件流，否则使用内存 Blob。
-6. 在 Agent 页使用两段 ROM 比较任务卡，手动填参或在连接后让模型草拟，核对后确认运行。自由目标入口可在验证并连接模型后使用。改段和保存步骤见 [Agent 工作台指南](docs/agent-workbench.md)。
+6. 在 Agent 页输入目标，在输入框旁选择模型，然后点击「发送」。可在「模型设置」查看地址、模型 ID 和首次配置步骤，或主动测试连接。 也可使用两段 ROM 比较任务卡手动填参或让已选模型草拟，核对后确认运行。详见 [Agent 工作台指南](docs/agent-workbench.md)。
 
-视频、画面、关键点推理和数值计算留在浏览器。Agent 会向所选模型发送指令和必要的有界工具反馈；选择 DeepSeek 时，这些文本和分析反馈会经本机代理发送到官方 API，密钥只由 Node 读取。页面不接收密钥；不要将密钥写入源码。Ollama 需允许页面来源跨域访问；Node 连接成功不代表浏览器 CORS 已通过。
+视频、画面、关键点推理和数值计算留在浏览器。Agent 会向所选模型发送指令和必要的有界工具反馈；选择云端模型时，这些文本和有界工具反馈经本机代理发送到官方 API，密钥只由 Node 读取。页面不接收密钥；不要将密钥写入源码。Ollama 需允许页面来源跨域访问；Node 连接成功不代表浏览器 CORS 已通过。
 
-DeepSeek 代理只在此项目的本机 Vite 开发服务或生产预览服务中可用，纯静态托管不包含代理。本项目不会自动安装或下载 Ollama 模型。
+云端代理只在此项目的本机 Vite 开发服务或生产预览服务中可用，纯静态托管不包含代理。本项目不会自动安装或下载 Ollama 模型。
 
 ## 检查
 
