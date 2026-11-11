@@ -137,13 +137,16 @@ test(
 test('a foreign process with the exact Vite path in a later argument is never stopped', async () => {
   const folder = await fixture(false);
   const vite = path.join(folder, 'node_modules', 'vite', 'bin', 'vite.js');
-  const foreign = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', vite], {
-    windowsHide: true,
-    stdio: 'ignore',
-  });
+  const foreign = spawn(
+    process.execPath,
+    ['-e', 'process.send("ready"); setInterval(() => {}, 1000)', vite],
+    { windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] },
+  );
   const exited = once(foreign, 'exit');
   try {
-    await once(foreign, 'spawn');
+    // Wait until Node has started so /proc/<pid>/cmdline contains the new argv.
+    const [ready] = await once(foreign, 'message', { signal: AbortSignal.timeout(5000) });
+    assert.equal(ready, 'ready');
     const identity = processIdentity(foreign.pid);
     assert.ok(identity);
     const state = { pid: foreign.pid, vite, created: identity.created };
