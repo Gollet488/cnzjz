@@ -7,6 +7,7 @@ import {
   string,
   validate,
 } from '../analysis/schema.ts';
+import { modelSessionInfo } from '../analysis/session.ts';
 import type { SessionInfo } from '../analysis/session.ts';
 import type { ToolDefinition } from '../analysis/tools.ts';
 import type { AgentRun, CallRecord } from './runtime.ts';
@@ -79,7 +80,7 @@ const sourceSchema = object({
   origin: enumeration('explicit', 'inherited', 'derived'),
   sourceId: string,
 });
-// The model explicitly chooses an anchor; no user text is parsed here.
+// Relative selections use the anchor the model declares.
 const modelIntervalSchema = {
   anyOf: [
     enumeration('sampled'),
@@ -194,6 +195,97 @@ const constrainedSpecSchema = object(
   },
   ['actions', 'basis', 'channels', 'interval', 'joint', 'metrics', 'second', 'view'],
 );
+type QualityRange = [number, number] | null | undefined;
+const seconds = String.raw`-?\d+(?:\.\d+)?`;
+const separator = String.raw`\s*(?:秒(?:钟)?\s*)?[-–—~～至到]\s*(?:第\s*)?`;
+const bounds = String.raw`${seconds}${separator}${seconds}`;
+const timedRange = String.raw`${bounds}\s*秒(?:钟)?`;
+const bracketRange = String.raw`[\[［]\s*(?<bracketStart>${seconds})\s*[,，]\s*(?<bracketEnd>${seconds})\s*[\]］]`;
+const qualityRanges = new RegExp(
+  String.raw`(?:绝对区间\s*[:：]?\s*|(?=[\[［][^\]］]*[\]］]\s*秒))${bracketRange}|(?<![.\d])(?<start>${seconds})${separator}(?<end>${seconds})(?:\s*秒(?:钟)?|(?=\s*(?:或|与|和|、)\s*${timedRange}))`,
+  'g',
+);
+
+// Undefined leaves scope to the usual declaration. Null asks the user to resolve a conflict.
+function absoluteQualityRange(goal: string, previous?: TaskUnderstanding): QualityRange {
+  const qualityRevision =
+    previous?.spec.goalTypes.length === 1 &&
+    previous.spec.goalTypes[0] === 'quality' &&
+    /^(?:请\s*)?(?:把\s*)?(?:区间|范围)\s*(?:改为|改成|换成|调整为)/.test(goal);
+  if (
+    (!qualityRevision && !goal.includes('质量')) ||
+    /\bCSV\b|图表|报告|(?:^|[，,。；;])\s*(?:请\s*)?(?:并\s*)?(?:比较|对比|对照)/i.test(goal) ||
+    /相对(?:时间|区间)|(?:采样|视频|会话)\s*(?:开头|开始|起点|末尾|结束|终点)|(?:最初|最后)\s*\d/.test(
+      goal,
+    )
+  )
+    return;
+  const ranges = Array.from(goal.matchAll(qualityRanges), ({ groups }) => [
+    Number(groups!.bracketStart ?? groups!.start),
+    Number(groups!.bracketEnd ?? groups!.end),
+  ]);
+  const first = ranges[0];
+  if (!first) return;
+  const [start, end] = first as [number, number];
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start < 0 ||
+    start > end ||
+    ranges.some((range) => !same(first, range))
+  )
+    return null;
+  return [start, end];
+}
+
+function checkQualityRange(
+  expected: QualityRange,
+  declared: unknown,
+  unresolved: readonly string[] = [],
+) {
+  if (expected === undefined) return;
+  if (same(expected, declared) && (expected !== null || unresolved.includes('interval'))) return;
+  throw new Error(
+    expected === null
+      ? 'TASK_SPEC_QUALITY_INTERVAL_CONFLICT：质量区间需要确认；请用 interval=null、unresolved=["interval"] 声明，再用 needs_input 澄清。'
+      : `TASK_SPEC_QUALITY_INTERVAL：请在 interval 原样保留质量查询区间 ${JSON.stringify(expected)}。`,
+  );
+}
+
+function constrainedSpecFor(goal: string, qualityRange: QualityRange) {
+  if (qualityRange !== undefined)
+    return object(
+      {
+        ...constrainedSpecSchema.properties,
+        interval:
+          qualityRange === null
+            ? {
+                type: 'null',
+                description: '质量区间需要确认；interval=null，并在 unresolved 列出 interval。',
+              }
+            : {
+                ...array({ type: 'number', enum: qualityRange }, 2, 2),
+                description: `保留用户指定的质量区间 ${JSON.stringify(qualityRange)}。`,
+              },
+      },
+      constrainedSpecSchema.required,
+    );
+  const duration = Number(
+    /^(?:请\s*)?比较\s*(?:已采样数据\s*)?(?:前后|首尾)各\s*(\d+(?:\.\d+)?)\s*秒(?:钟)?(?=\s*(?:的|[，,。；;、]|$))/.exec(
+      goal,
+    )?.[1],
+  );
+  if (!Number.isFinite(duration)) return constrainedSpecSchema;
+  const seconds = { type: 'number' as const, enum: [duration] };
+  return object(
+    {
+      ...constrainedSpecSchema.properties,
+      interval: object({ anchor: enumeration('start'), seconds }),
+      second: object({ anchor: enumeration('end'), seconds }),
+    },
+    constrainedSpecSchema.required,
+  );
+}
 const changeSchema = taskPatchSchema.properties!.changes.items!;
 const compactPatchSchema = object({
   changes: array(
@@ -240,6 +332,19 @@ const constrainedPatchFields = {
 const constrainedPatchSchema = object({
   changes: object(constrainedPatchFields, []),
 });
+const constrainedAbsoluteCsvPatchSchema = object({
+  changes: object(
+    {
+      ...constrainedPatchFields,
+      export: taskSpecSchema.properties!.interval.anyOf![0]!,
+    },
+    ['export'],
+  ),
+});
+// A direct request for a bounded CSV supplies enough information to require the
+// field in the model's patch. The model still selects the seconds for review.
+const absoluteCsvRequest =
+  /(?:^|[，,。；;])\s*(?:并|再|同时)?\s*(?:准备|保存|导出)\s*(?:(?:一份)?(?:比较)?报告\s*(?:以及|和|及)\s*)?\d+(?:\.\d+)?\s*[-–—~～至到]\s*\d+(?:\.\d+)?\s*秒\s*(?:的\s*)?CSV(?=\s*(?:$|[，,。；;]))/i;
 const constrainedPatchPaths: Record<string, string> = {
   first: 'interval',
   second: 'comparison.second',
@@ -296,6 +401,7 @@ export class ModelProtocolAdapter {
   private readonly runId: string;
   private readonly previous?: TaskUnderstanding;
   private readonly referenceChanged: boolean;
+  private readonly qualityRange: QualityRange;
   constructor(
     runId: string,
     reference: SessionInfo,
@@ -312,6 +418,7 @@ export class ModelProtocolAdapter {
     this.previous = previous ? structuredClone(previous) : undefined;
     this.referenceChanged = referenceChanged;
     this.reference = structuredClone(reference);
+    this.qualityRange = absoluteQualityRange(goal, previous);
     const previousSources = new Map<string, UserSource>();
     if (!referenceChanged && previous) {
       for (const source of previous.spec.sources) {
@@ -370,7 +477,7 @@ export class ModelProtocolAdapter {
           ...(c.modelArguments as { callId: string; path: string; start: number; limit: number }),
         })),
       goal: run.goal,
-      currentSession: this.reference,
+      currentSession: modelSessionInfo(this.reference),
       rangeOptions: this.reference.range
         ? {
             sampled: { selection: 'sampled', interval: [...this.reference.range] },
@@ -438,11 +545,14 @@ export class ModelProtocolAdapter {
       requested.add('finish_analysis');
     if (!run.task && this.reference.range) {
       requested.add('set_task_spec');
-      if (this.previous && !this.referenceChanged) requested.add('set_task_patch');
+      if (this.previous && !this.referenceChanged && this.qualityRange !== null)
+        requested.add('set_task_patch');
     }
     if (run.task && this.reference.range) {
       const s = run.task.spec;
       requested.add('get_quality_summary');
+      if (this.qualityRange !== undefined && run.completion?.state === 'needs_input')
+        requested.delete('get_quality_summary');
       if (s.joint) requested.add('query_metrics');
       if (s.comparison) requested.add('compare_intervals');
       if (s.deliveries.view) requested.add('set_chart_view');
@@ -490,7 +600,7 @@ export class ModelProtocolAdapter {
           : enumeration('explicit', 'derived');
         if (t.name === 'set_task_spec')
           schema = currentSourcesOnly
-            ? constrainedSpecSchema
+            ? constrainedSpecFor(run.goal, this.qualityRange)
             : object(
                 {
                   ...compactSpecSchema.properties,
@@ -502,7 +612,9 @@ export class ModelProtocolAdapter {
               );
         else if (t.name === 'set_task_patch')
           schema = currentSourcesOnly
-            ? constrainedPatchSchema
+            ? absoluteCsvRequest.test(run.goal)
+              ? constrainedAbsoluteCsvPatchSchema
+              : constrainedPatchSchema
             : object({
                 changes: array(
                   object({ ...compactPatchSchema.properties!.changes.items!.properties, sourceId }),
@@ -526,11 +638,11 @@ export class ModelProtocolAdapter {
           name: t.name,
           description:
             t.name === 'set_task_spec'
-              ? schema === constrainedSpecSchema
+              ? currentSourcesOnly
                 ? '用 actions 列出用户明确请求的动作，只填写相关参数。局部修改用 set_task_patch。'
                 : specDescription
               : t.name === 'set_task_patch'
-                ? schema === constrainedPatchSchema
+                ? currentSourcesOnly
                   ? '用 changes 对象只填要修改的字段。second 是比较后段，viewInterval 是图表范围，export 是 CSV 范围。'
                   : '只声明修改字段及用户 sourceId；未改前段、口径、关节、比较意图和交付本地继承。侧别与图表侧别、后段与图表范围分别声明；新增原为 null 的 view/export 需声明完整对象，不猜缺失字段。'
                 : t.name === 'finish_analysis' &&
@@ -624,8 +736,9 @@ export class ModelProtocolAdapter {
       };
     }
     if (call.name === 'set_task_spec') {
+      checkQualityRange(this.qualityRange, args.interval, args.unresolved);
       const pendingActions: GoalType[] = [];
-      if (definition.inputSchema === constrainedSpecSchema) {
+      if (definition.inputSchema.properties?.actions) {
         const { actions, basis = null, channels = null, joint = null } = args;
         const view = actions.includes('view') ? args.view : undefined;
         const viewArgs =
@@ -681,7 +794,7 @@ export class ModelProtocolAdapter {
     }
     if (call.name === 'set_task_patch') {
       if (this.referenceChanged) throw new Error('STALE_INTENT');
-      if (definition.inputSchema === constrainedPatchSchema) {
+      if (definition.inputSchema.properties?.changes.type === 'object') {
         const changes = args.changes;
         if (
           this.previous?.comparisonViewLinked &&
@@ -718,12 +831,16 @@ export class ModelProtocolAdapter {
         value: s.field === 'goalTypes' ? expandGoalTypes(s.value) : s.value,
         origin: s.origin,
       }));
+      const intervalChange = changes.find((s: any) => s.field === 'interval');
+      checkQualityRange(
+        this.qualityRange,
+        intervalChange ? intervalChange.value : this.previous?.spec.interval,
+      );
       // Resolve the model's declared statistical changes first, then its view
       // choice against those exact values (or retained prior values).
       for (const s of changes.filter((s: any) => !s.field.startsWith('deliveries')))
         s.value = this.resolveIntervalValue(s.value, s.field, () => s.origin === 'derived');
-      const firstChange = changes.find((s: any) => s.field === 'interval');
-      const first = firstChange ? firstChange.value : this.previous?.spec.interval;
+      const first = intervalChange ? intervalChange.value : this.previous?.spec.interval;
       const comparisonChange = changes.find((s: any) => s.field === 'comparison');
       const second = comparisonChange
         ? comparisonChange.value?.second

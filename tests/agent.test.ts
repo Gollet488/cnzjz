@@ -15,7 +15,7 @@ type Request = Parameters<ModelProvider['complete']>[0];
 const calls = (...items: [string, unknown][]): ModelReply => ({
   calls: items.map(([name, args]) => ({ name, arguments: args })),
 });
-const parameters = { threshold: 0.5, window: 5, aspect: 1, metricVersion: '2.0' as const };
+const parameters = { threshold: 0.5, window: 5, aspect: 1, metricVersion: '2.1' as const };
 function make(empty = false) {
   const session = new AnalysisSession('demo', parameters);
   if (!empty)

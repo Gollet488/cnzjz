@@ -1,11 +1,12 @@
 # 文档索引
 
-当前阶段：2026-11-03 双视频对比 V1、当前版本 Agent A1 最小门槛及 D1 本地集成已有证据；真实设备与外部交付边界继续保留，整体尚未总体验收。最新指标、重复任务改道规则与可复制指令见 [统一执行计划](core-execution-plan.md)。2026-10-31 的仓库整理与交付记录保留为历史。
+2026-11-13 本机候选通过隔离检出验签、冻结安装、固定资源校验和两套生产构建。沿用产物一致的本机 Pages 12/12 及真人 Qwen 独立质量查询 1/1。发布验收等待获授权的候选 SHA。[本机验收与证据版本](evidence/20261113-release-candidate/review.md)
 
 | 入口 | 内容 |
 | --- | --- |
 | [项目 README](../README.md) | 安装、启动、基本使用与目录 |
 | [构建与交付](delivery.md) | 本轮检查、上传步骤、部署边界和已知限制 |
+| [候选清单](evidence/20261113-release-candidate/manifest.json) | 当前源码、固定资源、配置与选定证据的字节指纹 |
 | [仓库提交清单](submission-checklist.md) | 截图要求逐项核对、已补齐内容及上传前待办 |
 | [环境配置](environment.md) | 依赖、环境变量模板、模型连接与排错 |
 | [系统架构](architecture.md) | 技术栈、模块职责、数据流与部署结构 |
@@ -23,4 +24,4 @@
 
 ## 历史评估
 
-[2026-10-29 项目评估](project-assessment.md) 与 [对应检查数据](project-checks.json) 保留当时的结果，不能替代本轮检查。私人摄像头 CSV、人体视频、历史运行日志和截图保留在本机，不随源码上传。
+私人摄像头 CSV、人体视频、完整审计和截图保留在本机。[区间修复后的本机签核原记录](evidence/20261113-rc-closeout/review.md) · [区间修复前的本机候选审阅](evidence/20261113-local-rc/review.md) · [2026-10-29 项目评估](project-assessment.md) · [对应检查数据](project-checks.json)

@@ -109,3 +109,12 @@ export class PresentationAudit {
       throw new Error(`解码帧数不完整：${this.count}/${this.expected.length}，未标记完成。`);
   }
 }
+
+// One-based presentation indices, covering both endpoints. Above the session
+// budget we infer at most every other frame, while still auditing decoder PTS.
+export function analysisFrameIndices(total: number, limit: number) {
+  const count = total <= limit ? total : Math.min(limit, Math.ceil(total / 2));
+  return Array.from({ length: count }, (_, i) =>
+    count < 2 ? 1 : 1 + Math.round((i * (total - 1)) / (count - 1)),
+  );
+}

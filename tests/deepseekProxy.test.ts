@@ -185,7 +185,12 @@ test('proxy reuses official adapter, fixes inference, preserves actual model/nul
         assert.equal(body.max_tokens, 2048);
         assert.deepEqual(body.thinking, { type: 'disabled' });
         assert.equal(body.stream, false);
-        assert.equal(body.tool_choice, 'auto');
+        assert.deepEqual(
+          body.tool_choice,
+          upstream.length === 1
+            ? 'auto'
+            : { type: 'function', function: { name: 'connection_check' } },
+        );
         assert.ok(!init.body.includes(fakeKey));
         return new Response(
           JSON.stringify({

@@ -19,7 +19,8 @@ function callFormat(tools: ChatInput['tools']) {
     });
   const finish = tools.filter((tool) => tool.name === 'finish_analysis');
   const working = tools.filter((tool) => tool.name !== 'finish_analysis');
-  if (!finish.length) return format(working, 8);
+  const declaring = working.every(({ name }) => ['set_task_spec', 'set_task_patch'].includes(name));
+  if (!finish.length) return format(working, declaring ? 1 : 8);
   if (!working.length) return format(finish, 1);
   return { anyOf: [format(finish, 1), format(working, 8)] };
 }

@@ -279,9 +279,10 @@ export function executeRomCard(
   }
   try {
     const current = call('get_session_info', {}).output.result as SessionInfo;
-    run.reference = current;
     const { sessionId, revision } = current;
     if (
+      sessionId !== info.sessionId ||
+      revision !== info.revision ||
       sessionId !== confirmation.reviewed.sessionId ||
       revision !== confirmation.reviewed.revision
     ) {
@@ -305,14 +306,15 @@ export function executeRomCard(
     const reference = { sessionId, revision };
     const selection = { ...reference, joint: input.joint, channels: selected, basis: input.basis };
     const comparison = call('compare_intervals', { ...selection, first, second });
-    cite(
-      comparison,
-      selected.flatMap((_, i) => [
+    const comparable = resolveCitation(comparison.output.result, '/comparable') === true;
+    cite(comparison, [
+      ...(comparable ? [] : ['/comparable', '/reasons/0']),
+      ...selected.flatMap((_, i) => [
         `/first/channels/${i}/rom`,
         `/second/channels/${i}/rom`,
-        `/differences/${i}/rom`,
+        ...(comparable ? [`/differences/${i}/rom`] : []),
       ]),
-    );
+    ]);
     cite(call('set_chart_view', { ...selection, interval: chart }), [
       '/view/interval/0',
       '/view/interval/1',
@@ -323,9 +325,7 @@ export function executeRomCard(
       ]);
     if (input.csv)
       cite(call('prepare_export', { ...reference, interval: chart, format: 'csv' }), ['/handle']);
-    run.status = resolveCitation(comparison.output.result, '/comparable')
-      ? 'completed'
-      : 'not_comparable';
+    run.status = comparable ? 'completed' : 'not_comparable';
     run.message = '浏览器已执行确认的参数。';
   } catch (error) {
     if (run.status !== 'stale') run.status = 'failed';

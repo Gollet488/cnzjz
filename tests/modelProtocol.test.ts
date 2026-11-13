@@ -1561,7 +1561,7 @@ test('v3 omitted metadata and catalog can be queried and paginated from full aud
       });
     }
     if (step === 4) {
-      assert.equal(feedback(r, 'inspect_result').result.value.metricVersion, '2.0');
+      assert.equal(feedback(r, 'inspect_result').result.value.metricVersion, '2.1');
       return call('inspect_result', {
         callId: queryId,
         path: '/evidenceCatalog',
@@ -2237,7 +2237,7 @@ test('v3.3 quality feedback exposes real paths and progressively discovers deep 
       });
     }
     if (step === 5) {
-      assert.equal(feedback(r, 'inspect_result').result.value.metricVersion, '2.0');
+      assert.equal(feedback(r, 'inspect_result').result.value.metricVersion, '2.1');
       assert.ok(
         r.tools
           .find((t) => t.name === 'inspect_result')!
@@ -2250,7 +2250,7 @@ test('v3.3 quality feedback exposes real paths and progressively discovers deep 
         limit: 1,
       });
     }
-    assert.equal(feedback(r, 'inspect_result').result.value, '2.0');
+    assert.equal(feedback(r, 'inspect_result').result.value, '2.1');
     return finish(r, 'get_quality_summary', '/missingSamples');
   });
   const run = await h.runtime.run('查询全部已采样区间质量与缺失');

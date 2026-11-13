@@ -3,6 +3,7 @@ export interface OfflineMetadata {
   transcoded?: boolean;
   codec: string;
   total: number;
+  sampleTotal: number;
   firstTime: number;
   lastTime: number;
   aspect: number;
@@ -15,11 +16,12 @@ export type OfflineState =
   | 'running'
   | 'paused'
   | 'completed'
+  | 'sampled'
   | 'cancelled'
   | 'truncated'
   | 'failed';
 export type WorkerResult =
   | { type: 'metadata'; metadata: OfflineMetadata }
   | { type: 'frame'; points: Landmark[]; time: number; index: number; preview: ImageBitmap }
-  | { type: 'done'; truncated: boolean; count: number }
+  | { type: 'done'; truncated: boolean; sampled?: boolean; count: number }
   | { type: 'error'; message: string };

@@ -4,7 +4,7 @@
 
 本项目面向通用人体运动的姿态采集与量化分析，提供本地推理、可追溯数值和 Agent 工具调用。启动、保留 Git 历史的上传步骤和已知限制见 [构建与交付](docs/delivery.md)，参赛要求核对见 [仓库提交清单](docs/submission-checklist.md)，目标需求见 [requirement.md](requirement.md)。
 
-HTTPS 发布候选已推送至 [codex/https-release](https://github.com/Gollet488/cnzjz/tree/codex/https-release)。公开目标为 [Kinetic Pose Lab](https://gollet488.github.io/cnzjz/)，以 Pages 部署状态为准。本机完整 Agent 路径与 Ollama 连接步骤见 [环境配置](docs/environment.md#ollama)。
+2026-11-13 本机发布候选以 Git `8ccb203` 和待审阅的工作树为基线。隔离检出通过冻结安装、固定资源校验及根路径和 `/cnzjz/` 两套构建。构建产物与区间修复后的验收归档一致，沿用本机 Pages 12/12 和真人 Qwen 独立质量查询 1/1。发布验收等待发布者指定获授权的候选 SHA。[候选清单](docs/evidence/20261113-release-candidate/manifest.json) · [本机验收与证据版本](docs/evidence/20261113-release-candidate/review.md)
 
 ## 技术架构
 
@@ -26,7 +26,7 @@ pnpm dev
 
 `prepare:assets` 将锁定版本的 MediaPipe 运行文件和固定哈希的 Lite 模型放入 public，模型缺失时需要联网下载。已有资源可以用 `pnpm check:assets` 校验。
 
-基础分析无需 API 密钥。云端配置可将 [.env.example](.env.example) 复制为项目根目录下的 `.env`，按所选供应商填写密钥和模型 ID，重启本机 Node 服务后在 Agent 模型设置中刷新。配置与生产页面验收命令见 [Agent 模型配置与验收](docs/agent-model-selection.md)。
+基础分析无需 API 密钥。使用云端模型时，在本机开发服务或生产预览的 Agent 页选模型、粘贴供应商的官方 API Key，再点「测试当前模型连接」。用完点击「清除 Key」，长期使用可通过本机 `.env` 配置。[模型连接指南](docs/agent-model-selection.md#快速连接)
 
 ## 使用
 
@@ -35,11 +35,11 @@ pnpm dev
 3. 本地视频支持 MP4、MOV、MKV、AVI、WebM、FLV、WMV、MPEG、TS、3GP、OGV 等容器，不按扩展名拒绝文件。可直接分析的 H.264 视频保留原流程；其他输入自动使用本地 FFmpeg WebAssembly 转为 H.264 后分析，双视频对比使用同一流程。转换资源随 `prepare:assets` 准备，无需上传视频或连接 CDN。支持范围仍受实际编码、文件完整性与设备内存限制；加密文件无法保证支持。单文件最高 500 MB；转换可能耗时较长，可取消，转换结果缩放至不超过 1920×1080，时间轴与完整性以转换后视频为准。CSV 的 `acquisition_mode=webcodecs-transcoded` 标识转换流程。
 4. 分析页可选关节、raw/filtered、区间与关键点，查看角度、速度、轨迹和左右差异。
 5. 导出页保存 CSV 或 PNG；CSV 支持取消和进度，支持原生文件写入时使用文件流，否则使用内存 Blob。
-6. 在 Agent 页输入目标，在输入框旁选择模型，然后点击「发送」。可在「模型设置」查看地址、模型 ID 和首次配置步骤，或主动测试连接。 也可使用两段 ROM 比较任务卡手动填参或让已选模型草拟，核对后确认运行。详见 [Agent 工作台指南](docs/agent-workbench.md)。
+6. 在 Agent 页输入目标并选择模型。首次使用可展开「首次连接？查看连接指南」，测试通过后再发送任务。自定义模型 ID 位于「模型设置」。也可使用两段 ROM 比较任务卡手动填参或让已选模型草拟，核对后确认运行。详见 [Agent 工作台指南](docs/agent-workbench.md)。
 
-视频、画面、关键点推理和数值计算留在浏览器。Agent 会向所选模型发送指令和必要的有界工具反馈；选择云端模型时，这些文本和有界工具反馈经本机代理发送到官方 API，密钥只由 Node 读取。页面不接收密钥；不要将密钥写入源码。Ollama 需允许页面来源跨域访问；Node 连接成功不代表浏览器 CORS 已通过。
+视频、画面、关键点推理和数值计算留在浏览器。云端任务的指令和必要的有界工具反馈经本机代理发送到供应商官方 API。临时 Key 仅保留在当前页面内存中，刷新后清除。Ollama 需允许页面来源跨域访问。
 
-云端代理只在此项目的本机 Vite 开发服务或生产预览服务中可用，纯静态托管不包含代理。本项目不会自动安装或下载 Ollama 模型。
+GitHub Pages 使用 `/cnzjz/` 静态构建，提供浏览器内视频分析、图表、双视频对比和 CSV/PNG 导出。摄像头需要安全上下文和设备授权，Ollama 需要本机服务允许当前网页来源且可被浏览器访问。官方云端 API 由本机 Vite 开发服务或生产预览的 Node 代理提供。
 
 ## 检查
 
@@ -64,7 +64,7 @@ pnpm test:browser
 node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case compare,quality,multi_turn --output .qa/my-evaluation.json
 ```
 
-本轮自动回归使用合成视频和脚本化模型响应。真实设备、人体输入和真实模型的历史实测记录与当前未测项见交付说明，不能把自动回归解释为人体精度或真实模型成功率。
+浏览器功能回归包含合成素材、授权人体视频及脚本化模型响应。真实 Qwen CLI 使用合成会话，真人视频与真实 Qwen 的组合使用独立的生产浏览器入口。设备、原生保存和人体精度的补验条件见 [构建与交付](docs/delivery.md)。
 
 ## 目录
 
@@ -78,7 +78,9 @@ node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case comp
 - `docs`：使用与交付、数据契约、视频和 Agent 技术说明。
 - `.github/workflows`：Windows / Linux 的基础 CI 检查。
 
-当前最多保留 18,000 帧。二维投影、遮挡、视角和置信度会影响指标；系统不识别运动种类、不评分、不判断动作对错。双视频对比已接入分析与显示设置，并按各视频源宽高比修正几何距离；目前仍为约 10 Hz 预览，距离不能用于严格序列相似度结论。隔离发布候选适配 GitHub Pages 的 `/cnzjz/`，本机开发和预览继续使用根路径。
+当前最多保留 18,000 帧。超过此帧数的本地视频会抽样覆盖全片，进度与 CSV 会注明抽样。二维投影、遮挡、视角和置信度会影响指标；系统不识别运动种类、不评分、不判断动作对错。本机开发和默认生产预览使用根路径。
+
+在「姿态对比」上传参考和待测视频，分别拖动起点滑块，将同一个动作的开始画面对齐。开始后按约 10 Hz 比较重叠时间段，显示各关节的二维夹角和「待测减参考」差值。可点击最大差异，回看对应的双路画面和各自的原视频时间。两路均通过置信度阈值时才显示该关节的差值。建议用相近的视角与动作节奏，回看结果来自已采样画面。
 
 ## 团队信息
 
@@ -89,4 +91,4 @@ node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case comp
 
 ## 开发与提交
 
-使用 TypeScript 类型检查、ESLint 和 Prettier 保持代码一致；复杂的数据契约、时间戳和工具协议有对应技术说明与回归测试。修改后运行上方检查命令，再从当前 Git 仓库提交和推送，保留真实开发历史。现有 `.delivery/` 是旧源码快照，不作为本次参赛仓库上传入口。当前完成度、问题看板和每轮动态更新的下一条 Codex 指令见 [核心功能执行计划](docs/core-execution-plan.md)。
+使用 TypeScript 类型检查、ESLint 和 Prettier 保持代码一致。改动签核后从当前 Git 仓库交付，保留开发历史。`.delivery/` 保存历史源码副本。[候选复核步骤](docs/delivery.md#核对候选与发布条件) · [核心功能执行计划](docs/core-execution-plan.md)

@@ -2,7 +2,14 @@ import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import type { RunAudit } from '../../src/agent/audit.ts';
 import type { RomDraftAudit } from '../../src/agent/romTaskCard.ts';
 import { downloadFile } from './files.ts';
-import { fixedRomSession, latestRom, romCard, romGoal, setAbsolute } from './rom-card-helpers.ts';
+import {
+  FIXED_ROM_FINGERPRINT,
+  fixedRomSession,
+  latestRom,
+  romCard,
+  romGoal,
+  setAbsolute,
+} from './rom-card-helpers.ts';
 
 const archived = {
   joint: 'knee',
@@ -104,7 +111,7 @@ const quiet = async (page: Page) => {
 };
 async function filled(page: Page, info: TestInfo, keepClock = false) {
   const { material } = await fixedRomSession(page, info, keepClock);
-  expect(material).toBe('7d36f29193f07c8dcf0b8169254545eb2486814c5e691e3bb84a4093eaec0858');
+  expect(material).toBe(FIXED_ROM_FINGERPRINT);
   await choose(page, '手动填写').click();
   await setAbsolute(page, '统计前段', 0, 5);
   await setAbsolute(page, '统计后段', 12, 17);

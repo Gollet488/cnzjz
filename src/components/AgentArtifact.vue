@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { CallRecord } from '../agent/runtime';
+import type { AgentRun, CallRecord } from '../agent/runtime';
 import type { createToolRegistry } from '../analysis/tools';
 import AgentEvidence from './AgentEvidence.vue';
+import AgentEvidenceScope from './AgentEvidenceScope.vue';
 import { download } from '../utils/download';
 const props = defineProps<{
   call: CallRecord;
+  run: AgentRun;
+  reportedModels: string[];
   stale: boolean;
   tools: ReturnType<typeof createToolRegistry>;
 }>();
@@ -37,9 +40,20 @@ function save() {
     const artifact = props.tools.getArtifact(result.value.handle);
     if (artifact.kind === 'csv') emit('export', result.value.handle);
     else {
+      const { id, provider, model, startedAt } = props.run;
+      const report = {
+        ...artifact,
+        analysis: {
+          runId: id,
+          startedAt: new Date(startedAt).toISOString(),
+          provider,
+          requestedModel: model,
+          reportedModels: props.reportedModels,
+        },
+      };
       download(
-        new Blob([JSON.stringify(artifact, null, 2)], { type: 'application/json;charset=utf-8' }),
-        `analysis-report-${artifact.reference.revision}.json`,
+        new Blob([JSON.stringify(report, null, 2)], { type: 'application/json;charset=utf-8' }),
+        `analysis-report-${artifact.reference.sessionId.slice(0, 8)}-r${artifact.reference.revision}.json`,
       );
       reportDownloadStarted.value = true;
     }
@@ -54,17 +68,20 @@ function save() {
       >{{ call.name === 'prepare_report' ? '分析报告 · 已准备' : 'CSV · 已准备'
       }}{{ stale ? '（旧版本）' : '' }}</h3
     >
-    <p
-      >session {{ result.evidence.sessionId }} / revision {{ result.evidence.revision }} ·
-      {{ result.evidence.synthetic ? 'SYNTHETIC 合成数据' : '本地采集' }} ·
-      {{ result.evidence.basis }} · {{ result.evidence.interval.join('–') }} s</p
-    >
+    <AgentEvidenceScope
+      :source="run.reference"
+      :evidence="result.evidence"
+      :segment="result.comparison ? '前段' : undefined"
+      :csv="call.name === 'prepare_export'"
+    />
+    <p>会话 {{ result.evidence.sessionId }} / 版本 {{ result.evidence.revision }}</p>
     <template v-if="call.name === 'prepare_report'">
       <h4>事实 · 本地工具统计</h4>
       <AgentEvidence
         v-for="section in sections"
         :key="section.id"
         :call="section"
+        :source="run.reference"
         :disabled="stale"
         @locate="(_, second, interval) => emit('locate', section, second, interval)"
       />

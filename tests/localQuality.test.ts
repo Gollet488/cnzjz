@@ -7,7 +7,7 @@ import { csvHeader } from '../src/utils/csv.ts';
 import type { Landmark } from '../src/types.ts';
 
 // Constructed geometry exercises contracts, not human measurement accuracy.
-const parameters = { threshold: 0.5, window: 1, aspect: 1, metricVersion: '2.0' as const };
+const parameters = { threshold: 0.5, window: 1, aspect: 1, metricVersion: '2.1' as const };
 const point = (x: number, y: number, visibility = 1): Landmark => ({ x, y, z: 0, visibility });
 function pose(degrees = 90) {
   const p = Array.from({ length: 33 }, (_, i) => point(i / 50, (i % 4) / 5));
@@ -60,11 +60,11 @@ test('local quality separates bilateral angular availability, detection and unre
   assert.equal(csvHeader().length, 354);
 });
 
-test('raw and filtered quality follow their own existing angle validity without filling occlusions', () => {
+test('filtered angles cannot fill a collapsed projection or occlusion in a raw frame', () => {
   const s = new AnalysisSession('file', { ...parameters, window: 2 });
   s.append(pose(30), 1);
   const degenerate = pose(90);
-  degenerate[23] = { ...degenerate[25] };
+  degenerate[23] = { ...degenerate[25], x: degenerate[25].x + 0.004 };
   s.append(degenerate, 1.03);
   const occluded = pose(80);
   occluded[27].visibility = 0.1;
@@ -92,7 +92,9 @@ test('raw and filtered quality follow their own existing angle validity without 
     );
   }
   assert.equal(s.frames[1].rawAngles.knee.left, null);
-  assert.notEqual(s.frames[1].angles.knee.left, null);
+  assert.equal(s.frames[1].angles.knee.left, null);
+  assert.notEqual(s.frames[1].angles.knee.right, null);
+  assert.equal(s.frames[1].rawPoints[23].x, 0.004);
   assert.equal(s.frames[4].velocity.knee.left, null);
 });
 
@@ -105,7 +107,7 @@ test('single-frame intervals retain exact source time, zero span and null deriva
     { interval: args.interval, samples: 1 },
   ]);
   assert.equal(q.timing.medianSampleGapSeconds, null);
-  assert.equal(q.timing.continuityGapSeconds, 0.1);
+  assert.deepEqual(q.timing.gapIntervals, []);
   assert.equal(q.maxSampleGapSeconds, null);
   const m = result(s, 'query_metrics', args);
   assert.equal(m.channels[0].rom, null);
@@ -119,8 +121,9 @@ test('irregular timestamps split valid and missing runs without inventing unsamp
   for (const t of [0, 0.03, 0.06, 1, 1.03]) s.append(pose(), t);
   const q = result(s, 'get_quality_summary', { interval: [0, 1.03], selection });
   assert.ok(Math.abs(q.timing.medianSampleGapSeconds - 0.03) < 1e-10);
-  assert.equal(q.timing.continuityGapSeconds, 0.1);
-  assert.deepEqual(q.timing.gapIntervals, [{ interval: [0.06, 1], seconds: 0.94 }]);
+  assert.deepEqual(q.timing.gapIntervals, [
+    { interval: [0.06, 1], seconds: 0.94, limitSeconds: 0.1 },
+  ]);
   assert.equal(q.timing.gapCount, 1);
   assert.equal(q.selection.channels[0].validSamples, 5);
   assert.equal(q.selection.channels[0].missingIntervalCount, 0);
@@ -133,9 +136,10 @@ test('irregular timestamps split valid and missing runs without inventing unsamp
   const mq = result(missing, 'get_quality_summary', { interval: [0, 1.03], selection });
   assert.equal(mq.selection.channels[0].missingIntervalCount, 2);
   assert.equal(mq.selection.channels[0].notDetectedSamples, 5);
+  assert.equal(mq.lowConfidenceIntervals.length, 2);
 });
 
-test('comparison retains numerical facts but rejects a frame-covered interval with a timing break', () => {
+test('comparison and report retain per-interval facts without deltas for a timing break', () => {
   const s = new AnalysisSession('file', parameters);
   for (const t of [0, 0.03, 0.06, 1, 1.03, 2, 2.03, 2.06, 3, 3.03]) s.append(pose(), t);
   const compared = result(s, 'compare_intervals', {
@@ -147,7 +151,45 @@ test('comparison retains numerical facts but rejects a frame-covered interval wi
   assert.equal(compared.second.channels[0].coverage, 1);
   assert.equal(compared.comparable, false);
   assert.ok(compared.reasons.some((r: string) => r.includes('采样中断')));
-  assert.equal(typeof compared.differences[0].rom, 'number');
+  assert.equal(typeof compared.first.channels[0].rom, 'number');
+  assert.deepEqual(compared.differences[0], {
+    channel: 'left',
+    rom: null,
+    meanAngle: null,
+    peakAbsoluteVelocity: null,
+  });
+  const report = result(s, 'prepare_report', {
+    ...selection,
+    interval: [0, 1.03],
+    comparison: [2, 3.03],
+  });
+  assert.deepEqual(report.trends, ['所选区间不可比较；各段统计仅供独立核对。']);
+});
+
+test('a source-time gap resets velocity and smoothing and is visible in a narrow query or comparison edge', () => {
+  const s = new AnalysisSession('file', { ...parameters, window: 5 });
+  [0, 0.03, 0.06, 0.09, 1, 1.03, 1.06].forEach((time, i) => s.append(pose(i < 4 ? 30 : 90), time));
+  const frame = s.frames[4];
+  assert.equal(frame.angles.knee.left, 90);
+  assert.equal(frame.velocity.knee.left, null);
+  assert.equal(frame.rawVelocity.knee.left, null);
+  assert.deepEqual(frame.windowInterval, [1, 1]);
+  assert.equal(frame.variance.raw.value, null);
+  const q = result(s, 'get_quality_summary', { interval: [0.09, 1], selection });
+  assert.equal(q.timing.gapCount, 1); // A single interval cannot hide the known break.
+  const m = result(s, 'query_metrics', { ...selection, interval: [0.09, 1] });
+  assert.equal(m.channels[0].velocity.sampleCount, 0);
+  const c = result(s, 'compare_intervals', {
+    ...selection,
+    first: [0, 0.06],
+    second: [0.97, 1.03],
+  });
+  assert.equal(c.second.channels[0].coverage, 1);
+  assert.equal(c.comparable, false);
+  assert.match(c.reasons.join('；'), /采样中断/);
+  const before = structuredClone(s.frames);
+  s.recalculate(s.info().parameters);
+  assert.deepEqual(s.frames, before);
 });
 
 test('bounded intervals preserve late long missing runs and exact omitted counts', () => {

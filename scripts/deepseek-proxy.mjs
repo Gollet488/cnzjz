@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { preservesCloudContext, temporaryApiKeyFormat } from '../src/agent/modelCatalog.ts';
 import { ProviderResponseError } from '../src/agent/provider.ts';
 import { DeepSeekProvider, DeepSeekRequestError } from '../src/agent/providers/deepseek.ts';
 import { cloudConfiguration } from './cloud-model-config.mjs';
@@ -182,26 +184,37 @@ export function createDeepSeekMiddleware({
       }
       const probe = req.url.endsWith('/probe');
       if (cloudRoute) {
-        const { provider, model, task, ...inputFields } = input ?? {};
+        const { provider, model, task, apiKey, ...inputFields } = input ?? {};
         if (
           !validId(provider) ||
           !validId(model) ||
+          (apiKey !== undefined &&
+            (typeof apiKey !== 'string' ||
+              !temporaryApiKeyFormat.test(apiKey) ||
+              apiKey === model)) ||
           (probe
             ? task !== undefined || Object.keys(inputFields).length !== 0
             : !validInput(inputFields, provider !== 'deepseek') || !validTaskId(task))
         )
           return send(400, { error: 'CLOUD_INVALID_INPUT' });
-        let adapter = cloud.create(provider, model);
+        let adapter = cloud.create(provider, model, apiKey);
         if (!adapter) return send(409, { error: 'CLOUD_CONFIGURATION' });
         let state;
-        if (provider === 'openai' && !probe) {
+        if (preservesCloudContext(provider, model) && !probe) {
+          const keyDigest = apiKey && createHash('sha256').update(apiKey).digest('hex');
           state = responses.get(task);
-          if (state?.controller || (state && state.adapter.model !== model))
+          if (
+            state?.controller ||
+            (state &&
+              (state.adapter.id !== adapter.id ||
+                state.adapter.model !== model ||
+                state.keyDigest !== keyDigest))
+          )
             return send(409, { error: 'CLOUD_TASK_CONFLICT' });
           if (!state && responses.size >= 32) return send(429, { error: 'CLOUD_TASK_LIMIT' });
           if (!state && inputFields.messages.some((message) => message.toolCallId))
             return send(409, { error: 'CLOUD_TASK_EXPIRED' });
-          state ??= { adapter };
+          state ??= { adapter, keyDigest };
           clearTimeout(state.expiry);
           adapter = state.adapter;
           state.controller = controller;
@@ -209,8 +222,8 @@ export function createDeepSeekMiddleware({
         }
         try {
           const result = probe
-            ? await adapter.probe(controller.signal)
-            : await adapter.complete({ ...inputFields, signal: controller.signal });
+            ? await adapter.probe(controller.signal, apiKey)
+            : await adapter.complete({ ...inputFields, signal: controller.signal }, apiKey);
           if (!controller.signal.aborted) send(200, result);
           else if (state && responses.get(task) === state) responses.delete(task);
         } catch (error) {

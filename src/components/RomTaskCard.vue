@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef, toRaw, watch } from 'vue';
 import type { AnalysisSession, SessionInfo, SessionReference } from '../analysis/session.ts';
 import type { ModelProvider } from '../agent/provider.ts';
+import { CloudPageProvider } from '../agent/providers/cloudPage.ts';
 import {
   draftRomCard,
   emptyRomCard,
@@ -194,17 +195,14 @@ function restoreLast() {
 }
 async function generate() {
   if (!props.provider || !goal.value.trim() || drafting.value || props.running) return;
+  const provider = props.provider;
   const controller = new AbortController();
   const reference = publishedReference.value;
   activeDraft = { controller, reference };
   drafting.value = true;
   draftError.value = '';
   try {
-    const { draft: candidate, audit } = await draftRomCard(
-      props.provider,
-      goal.value,
-      controller.signal,
-    );
+    const { draft: candidate, audit } = await draftRomCard(provider, goal.value, controller.signal);
     audit.reference = reference;
     attempt.value = audit;
     if (!candidate) {
@@ -234,6 +232,7 @@ async function generate() {
     entry.value = 'model-draft';
     open.value = true;
   } finally {
+    if (provider instanceof CloudPageProvider) await provider.release();
     activeDraft = undefined;
     drafting.value = false;
   }

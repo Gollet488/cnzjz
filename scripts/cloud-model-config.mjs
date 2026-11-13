@@ -1,13 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseEnv } from 'node:util';
-import { cloudProviders } from '../src/agent/modelCatalog.ts';
-import {
-  DeepSeekProvider,
-  DEEPSEEK_ADDRESS,
-  DEEPSEEK_MODEL,
-} from '../src/agent/providers/deepseek.ts';
+import { cloudModelId, cloudProviders, temporaryApiKeyFormat } from '../src/agent/modelCatalog.ts';
+import { DeepSeekProvider, DEEPSEEK_ADDRESS } from '../src/agent/providers/deepseek.ts';
 import { CloudApiProvider } from '../src/agent/providers/cloudApi.ts';
+import { fetchCloudModel } from './cloud-transport.mjs';
 
 const endpoints = {
   deepseek: [DEEPSEEK_ADDRESS + '/chat/completions'],
@@ -22,8 +19,6 @@ const endpoints = {
     'https://api.moonshot.ai/v1/chat/completions',
   ],
 };
-const modelId = /^[a-z0-9][a-z0-9._:/-]{0,199}$/i;
-
 export function cloudConfiguration(
   root,
   fallbackDeepSeekKey = () => '',
@@ -32,18 +27,24 @@ export function cloudConfiguration(
   const envFile = resolve(root, '.env');
   const file = existsSync(envFile) ? parseEnv(readFileSync(envFile, 'utf8')) : {};
   const env = { ...file, ...environment };
-  const configs = Object.entries(cloudProviders).map(([provider, { prefix }]) => {
+  const configs = Object.entries(cloudProviders).map(([provider, { prefix, presets }]) => {
     const keyName = prefix + '_API_KEY';
     const modelsName = prefix + '_MODELS';
     const endpointName = prefix + '_ENDPOINT';
     const key = (env[keyName] ?? (provider === 'deepseek' ? fallbackDeepSeekKey() : '')).trim();
-    const configured = env[modelsName]?.trim() || (provider === 'deepseek' ? DEEPSEEK_MODEL : '');
-    const ids = configured.split(',').map((id) => id.trim());
+    const configured = env[modelsName]?.trim();
+    const ids = configured
+      ? configured
+          .split(',')
+          .map((id) => id.trim())
+          .filter(Boolean)
+      : [presets[0]];
     const allowed = endpoints[provider];
     const endpoint = env[endpointName]?.trim() || allowed[0];
     const missing = [];
-    if (!key || /\s/.test(key)) missing.push(keyName);
-    if (!ids.every((id) => modelId.test(id) && id !== key)) missing.push(modelsName);
+    if (!temporaryApiKeyFormat.test(key)) missing.push(keyName);
+    if (!ids.length || !ids.every((id) => cloudModelId.test(id) && id !== key))
+      missing.push(modelsName);
     if (!allowed.includes(endpoint)) missing.push(endpointName);
     return {
       provider,
@@ -63,18 +64,27 @@ export function cloudConfiguration(
         endpoint: endpoints[provider].includes(endpoint) ? endpoint : endpoints[provider][0],
       })),
     },
-    create(provider, model) {
-      const config = configs.find(
-        (entry) => entry.provider === provider && entry.models.includes(model),
-      );
-      if (!config) return undefined;
+    create(provider, model, apiKey) {
+      const config = configs.find((entry) => entry.provider === provider);
+      if (!config || !endpoints[provider].includes(config.endpoint)) return undefined;
+      if (apiKey === undefined) {
+        if (!config.models.includes(model)) return undefined;
+      } else if (
+        !cloudModelId.test(model) ||
+        !temporaryApiKeyFormat.test(apiKey) ||
+        model === apiKey
+      )
+        return undefined;
       return provider === 'deepseek'
-        ? new DeepSeekProvider(config.key, model)
+        ? new DeepSeekProvider(apiKey ?? config.key, model, fetchCloudModel)
         : new CloudApiProvider({
             kind: provider,
             model,
             endpoint: config.endpoint,
-            key: config.key,
+            fetcher: fetchCloudModel,
+            // An OpenAI task may retain this adapter to replay reasoning, but
+            // a temporary key is supplied separately on every request.
+            key: apiKey === undefined ? config.key : undefined,
           });
     },
   };

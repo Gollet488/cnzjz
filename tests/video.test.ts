@@ -2,11 +2,38 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { readMP4 } from '../src/video/mp4.ts';
-import { sourceTimeline, trackRotation, PresentationAudit } from '../src/video/timeline.ts';
+import {
+  analysisFrameIndices,
+  sourceTimeline,
+  trackRotation,
+  PresentationAudit,
+} from '../src/video/timeline.ts';
+import { humanPose } from '../src/utils/humanPose.ts';
+import { demoPose } from '../src/utils/demo.ts';
 import { OfflineVideoJob } from '../src/video/job.ts';
 import { AnalysisSession } from '../src/analysis/session.ts';
 import { createToolRegistry } from '../src/analysis/tools.ts';
 import { serializeCSV } from '../src/utils/export.ts';
+
+test('long files sample within the memory budget and retain both ends of the source', () => {
+  assert.deepEqual(analysisFrameIndices(4, 4), [1, 2, 3, 4]);
+  const samples = analysisFrameIndices(108001, 18000);
+  assert.equal(samples.length, 18000);
+  assert.equal(samples[0], 1);
+  assert.equal(samples.at(-1), 108001);
+  assert.ok(samples.every((frame, i) => !i || frame - samples[i - 1] >= 6));
+});
+
+test('pose acceptance rejects collapsed and unreliable detections but keeps a visible torso', () => {
+  const points = demoPose(3);
+  assert.deepEqual(humanPose(points), points);
+  assert.deepEqual(humanPose(points.map((p) => ({ ...p, visibility: 0.4 }))), []);
+  assert.deepEqual(humanPose(points.map((p) => ({ ...p, x: 0.5, y: 0.5 }))), []);
+  const partial = points.map((p, i) =>
+    [15, 16, 27, 28].includes(i) ? { ...p, visibility: 0.1 } : p,
+  );
+  assert.deepEqual(humanPose(partial), partial);
+});
 
 for (const name of ['30fps', '60fps', 'vfr', 'rotate']) {
   test(`real synthetic ${name} MP4: decode-order index, complete source PTS and final frame match FFmpeg oracle`, async () => {
@@ -163,7 +190,7 @@ test('converted video provenance survives tool validation and CSV with a source 
     threshold: 0.5,
     window: 5,
     aspect: 4 / 3,
-    metricVersion: '2.0',
+    metricVersion: '2.1',
   });
   session.setAcquisition({
     mode: 'webcodecs-transcoded',
@@ -246,7 +273,7 @@ test('offline acquisition status flows to tools, evidence and CSV; reset rejects
     threshold: 0.5,
     window: 5,
     aspect: 1.5,
-    metricVersion: '2.0',
+    metricVersion: '2.1',
   });
   const initial = session.info();
   session.setAcquisition({

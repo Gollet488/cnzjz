@@ -9,7 +9,7 @@ test('explicit synthetic upload provenance versions evidence and survives recalc
     threshold: 0.5,
     window: 5,
     aspect: 4 / 3,
-    metricVersion: '2.0',
+    metricVersion: '2.1',
   });
   s.append([], 0);
   const old = s.info();
@@ -21,7 +21,7 @@ test('explicit synthetic upload provenance versions evidence and survives recalc
   assert.throws(() => s.setFileSynthetic(false, old), /STALE_SESSION/);
   const output = createToolRegistry(s).execute('get_session_info', {});
   assert.ok(output.ok && (output.result as any).synthetic);
-  assert.match(serializeCSV(s.frames, [], s.info()), /"file","true","2.0"/);
+  assert.match(serializeCSV(s.frames, [], s.info()), /"file","true","2\.1"/);
   s.recalculate(s.info().parameters);
   assert.equal(s.info().synthetic, true);
   s.reset('file');

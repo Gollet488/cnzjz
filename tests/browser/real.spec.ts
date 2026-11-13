@@ -4,6 +4,8 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { cpus, totalmem, release } from 'node:os';
 import { evaluationFingerprints } from '../../scripts/evaluate-agent.mjs';
+import { CONSTRAINED_SYSTEM_PROMPT } from '../../src/agent/modelProtocol.ts';
+import { ROM_INTENT_PROMPT } from '../../src/agent/romIntent.ts';
 import { resolveCitation } from '../../src/agent/runtime.ts';
 import {
   fullCSV,
@@ -70,13 +72,20 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
   await page.getByRole('button', { name: '模型设置', exact: true }).click();
   summary.connection = 'structured_probe_passed';
   await persist();
-  const goals = [
-    '比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表',
-    '只看右侧，第二段改成 12–17 秒',
-    process.env.REAL_AGENT_FLOW === 'concise_delivery'
-      ? '沿用上一轮比较和图表。准备报告，并准备 0–17 秒 CSV。'
-      : '准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表',
-  ];
+  const goals =
+    process.env.REAL_AGENT_FLOW === 'paraphrased_delivery'
+      ? [
+          '用 filtered 口径看双膝 ROM：对照 0 到 5 秒和 15 到 20 秒，图表涵盖这两段。',
+          '改为右膝，后段换成第 12 到第 17 秒，前段照旧。',
+          '沿用刚才的对照和图表，准备一份报告和 0 到 17 秒的 CSV。',
+        ]
+      : [
+          '比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表',
+          '只看右侧，第二段改成 12–17 秒',
+          process.env.REAL_AGENT_FLOW === 'concise_delivery'
+            ? '沿用上一轮比较和图表。准备报告，并准备 0–17 秒 CSV。'
+            : '准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–17 秒的右膝 filtered 图表',
+        ];
   summary.config = {
     goals,
     model,
@@ -153,6 +162,7 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
         turn.nodeError = String(error);
       }
       turn.run = audit.run;
+      turn.parameterSource = audit.run.romReview?.parameterSource ?? 'model';
       turn.citationsCorrect =
         audit.run.citations.length > 0 &&
         audit.run.citations.every((citation: any) => {
@@ -178,16 +188,6 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
         turn.finalView.includes(index ? '0–17 s' : '0–20 s') &&
         (!index || !turn.finalView.includes('左侧'));
       summary.turns.push(turn);
-      // Exercise evidence location on a real returned comparison, even if the
-      // model fails its completion gate. This does not change the recorded status.
-      const evidence = panel
-        .locator(':scope > .evidence-card')
-        .filter({ hasText: '区间比较' })
-        .first();
-      if (await evidence.count()) {
-        await evidence.getByRole('button', { name: '定位后段', exact: true }).click();
-        turn.evidenceView = await page.locator('#agent-chart-view').innerText();
-      }
       await page.screenshot({
         path: info.outputPath(`real-turn-${index + 1}.png`),
         fullPage: true,
@@ -202,6 +202,34 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
       expect(audit.run.completion.missing).toEqual([]);
       expect(audit.run.reference.sessionId).toBe(summary.reference.sessionId);
       expect(audit.run.reference.revision).toBe(summary.reference.revision);
+      expect(audit.requests[0].messages[0]).toEqual({
+        role: 'system',
+        content: turn.parameterSource === 'local' ? ROM_INTENT_PROMPT : CONSTRAINED_SYSTEM_PROMPT,
+      });
+      if (turn.parameterSource === 'local') {
+        expect(audit.requests).toHaveLength(1);
+        expect(audit.requests[0].reply.calls).toEqual([
+          {
+            name: 'review_rom_intent',
+            arguments: { intent: ['compare', 'revise', 'deliver'][index] },
+          },
+        ]);
+      }
+      expect(audit.run.romReview?.confirmation).toBeDefined();
+      const chart = page.locator('#agent-chart-view');
+      await expect(chart.locator('.echart canvas').first()).toBeVisible();
+      if (index === 1) {
+        const href = `#agent-evidence-${comparison.id}`;
+        await panel.locator(`a[href="${href}"]`).first().click();
+        const evidence = panel.locator(href);
+        await expect(evidence).toBeVisible();
+        await expect(evidence).toContainText('12–17 s');
+        await expect(evidence).toContainText('filtered');
+        await evidence.getByRole('button', { name: '定位后段', exact: true }).click();
+        await expect(chart).toContainText('12–17 s');
+        turn.evidenceView = await chart.innerText();
+        await persist();
+      }
     }
   } finally {
     summary.budget = budget.snapshot();
@@ -242,12 +270,16 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
       JSON.stringify(exported) === JSON.stringify(rows.filter((r) => Number(r.time_s) <= 17));
   }
   summary.finalView = await page.locator('#agent-chart-view').innerText();
+  expect(summary.finalView).toContain('0–17 s');
   await page.locator('nav').getByRole('button', { name: '采集与分析' }).click();
   await page.getByRole('button', { name: '重算指标', exact: true }).click();
   await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
   await expect(panel.locator('.run-status')).toContainText('已过期');
   await expect(reportButton).toBeDisabled();
   await expect(csvButton).toBeDisabled();
+  const staleEvidence = panel.getByRole('button', { name: '定位后段', exact: true });
+  await expect(staleEvidence.first()).toBeDisabled();
+  for (const button of await staleEvidence.all()) await expect(button).toBeDisabled();
   summary.staleDeliveryDisabled = true;
   summary.completed =
     summary.turns.every(

@@ -23,7 +23,7 @@ function pose(degrees: number, visibility = 1) {
   p[28] = point(1 + Math.cos((degrees * Math.PI) / 180), Math.sin((degrees * Math.PI) / 180));
   return p;
 }
-const parameters = { threshold: 0.5, window: 1, aspect: 1, metricVersion: '2.0' as const };
+const parameters = { threshold: 0.5, window: 1, aspect: 1, metricVersion: '2.1' as const };
 const near = (a: number | null, b: number) =>
   assert.ok(a !== null && Math.abs(a - b) < 1e-8, `${a} ≠ ${b}`);
 const make = () => new AnalysisSession('demo', parameters);

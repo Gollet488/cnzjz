@@ -20,7 +20,7 @@ type RomIntent =
   | { kind: 'deliver'; exportRange: RomInterval; restated?: Selection & Windows };
 
 const decimal = String.raw`\d+(?:\.\d+)?`;
-const absolute = String.raw`(?:绝对\s*)?${decimal}\s*[-–—~～至]\s*${decimal}\s*秒`;
+const absolute = String.raw`(?:绝对\s*)?(?:第\s*)?${decimal}\s*[-–—~～至到]\s*(?:第\s*)?${decimal}\s*秒`;
 const relative = String.raw`采样(?:开头|末尾)\s*${decimal}\s*秒`;
 const window = `(?:${absolute}|${relative})`;
 const selection = String.raw`(?<side>左右|双|左|右)(?<joint>膝|髋|肘|肩|踝|腕)(?:关节)?`;
@@ -29,11 +29,22 @@ const compare = new RegExp(
   String.raw`^比较\s*(?<basis>filtered|raw)\s*${selection}\s*${windows}\s*的\s*ROM(?:\s*[,，]\s*并展示(?<chart>覆盖两段|${absolute})\s*的图表)?[。.]?$`,
   'i',
 );
+const compareInProse = new RegExp(
+  String.raw`^用\s*(?<basis>filtered|raw)\s*口径(?:看|查看)\s*${selection}\s*ROM\s*[:：]\s*(?:比较|对照)\s*${windows}\s*[,，]\s*图表(?:涵盖|覆盖)(?<chart>这?两段)[。.]?$`,
+  'i',
+);
 const revise = new RegExp(
   String.raw`^(?:只看(?<side>左|右)(?<joint>膝|髋|肘|肩|踝|腕|侧)(?:关节)?(?:\s*[,，]\s*|$))?(?:(?<part>第一段|前段|第二段|后段)改(?:成|为)\s*(?<interval>${window}))?[。.]?$`,
 );
+const reviseInProse = new RegExp(
+  String.raw`^改(?:为|用)\s*(?<side>左|右)(?<joint>膝|髋|肘|肩|踝|腕|侧)(?:关节)?\s*[,，]\s*(?<part>后段|第二段)(?:换成|改为)\s*(?<interval>${window})\s*[,，]\s*(?:前段|第一段)照旧[。.]?$`,
+);
 const deliver = new RegExp(
   String.raw`^(?:准备当前${selection}\s*(?<basis>filtered|raw)\s*${windows}\s*的比较报告|(?:保持比较参数\s*[,，]\s*)?(?:增加|准备)报告)\s*(?:和|及)\s*(?<csv>${absolute})\s*CSV(?:\s*[,，]\s*保持当前最终视图)?[。.]?$`,
+  'i',
+);
+const deliverInProse = new RegExp(
+  String.raw`^沿用(?:刚才的|上一轮的)(?:对照|比较)和图表\s*[,，]\s*准备(?:一份)?报告和\s*(?<csv>${absolute})\s*(?:的\s*)?CSV[。.]?$`,
   'i',
 );
 const joints = {
@@ -69,21 +80,20 @@ function readSelection(groups: Record<string, string>): Selection {
 export function parseRomIntent(goal: string, previous?: FreeRomInput): RomIntent | undefined {
   const text = goal.trim();
   if (!previous) {
-    const groups = compare.exec(text)?.groups;
+    const groups = (compare.exec(text) ?? compareInProse.exec(text))?.groups;
     if (!groups) return;
     return {
       kind: 'compare',
       selection: readSelection(groups),
       windows: { first: readRange(groups.first), second: readRange(groups.second) },
-      chart:
-        groups.chart === '覆盖两段'
-          ? { mode: 'cover' }
-          : groups.chart
-            ? readRange(groups.chart)
-            : undefined,
+      chart: groups.chart?.endsWith('两段')
+        ? { mode: 'cover' }
+        : groups.chart
+          ? readRange(groups.chart)
+          : undefined,
     };
   }
-  const revision = revise.exec(text)?.groups;
+  const revision = (revise.exec(text) ?? reviseInProse.exec(text))?.groups;
   if (revision && (revision.side || revision.interval)) {
     if (
       revision.joint &&
@@ -99,7 +109,7 @@ export function parseRomIntent(goal: string, previous?: FreeRomInput): RomIntent
         : {},
     };
   }
-  const delivery = deliver.exec(text)?.groups;
+  const delivery = (deliver.exec(text) ?? deliverInProse.exec(text))?.groups;
   if (delivery)
     return {
       kind: 'deliver',

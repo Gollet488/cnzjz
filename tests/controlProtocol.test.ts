@@ -216,7 +216,7 @@ test('long local quality output stays complete in audit while feedback and catal
     threshold: 0.5,
     window: 5,
     aspect: 1,
-    metricVersion: '2.0',
+    metricVersion: '2.1',
   });
   for (let i = 0; i <= 400; i++) session.append(i % 2 ? demoPose(i / 20) : [], i / 20);
   const h = harness(

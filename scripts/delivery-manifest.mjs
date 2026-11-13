@@ -82,7 +82,7 @@ export async function verifyManifest(root, manifest) {
   return { checked, totalBytes };
 }
 
-const sourceRoots = ['.github', 'public', 'scripts', 'src', 'tests'];
+const sourceRoots = ['.github', 'docs', 'patches', 'public', 'scripts', 'src', 'tests'];
 const rootFiles = [
   '.env.example',
   '.gitattributes',
@@ -94,6 +94,7 @@ const rootFiles = [
   'index.html',
   'package.json',
   'playwright.config.ts',
+  'playwright.pages.config.ts',
   'playwright.real.config.ts',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
@@ -105,16 +106,15 @@ const rootFiles = [
   '停止Demo.cmd',
 ];
 
-async function collect(root, relative, onlyMarkdown = false) {
+async function collect(root, relative) {
   const result = [];
   for (const entry of await readdir(path.join(root, relative), { withFileTypes: true })) {
     if (excludedSegments.has(entry.name.toLowerCase())) continue;
     if (relative === 'docs' && entry.name === 'evidence') continue;
     const child = `${relative}/${entry.name}`;
     if (entry.isSymbolicLink()) throw new Error(`Symlink in delivery source: ${child}`);
-    if (entry.isDirectory()) result.push(...(await collect(root, child, onlyMarkdown)));
-    else if (entry.isFile() && (!onlyMarkdown || child.endsWith('.md')))
-      result.push(snapshotPath(child));
+    if (entry.isDirectory()) result.push(...(await collect(root, child)));
+    else if (entry.isFile()) result.push(snapshotPath(child));
   }
   return result;
 }
@@ -124,7 +124,6 @@ export async function createManifest(root, evidencePaths, metadata = {}) {
     throw new Error('Select a nonempty explicit evidence file list');
   const sourcePaths = [...rootFiles];
   for (const directory of sourceRoots) sourcePaths.push(...(await collect(root, directory)));
-  sourcePaths.push(...(await collect(root, 'docs', true)));
   const sources = new Set(sourcePaths);
   const selected = new Set();
   for (const relative of evidencePaths) {
@@ -145,7 +144,7 @@ export async function createManifest(root, evidencePaths, metadata = {}) {
     createdAt: new Date().toISOString(),
     ...metadata,
     scope:
-      'Uncommitted H candidate source, configuration, local assets and explicitly selected reproducible evidence. Hash integrity is not functional acceptance, remote CI, licensing or redistribution approval.',
+      'Candidate source, configuration, local assets and explicitly selected evidence. Hash integrity is not functional acceptance, remote CI, licensing or redistribution approval.',
     excludes: [
       'This manifest (self)',
       '.git, node_modules, .pnpm-store, dist, .qa, .demo, test-results, playwright-report',

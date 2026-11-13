@@ -3,6 +3,25 @@ import { JOINTS } from '../config.ts';
 import { angleValue, channels } from './poseMath.ts';
 
 export type Interval = [number, number];
+type SeriesPoint = readonly [number, number | null];
+
+// The display series is in source-time order, including any inserted gap points.
+// A linked zoom only needs the selected window, even in a long recording.
+export function seriesInterval<T extends SeriesPoint>(data: readonly T[], [start, end]: Interval) {
+  function bound(time: number, after = false) {
+    let lo = 0,
+      hi = data.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      const value = data[mid][0];
+      if (value < time || (after && value === time)) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+  return data.slice(bound(start), bound(end, true));
+}
+
 export function paddedExtent(values: number[], minimumSpan = 0.04): Interval {
   const valid = values.filter(Number.isFinite);
   if (!valid.length) return [0, 1];
@@ -125,6 +144,7 @@ export function pointSeries(
       p &&
       Number.isFinite(p[coordinate]) &&
       Number.isFinite(p.visibility) &&
+      p.visibility > 0 &&
       p.visibility >= threshold
         ? p[coordinate]
         : null,
@@ -253,11 +273,16 @@ export function peakDisplaySeries(
 }
 
 export function peakDisplayTrajectory(frames: readonly PoseFrame[], width: number) {
-  const data: [number | null, number | null, number][] = frames.map((frame) =>
-    frame.center && Number.isFinite(frame.center.x) && Number.isFinite(frame.center.y)
-      ? [frame.center.x, frame.center.y, frame.time]
-      : [null, null, frame.time],
-  );
+  const data: [number | null, number | null, number][] = [];
+  for (const [i, frame] of frames.entries()) {
+    if (i > 0 && frame.samplingGapLimit != null)
+      data.push([null, null, (frames[i - 1].time + frame.time) / 2]);
+    data.push(
+      frame.center && Number.isFinite(frame.center.x) && Number.isFinite(frame.center.y)
+        ? [frame.center.x, frame.center.y, frame.time]
+        : [null, null, frame.time],
+    );
+  }
   const times = new Set<number>();
   for (const coordinate of [0, 1] as const)
     for (const point of peakDisplaySeries(

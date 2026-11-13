@@ -1,21 +1,12 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, watch, computed } from 'vue';
-import * as echarts from 'echarts/core';
-import { LineChart, HeatmapChart } from 'echarts/charts';
-import {
-  GridComponent,
-  TooltipComponent,
-  DataZoomComponent,
-  MarkLineComponent,
-  VisualMapComponent,
-} from 'echarts/components';
-import { CanvasRenderer } from 'echarts/renderers';
+import type { ECharts, EChartsCoreOption } from 'echarts/core';
 import type { PoseFrame, Joint, Marker } from '../types';
 import type { ChartView } from '../analysis/tools';
 import { JOINTS, COLORS } from '../config';
 import { DEMO_SIZE } from '../utils/dimensions';
 import { angleValue, channels } from '../utils/poseMath';
-import { intervalFrames } from '../analysis/frameIndex';
+import { intervalFrames, timeBound } from '../analysis/frameIndex';
 import {
   paddedExtent,
   trajectoryBounds,
@@ -23,18 +14,9 @@ import {
   pointSeries,
   peakDisplaySeries,
   peakDisplayTrajectory,
+  seriesInterval,
 } from '../utils/visualization';
 import MarkerTimeline from './MarkerTimeline.vue';
-echarts.use([
-  LineChart,
-  HeatmapChart,
-  GridComponent,
-  TooltipComponent,
-  DataZoomComponent,
-  MarkLineComponent,
-  VisualMapComponent,
-  CanvasRenderer,
-]);
 const props = withDefaults(
   defineProps<{
     frames: PoseFrame[];
@@ -56,7 +38,9 @@ const props = withDefaults(
 const emit = defineEmits<{ range: [start: number, end: number]; seek: [time: number] }>();
 const element = ref<HTMLElement>(),
   note = ref(''),
-  empty = ref(false);
+  empty = ref(false),
+  pending = ref(true),
+  loadError = ref(false);
 const temporal = computed(() => !['heatmap', 'trajectory'].includes(props.kind ?? 'angle'));
 const domain = computed<[number, number]>(() => {
   // Publication mutates the same frame array; revision invalidates this extent.
@@ -64,30 +48,35 @@ const domain = computed<[number, number]>(() => {
   return [props.frames[0]?.time ?? 0, props.frames.at(-1)?.time ?? 0];
 });
 const selection = computed(() => props.view?.interval ?? props.interval);
-let chart: echarts.ECharts | undefined,
+let chart: ECharts | undefined,
   observer: ResizeObserver,
   lastRender = 0;
+let engine: typeof import('../utils/chartEngine') | undefined;
+let loading: Promise<void> | undefined;
+let disposed = false;
 let trailing: ReturnType<typeof setTimeout> | undefined;
+let immediatePending = false;
 let sourceKey = '';
 let sourceFrames: PoseFrame[] | undefined;
 let sourceSeries: { name: string; color: string; data: [number, number | null][] }[] = [];
 let dirty = true;
 let chartKind: string | undefined;
-function applyOption(option: echarts.EChartsCoreOption) {
+function applyOption(option: EChartsCoreOption) {
   const kind = props.kind ?? 'angle';
   chart!.setOption(option, { notMerge: chartKind !== kind, replaceMerge: ['series'] });
   chartKind = kind;
 }
 function presentChart() {
-  if (!chart) return;
+  if (!chart || !props.active) return;
   for (const element of chart.getZr().storage.getDisplayList()) element.dirty();
   chart.getZr().refreshImmediately();
 }
 const renderWaiters: (() => void)[] = [];
 // Expose a measurement barrier without changing the existing draw schedule.
 async function waitUntilRendered() {
-  if (trailing) await new Promise<void>((resolve) => renderWaiters.push(resolve));
-  if (!chart) throw new Error('CHART_NOT_READY');
+  await loading;
+  if (trailing !== undefined) await new Promise<void>((resolve) => renderWaiters.push(resolve));
+  if (!chart || !props.active) throw new Error('CHART_NOT_READY');
   if (dirty || !chartKind) throw new Error('CHART_NOT_RENDERED');
   chart.getZr().flush();
 }
@@ -135,11 +124,11 @@ function draw() {
   if (!chart) return;
   const frames = props.frames;
   const selected = selection.value;
-  const visible = selected ? intervalFrames(frames, selected) : frames;
   const grid = { left: 52, right: 24, top: 24, bottom: temporal.value ? 42 : 30 };
-  empty.value = !visible.length;
   note.value = '';
   if (props.kind === 'heatmap') {
+    const visible = selected ? intervalFrames(frames, selected) : frames;
+    empty.value = !visible.length;
     const heat = velocityHeatmap(
       visible,
       chart.getWidth() - 75,
@@ -226,6 +215,7 @@ function draw() {
     return;
   }
   if (props.kind === 'trajectory') {
+    const visible = selected ? intervalFrames(frames, selected) : frames;
     const bounds = trajectoryBounds(
       visible,
       chart.getWidth() - grid.left - grid.right,
@@ -332,6 +322,22 @@ function draw() {
                 angleValue(props.view?.basis === 'raw' ? f.rawAngles : f.angles, props.joint, side),
               ]),
             }));
+    const breaks = frames.flatMap((f, i) => (i > 0 && f.samplingGapLimit !== null ? [i] : []));
+    if (breaks.length) {
+      sourceSeries = sourceSeries.map((s) => {
+        const data: typeof s.data = [];
+        let next = 0;
+        for (const [i, point] of s.data.entries()) {
+          // The null point is display only; actual frame times remain unchanged.
+          if (breaks[next] === i) {
+            data.push([(s.data[i - 1][0] + point[0]) / 2, null]);
+            next++;
+          }
+          data.push(point);
+        }
+        return { ...s, data };
+      });
+    }
   }
   const series = sourceSeries;
   note.value = point
@@ -341,9 +347,7 @@ function draw() {
       : '';
   let aggregated = false;
   const display = series.map((s) => {
-    const source = selected
-      ? s.data.filter((p) => p[0] >= selected[0] && p[0] <= selected[1])
-      : s.data;
+    const source = selected ? seriesInterval(s.data, selected) : s.data;
     const data = peakDisplaySeries(source, chart!.getWidth() - grid.left - grid.right);
     aggregated ||= data.length < source.length;
     return { ...s, data };
@@ -359,6 +363,9 @@ function draw() {
       ' 显示按时间桶保留首末点和最小/最大值，缺失处断开；查询、CSV 和证据使用全量数据。';
   const first = domain.value[0],
     last = domain.value[1];
+  const visibleCount = selected
+    ? timeBound(frames, selected[1], true) - timeBound(frames, selected[0])
+    : frames.length;
   const format = temporalFormatters(center || point);
   applyOption({
     animation: false,
@@ -420,7 +427,7 @@ function draw() {
       data: s.data,
       symbol: 'circle',
       symbolSize: 5,
-      showSymbol: visible.length === 1,
+      showSymbol: visibleCount === 1,
       connectNulls: false,
       lineStyle: { width: 2, color: s.color },
       itemStyle: { color: s.color },
@@ -440,8 +447,28 @@ function draw() {
   });
 }
 function initializeChart() {
-  if (chart || !element.value?.clientWidth || !element.value.clientHeight) return;
-  chart = echarts.init(element.value);
+  if (
+    disposed ||
+    !props.active ||
+    chart ||
+    !element.value?.clientWidth ||
+    !element.value.clientHeight
+  )
+    return;
+  if (!engine) {
+    // Mount the controls and chart layout before loading the chart library.
+    loading ??= import('../utils/chartEngine').then(
+      (module) => {
+        engine = module;
+        initializeChart();
+      },
+      () => {
+        if (!disposed) loadError.value = true;
+      },
+    );
+    return;
+  }
+  chart = engine.initChart(element.value);
   chart.on('datazoom', (event: unknown) => {
     type Zoom = { start?: number; end?: number; startValue?: number; endValue?: number };
     const data = event as Zoom & { batch?: Zoom[] };
@@ -460,22 +487,39 @@ function initializeChart() {
         : typeof zoom.end === 'number'
           ? first + (span * zoom.end) / 100
           : NaN);
-    if (Number.isFinite(start) && Number.isFinite(end)) emit('range', start, end);
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      // ECharts wheel zoom can leave its endpoints a few ULPs inside the axis.
+      const epsilon = 8 * Number.EPSILON * Math.max(1, Math.abs(first), Math.abs(axisEnd));
+      emit(
+        'range',
+        Math.abs(start - first) <= epsilon ? first : start,
+        Math.abs(end - axisEnd) <= epsilon ? axisEnd : end,
+      );
+    }
   });
   scheduleDraw(true);
 }
 function scheduleDraw(interactive = false) {
   dirty = true;
+  if (!chart || !props.active) return;
+  // Frame publications must not replace a queued seek, zoom or option change.
+  if (trailing !== undefined && (!interactive || immediatePending)) return;
   clearTimeout(trailing);
-  trailing = undefined;
-  if (props.active === false) return;
+  immediatePending = interactive;
   const wait = interactive ? 0 : Math.max(0, 250 - (performance.now() - lastRender));
   const render = () => {
-    lastRender = performance.now();
-    draw();
-    dirty = false;
     trailing = undefined;
-    renderWaiters.splice(0).forEach((resolve) => resolve());
+    immediatePending = false;
+    lastRender = performance.now();
+    try {
+      if (props.active) {
+        draw();
+        dirty = false;
+        pending.value = false;
+      }
+    } finally {
+      renderWaiters.splice(0).forEach((resolve) => resolve());
+    }
   };
   // Five linked charts otherwise execute inside one Vue flush. Coalesce mount,
   // resize and prop changes, then give each chart its own browser task.
@@ -483,7 +527,7 @@ function scheduleDraw(interactive = false) {
 }
 onMounted(() => {
   observer = new ResizeObserver(() => {
-    if (!element.value?.clientWidth || !element.value.clientHeight) return;
+    if (!props.active || !element.value?.clientWidth || !element.value.clientHeight) return;
     if (chart) {
       if (
         chart.getWidth() !== element.value.clientWidth ||
@@ -543,11 +587,13 @@ watch(
   () => scheduleDraw(true),
 );
 onBeforeUnmount(() => {
+  disposed = true;
   clearTimeout(trailing);
   trailing = undefined;
   renderWaiters.splice(0).forEach((resolve) => resolve());
   observer?.disconnect();
   chart?.dispose();
+  chart = undefined;
 });
 </script>
 <template>
@@ -570,7 +616,9 @@ onBeforeUnmount(() => {
                   : '关节角度时序图'
         "
       />
-      <span v-if="empty" class="chart-empty">暂无有效样本</span>
+      <span v-if="loadError" class="chart-empty" role="alert">图表加载失败，请刷新页面重试。</span>
+      <span v-else-if="pending" class="chart-loading">正在加载图表…</span>
+      <span v-else-if="empty" class="chart-empty">暂无有效样本</span>
     </div>
     <div v-if="temporal && markers.length" class="chart-markers"
       ><MarkerTimeline :markers="markers" :domain="domain" :selection="selection" @seek="locate"
@@ -582,7 +630,8 @@ onBeforeUnmount(() => {
 .chart-surface {
   position: relative;
 }
-.chart-empty {
+.chart-empty,
+.chart-loading {
   position: absolute;
   top: 44%;
   left: 50%;

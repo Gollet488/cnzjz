@@ -1,3 +1,5 @@
+import { modelSessionInfo } from '../analysis/session.ts';
+import { preservesCloudContext } from './modelCatalog.ts';
 import type { AnalysisSession, SessionInfo, SessionReference } from '../analysis/session.ts';
 import type { createToolRegistry, ToolDefinition, ToolResult } from '../analysis/tools.ts';
 import { array, boolean, enumeration, object, SchemaError, validate } from '../analysis/schema.ts';
@@ -457,7 +459,7 @@ export class AgentRuntime {
         content: JSON.stringify({
           goal: run.goal,
           protocolVersion: AGENT_PROTOCOL_VERSION,
-          currentSession: reference,
+          currentSession: modelSessionInfo(reference),
           previousTask: previousTask ?? null,
           context: { ...contextSnapshot, previousTask: undefined },
         }),
@@ -555,7 +557,7 @@ export class AgentRuntime {
         if (constrained && offered.some((tool) => tool.name === 'set_task_patch'))
           messages.push({
             role: 'user',
-            content: `本轮用户原文 ${JSON.stringify(run.goal)}。上轮规格用于继承。按原文提取本轮的起止秒和侧别，写入 changes；明确区间用 [起秒,止秒]。只改变被要求的字段。`,
+            content: `本轮用户原文 ${JSON.stringify(run.goal)}。用 set_task_patch 的 changes 记录本轮明确要求的变化，其余继承。只有要求改统计前段或后段时才填 first 或 second；提到已有片段时沿用原值。报告用 report:true，CSV 区间用 export，图表区间用 viewInterval。即使都写了秒数，CSV 和图表范围也不能填进 first 或 second。明确区间写 [起秒,止秒]。“右膝”“左膝”等关节名中的左右表示侧别，必须写入 channels；关节类型没有变化时省略 joint。`,
           });
         const input = { messages, tools: offered };
         const toolFingerprint = adapter ? await protocolDigest(offered) : undefined;
@@ -625,7 +627,7 @@ export class AgentRuntime {
         run.rounds++;
         assertActive();
         if (boundRom) verifyRomIntent(reply.calls, boundRom, this.session.info());
-        if (provider.id === 'openai-api')
+        if (preservesCloudContext(provider.id.replace(/-api$/, ''), provider.model))
           pendingNativeCalls = new Set(reply.calls.flatMap((call) => (call.id ? [call.id] : [])));
         if (!reply.calls.length) {
           if (++recoveries > this.limits.recoveries) throw new Error('RECOVERY_LIMIT');

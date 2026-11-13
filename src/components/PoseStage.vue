@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, shallowReactive, watch, onMounted, onBeforeUnmount } from 'vue';
 import { UploadCloud, Video, ScanLine } from 'lucide-vue-next';
-import type { Landmark, PoseFrame, Settings, Source } from '../types';
+import type { Angles, Landmark, PoseFrame, Settings, Source } from '../types';
 import { demoPose } from '../utils/demo';
 import { renderPose } from '../utils/renderer';
-import { getPoseEngine } from '../utils/poseEngine';
+import { PoseEngine } from '../utils/poseEngine';
 import { OfflineVideoJob } from '../video/job';
-import { prepareVideo, VIDEO_ACCEPT } from '../video/prepare';
+import { MAX_VIDEO_BYTES, prepareVideo, VIDEO_ACCEPT } from '../video/prepare';
 import type { OfflineMetadata, OfflineState } from '../video/protocol';
 import { MAX_FRAMES } from '../config';
 import { DEMO_SIZE, stageSize } from '../utils/dimensions';
@@ -26,7 +26,7 @@ const emit = defineEmits<{
     time: number,
     aspect: number,
     source: Source,
-    accept?: (sampleTime?: number) => void,
+    accept?: (frame?: PoseFrame) => void,
   ];
   status: [message: string];
   ready: [name: string];
@@ -42,6 +42,15 @@ const filename = ref(''),
   modelReady = ref(false);
 const offlineState = ref<OfflineState>('idle');
 const offlineMetadata = ref<OfflineMetadata | null>(null);
+const sampled = computed(() => {
+  const metadata = offlineMetadata.value;
+  return !!metadata && metadata.sampleTotal < metadata.total;
+});
+const offlineEnded = () =>
+  ['completed', 'sampled', 'cancelled', 'truncated', 'failed'].includes(offlineState.value);
+const runningMessage = () =>
+  sampled.value ? '正在抽样分析长视频，覆盖片头至片尾。' : '正在离线逐帧分析。';
+const paintSettings = computed(() => JSON.stringify(props.settings));
 const cameraConnected = ref(false);
 const cameraHint = ref('点击开始分析，在浏览器提示中允许使用摄像头。');
 // 96 reusable thumbnails, at most 96 × 384 × 384 × 4 bytes (54 MiB of RGBA pixels).
@@ -54,8 +63,24 @@ const cameraReviewTime = computed(() =>
 );
 const cameraReviewImage = computed(() => cameraHistory.get(cameraReviewTime.value ?? -1));
 let cameraInput: HTMLCanvasElement | undefined;
+let cameraPreview: ImageBitmap | undefined;
+let cameraRun = 0;
+let cameraRecoveryAttempted = false;
+let cameraPaintedSample = -1;
+let measuredAngles: Angles | undefined;
 let pausedDemoPaint:
   | { points: Landmark[]; settings: string; width: number; height: number }
+  | undefined;
+let filePaint:
+  | {
+      background?: HTMLVideoElement | ImageBitmap;
+      mediaTime?: number;
+      seeking?: boolean;
+      points: Landmark[];
+      settings: string;
+      playing: boolean;
+      aspect: number;
+    }
   | undefined;
 const processed = ref(0);
 let file: File | undefined;
@@ -78,7 +103,8 @@ let stream: MediaStream | undefined,
   generation = 0,
   inferenceTime = 0,
   lastDetection: boolean | null = null;
-let engine: Awaited<ReturnType<typeof getPoseEngine>> | undefined;
+let engine: PoseEngine | undefined;
+let cameraInFlight = false;
 let cameraRequest:
   | { generation: number; expired: boolean; timer: ReturnType<typeof setTimeout> }
   | undefined;
@@ -97,12 +123,15 @@ function releaseCamera() {
 }
 function copyCameraInput(video: HTMLVideoElement) {
   const input = (cameraInput ??= document.createElement('canvas'));
-  if (input.width !== video.videoWidth) input.width = video.videoWidth;
-  if (input.height !== video.videoHeight) input.height = video.videoHeight;
+  const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+  const width = Math.max(1, Math.round(video.videoWidth * scale));
+  const height = Math.max(1, Math.round(video.videoHeight * scale));
+  if (input.width !== width) input.width = width;
+  if (input.height !== height) input.height = height;
   const ctx = input.getContext('2d', { alpha: false });
   if (!ctx || !input.width || !input.height) return;
   try {
-    ctx.drawImage(video, 0, 0);
+    ctx.drawImage(video, 0, 0, width, height);
     return input;
   } catch {
     // Inference can continue from video if a still cannot be copied.
@@ -170,24 +199,16 @@ async function prepare() {
   loading.value = true;
   emit('busy', true);
   try {
-    const prepared = await cameraDeadline(getPoseEngine(), 30_000);
+    engine = new PoseEngine();
+    await engine.ready();
     if (token === generation) {
-      engine = prepared;
       modelReady.value = true;
       emit('status', '本地推理已就绪');
       return true;
     }
-  } catch (error) {
+  } catch {
     if (token === generation) {
-      const message =
-        error instanceof DOMException && error.name === 'TimeoutError'
-          ? '本地模型加载超过 30 秒，已停止启动并释放摄像头，请检查本地资源后重新开始。'
-          : '模型加载失败，请检查本地模型资源后重新开始。';
-      if (props.source === 'camera') cameraFailure(message);
-      else {
-        emit('status', message);
-        emit('ended');
-      }
+      cameraFailure('模型加载失败或超时，请检查本地模型资源后重新开始。');
     }
   } finally {
     if (token === generation) {
@@ -206,8 +227,8 @@ async function start() {
       emit('ended');
       return;
     }
-    if (['completed', 'cancelled', 'truncated', 'failed'].includes(offlineState.value)) {
-      emit('status', '本次解码已停止；可回看或重算指标，重新解码请点击「重新逐帧分析」。');
+    if (offlineEnded()) {
+      emit('status', '本次分析已结束，可回看、重算指标或重新分析。');
       emit('ended');
       return;
     }
@@ -223,6 +244,7 @@ async function start() {
     const sessionId = props.sessionId;
     const current = () =>
       token === generation && sessionId === props.sessionId && props.source === 'file';
+    let detected = false;
     try {
       job = new OfflineVideoJob(file, MAX_FRAMES, {
         metadata(value) {
@@ -233,34 +255,35 @@ async function start() {
         },
         frame(value) {
           if (!current()) {
-            value.preview.close();
             return false;
           }
           if (offlineState.value === 'preparing') {
             offlineState.value = 'running';
             emit('offline', 'running', offlineMetadata.value);
-            emit('status', '正在离线逐帧分析；不保证快于视频时长。');
+            emit('status', runningMessage());
           }
-          let accepted = false;
+          let accepted: PoseFrame | undefined;
           emit(
             'frame',
             value.points,
             value.time,
             offlineMetadata.value!.aspect,
             'file',
-            (sampleTime) => {
-              accepted = sampleTime !== undefined;
+            (frame) => {
+              accepted = frame;
             },
           );
           if (!accepted) {
-            value.preview.close();
             return false;
           }
           preview?.close();
           preview = value.preview;
-          points = value.points;
+          points = accepted.points;
+          measuredAngles = accepted.angles;
+          detected ||= value.points.length > 0;
           processed.value = value.index;
           lastSample = value.index;
+          requestPaint();
           return true;
         },
         state(value, detail) {
@@ -269,19 +292,25 @@ async function start() {
           emit('offline', value, offlineMetadata.value);
           if (value === 'preparing')
             emit('status', '正在读取 MP4 索引并准备本地 Worker，分析与播放独立。');
-          if (value === 'running') emit('status', '正在离线逐帧分析；不保证快于视频时长。');
-          if (['completed', 'cancelled', 'truncated', 'failed'].includes(value)) {
-            emit(
-              'status',
+          if (value === 'running') emit('status', runningMessage());
+          if (offlineEnded()) {
+            const completion =
               value === 'completed'
                 ? transcoded
                   ? '转换后视频的全部呈现帧已分析完成；时间轴与帧数以转换结果为准。'
                   : '已核对全部呈现帧及源 PTS，逐帧分析完成。'
-                : value === 'truncated'
-                  ? `达到 ${MAX_FRAMES.toLocaleString()} 帧上限，结果已截断，未分析完整视频。`
-                  : value === 'cancelled'
-                    ? '已取消解码，保留已分析前缀；重新解码需显式重置。'
-                    : `逐帧分析失败，已保留前缀：${detail}`,
+                : value === 'sampled'
+                  ? '长视频抽样分析完成，已覆盖片头至片尾。快速动作可能落在采样帧之间。'
+                  : value === 'truncated'
+                    ? `达到 ${MAX_FRAMES.toLocaleString()} 帧上限，结果已截断，未分析完整视频。`
+                    : value === 'cancelled'
+                      ? '已取消解码，保留已分析前缀；重新解码需显式重置。'
+                      : `逐帧分析失败，已保留前缀：${detail}`;
+            emit(
+              'status',
+              !detected && (value === 'completed' || value === 'sampled')
+                ? `${completion} 未检测到可信人体姿态。`
+                : completion,
             );
             emit('ended');
           }
@@ -361,6 +390,7 @@ async function start() {
   }
   if (token !== generation || !props.playing) return;
   if (!modelReady.value) {
+    if (loading.value) return;
     cameraStatus('摄像头画面已就绪，正在加载本地姿态模型…');
     if (!(await prepare())) return;
   }
@@ -375,17 +405,13 @@ async function start() {
 }
 async function loadFile(selected?: File) {
   if (!selected) return;
-  if (selected.size > 500 * 1024 * 1024) {
+  if (selected.size > MAX_VIDEO_BYTES) {
     emit('status', '视频超过 500 MB，请先截取较短片段。');
     return;
   }
-  stop();
-  file = undefined;
-  filename.value = '';
+  filePreparation?.abort();
+  job?.pause();
   emit('ended');
-  stream?.getTracks().forEach((t) => t.stop());
-  stream = undefined;
-  video.value!.srcObject = null;
   const controller = new AbortController();
   filePreparation = controller;
   loading.value = true;
@@ -395,18 +421,19 @@ async function loadFile(selected?: File) {
       emit('status', message),
     );
     if (controller.signal.aborted) return;
+    const nextURL = URL.createObjectURL(prepared.file);
     // ready resets the parent session synchronously, so finish preparation
     // before emitting it; the prepared file survives a same-source reset.
     filePreparation = undefined;
-    loading.value = false;
-    emit('busy', false);
+    stop();
     file = prepared.file;
     transcoded = prepared.transcoded;
-    if (objectURL) URL.revokeObjectURL(objectURL);
-    objectURL = URL.createObjectURL(file);
+    const previousURL = objectURL;
+    objectURL = nextURL;
     filename.value = selected.name;
     video.value!.src = objectURL;
     video.value!.load();
+    if (previousURL) URL.revokeObjectURL(previousURL);
     lastVideo = -1;
     points = [];
     trail = [];
@@ -439,6 +466,10 @@ function drop(event: DragEvent) {
   event.preventDefault();
   if (props.source === 'file') void loadFile(event.dataTransfer?.files[0]);
 }
+function cancelPreparation() {
+  filePreparation?.abort();
+  emit('status', '已取消视频准备，请重新选择视频。');
+}
 function stop() {
   generation++;
   filePreparation?.abort();
@@ -451,6 +482,7 @@ function stop() {
   job = undefined;
   preview?.close();
   preview = undefined;
+  filePaint = undefined;
   offlineState.value = 'idle';
   processed.value = 0;
   hiddenPause = false;
@@ -459,18 +491,95 @@ function stop() {
   cameraHistory.clear();
   if (cameraInput) cameraInput.width = cameraInput.height = 0;
   cameraInput = undefined;
+  cameraPreview?.close();
+  cameraPreview = undefined;
+  cameraRecoveryAttempted = false;
+  cameraPaintedSample = -1;
   points = [];
   trail = [];
   lastVideo = -1;
   lastDetection = null;
-  modelReady.value = !!engine;
+  engine?.close();
+  engine = undefined;
+  cameraInFlight = false;
+  modelReady.value = false;
   loading.value = false;
   emit('busy', false);
+  requestPaint();
+}
+async function sampleCamera(camera: HTMLVideoElement, time: number, model: PoseEngine) {
+  const run = cameraRun;
+  const current = () => engine === model && props.playing && run === cameraRun;
+  cameraInFlight = true;
+  const aspect = camera.videoWidth / camera.videoHeight;
+  try {
+    const input = copyCameraInput(camera);
+    const bitmap = await createImageBitmap(input ?? camera);
+    if (!current()) {
+      bitmap.close();
+      return;
+    }
+    inferenceTime = Math.max(inferenceTime + 1, performance.now());
+    const result = await model.detect(bitmap, inferenceTime, true, aspect);
+    if (!current()) {
+      result.preview?.close();
+      return;
+    }
+    cameraRecoveryAttempted = false;
+    emit('frame', result.points, time, aspect, 'camera', (frame) => {
+      if (!frame) {
+        result.preview?.close();
+        return;
+      }
+      points = frame.points;
+      measuredAngles = frame.angles;
+      cameraPreview?.close();
+      cameraPreview = result.preview;
+      cameraPaintedSample = time;
+      if (input) saveCameraImage(frame.time, input);
+    });
+    if (!!result.points.length !== lastDetection) {
+      lastDetection = !!result.points.length;
+      emit(
+        'status',
+        lastDetection ? '' : '未检测到可信人体姿态。仍在采集，请让单人和待测关节入镜。',
+      );
+    }
+  } catch {
+    if (engine !== model) return;
+    if (current() && Number.isFinite(aspect) && aspect > 0) {
+      emit('frame', [], time, aspect, 'camera');
+      points = [];
+      cameraPreview?.close();
+      cameraPreview = undefined;
+      cameraPaintedSample = time;
+    }
+    if (cameraRecoveryAttempted) {
+      cameraFailure('本地推理未能恢复，已释放摄像头。点击开始分析可继续采集。');
+    } else {
+      cameraRecoveryAttempted = true;
+      model.close();
+      engine = undefined;
+      modelReady.value = false;
+      cameraInFlight = false;
+      if (props.playing) {
+        emit('status', '当前帧未能分析，正在重新启动本地追踪…');
+        await prepare();
+      }
+    }
+  } finally {
+    if (engine === model) cameraInFlight = false;
+  }
+}
+function requestPaint() {
+  if (!raf) raf = requestAnimationFrame(tick);
 }
 function tick(now: number) {
-  raf = requestAnimationFrame(tick);
+  raf = 0;
   const dt = previousNow ? Math.min((now - previousNow) / 1000, 0.15) : 0;
-  previousNow = now;
+  const continuous = props.playing && props.source !== 'file';
+  previousNow = continuous ? now : 0;
+  if (continuous) requestPaint();
   const cameraVideo = props.source === 'camera' && props.playing ? video.value : undefined;
   const cameraTime = cameraVideo?.currentTime;
   if (props.source === 'demo') {
@@ -484,6 +593,7 @@ function tick(now: number) {
     }
   } else if (
     engine &&
+    !cameraInFlight &&
     modelReady.value &&
     cameraVideo &&
     cameraVideo.readyState >= 2 &&
@@ -495,32 +605,7 @@ function tick(now: number) {
   ) {
     lastSample = now;
     lastVideo = cameraTime;
-    try {
-      // Freeze one input for synchronous inference and the history copy. The
-      // media clock is read once for the sample, before inference can delay it.
-      const input = copyCameraInput(cameraVideo);
-      const aspect = input
-        ? input.width / input.height
-        : cameraVideo.videoWidth / cameraVideo.videoHeight;
-      inferenceTime = Math.max(inferenceTime + 1, performance.now());
-      const result = engine.detectForVideo(input ?? cameraVideo, inferenceTime);
-      points =
-        result.landmarks[0]?.map((p) => ({
-          x: p.x,
-          y: p.y,
-          z: p.z,
-          visibility: p.visibility ?? 0,
-        })) ?? [];
-      emit('frame', points, cameraTime, aspect, 'camera', (sampleTime) => {
-        if (input && sampleTime !== undefined) saveCameraImage(sampleTime, input);
-      });
-      if (!!points.length !== lastDetection) {
-        lastDetection = !!points.length;
-        emit('status', points.length ? '' : '未检测到完整人体，请保证单人全身入镜。');
-      }
-    } catch {
-      cameraFailure('当前帧推理失败，已释放摄像头，请重置后重试。');
-    }
+    void sampleCamera(cameraVideo, cameraTime, engine);
   }
   paint();
 }
@@ -542,13 +627,17 @@ function paint() {
       canvas.value.width = size.width;
       canvas.value.height = size.height;
     }
-    const displayed = props.selectedFrame?.points ?? points;
+    const live = props.playing && props.source !== 'demo';
+    const displayed = live ? points : (props.selectedFrame?.points ?? points);
+    const angles = live
+      ? measuredAngles
+      : (props.selectedFrame?.angles ?? (props.source === 'demo' ? undefined : measuredAngles));
     // A paused synthetic frame has no asynchronously changing video background.
     // Retain its bitmap until the points/settings/size change, including seeks
     // from another page. Acquisition, inference and file/camera painting keep
     // their existing schedule.
     if (props.source === 'demo' && !props.playing) {
-      const settings = JSON.stringify(props.settings);
+      const settings = paintSettings.value;
       if (
         pausedDemoPaint?.points === displayed &&
         pausedDemoPaint.settings === settings &&
@@ -558,8 +647,9 @@ function paint() {
         return;
       pausedDemoPaint = { points: displayed, settings, width: size.width, height: size.height };
     } else pausedDemoPaint = undefined;
-    if (props.settings.trajectory && props.playing && lastTrailSample !== lastSample) {
-      lastTrailSample = lastSample;
+    const trailSample = props.source === 'camera' ? cameraPaintedSample : lastSample;
+    if (props.settings.trajectory && props.playing && lastTrailSample !== trailSample) {
+      lastTrailSample = trailSample;
       trail.push(centerOfMass(displayed, props.settings.threshold));
       trail = trail.slice(-180);
     }
@@ -568,9 +658,38 @@ function paint() {
         ? undefined
         : cameraReview
           ? cameraReviewImage.value
-          : props.source === 'file' && !reviewing && preview
-            ? preview
-            : video.value;
+          : props.source === 'camera' && cameraPreview
+            ? cameraPreview
+            : props.source === 'file' && !reviewing && preview
+              ? preview
+              : video.value && video.value.readyState >= 2
+                ? video.value
+                : undefined;
+    if (props.source === 'file') {
+      const media = background === video.value ? video.value : undefined;
+      const mediaTime = media?.currentTime;
+      const seeking = media?.seeking;
+      const settings = paintSettings.value;
+      if (
+        filePaint?.background === background &&
+        filePaint?.mediaTime === mediaTime &&
+        filePaint?.seeking === seeking &&
+        filePaint?.points === displayed &&
+        filePaint.settings === settings &&
+        filePaint.playing === props.playing &&
+        filePaint.aspect === aspect
+      )
+        return;
+      filePaint = {
+        background: background as HTMLVideoElement | ImageBitmap | undefined,
+        mediaTime,
+        seeking,
+        points: displayed,
+        settings,
+        playing: props.playing,
+        aspect,
+      };
+    }
     renderPose(
       canvas.value,
       displayed,
@@ -578,7 +697,8 @@ function paint() {
       background,
       props.playing ? trail : [],
       aspect,
-      !background && !cameraReview,
+      props.source === 'demo',
+      angles,
     );
   }
 }
@@ -587,10 +707,13 @@ watch(
   (value) => {
     if (value) void start();
     else {
+      cameraRun++;
       job?.pause();
       hiddenPause = false;
       video.value?.pause();
     }
+    previousNow = 0;
+    requestPaint();
   },
 );
 watch(
@@ -615,11 +738,18 @@ watch(
     if (time !== undefined && props.source === 'demo') demoTime = time;
   },
 );
+// Paused review and offline previews only repaint when their inputs change.
+// The canvas stays mounted across tabs so PNG export can still use it.
+watch(
+  [() => props.selectedFrame, () => props.seekTime, () => props.sourceAspect, paintSettings],
+  requestPaint,
+);
 function seekToTime(time: number) {
   if (props.source === 'file' && video.value && filename.value) {
     reviewing = true;
     video.value.currentTime = time;
     lastVideo = -1;
+    requestPaint();
   }
 }
 watch(
@@ -642,12 +772,12 @@ function visibility() {
   }
 }
 onMounted(() => {
-  raf = requestAnimationFrame(tick);
+  requestPaint();
   document.addEventListener('visibilitychange', visibility);
 });
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf);
   stop();
+  cancelAnimationFrame(raf);
   document.removeEventListener('visibilitychange', visibility);
   if (objectURL) URL.revokeObjectURL(objectURL);
 });
@@ -675,10 +805,13 @@ async function waitUntilRendered() {
       ) {
         waiting = requestAnimationFrame(check);
       } else {
-        // tick was scheduled first: this RAF observes a canvas painted with the
-        // settled media frame and current selected landmarks, not only Vue DOM.
         clearTimeout(timeout);
-        resolve();
+        try {
+          paint();
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
       }
     };
     waiting = requestAnimationFrame(check);
@@ -688,7 +821,7 @@ defineExpose({
   canvas,
   seekToTime,
   waitUntilRendered,
-  isEnded: () => ['completed', 'cancelled', 'truncated', 'failed'].includes(offlineState.value),
+  isEnded: offlineEnded,
   chooseFile: () => input.value?.click(),
   reset: () => {
     stop();
@@ -713,7 +846,14 @@ defineExpose({
       ref="video"
       playsinline
       muted
-      @error="emit('status', '视频预览不可用，请重新选择视频；离线分析会独立检查解码支持。')"
+      @loadeddata="requestPaint"
+      @seeked="requestPaint"
+      @emptied="requestPaint"
+      @error="
+        source === 'file' &&
+        filename &&
+        emit('status', '视频预览不可用；仍可尝试离线分析或更换视频。')
+      "
     />
     <input ref="input" type="file" :accept="VIDEO_ACCEPT" hidden @change="fileChange" />
     <div class="stage-top"
@@ -757,14 +897,7 @@ defineExpose({
       ><ScanLine class="spin" :size="24" /><span>{{
         source === 'file' ? '正在检查并准备本地视频…' : '正在准备本地推理引擎…'
       }}</span
-      ><button
-        v-if="source === 'file'"
-        @click="
-          stop();
-          emit('status', '已取消视频准备，请重新选择视频。');
-        "
-        >取消准备</button
-      ></div
+      ><button v-if="source === 'file'" @click="cancelPreparation">取消准备</button></div
     >
     <div v-if="source === 'file' && filename" class="offline-progress" role="status">
       <button @click="input?.click()">更换视频</button>
@@ -773,17 +906,23 @@ defineExpose({
           {
             idle: '待分析',
             preparing: '准备中',
-            running: '逐帧分析中',
+            running: sampled ? '长视频抽样中' : '逐帧分析中',
             paused: '已暂停',
             completed: '全部完成',
+            sampled: '全片抽样完成',
             cancelled: '已取消 · 前缀',
             truncated: '上限截断',
             failed: '失败 · 前缀',
           }[offlineState]
         }}
-        · {{ processed }} / {{ offlineMetadata?.total ?? '—' }} 帧</span
+        · {{ processed }} / {{ offlineMetadata?.sampleTotal ?? '—' }} 帧
+        <template v-if="sampled">（源视频 {{ offlineMetadata?.total }} 帧）</template></span
       >
-      <progress :value="processed" :max="offlineMetadata?.total || 1" aria-label="逐帧分析进度" />
+      <progress
+        :value="processed"
+        :max="offlineMetadata?.sampleTotal || 1"
+        aria-label="视频分析进度"
+      />
       <button
         v-if="['preparing', 'running', 'paused'].includes(offlineState)"
         @click="job?.cancel()"

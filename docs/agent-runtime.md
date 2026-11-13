@@ -8,11 +8,11 @@
 
 DeepSeek 页面总超时为 120 秒，最多 12 次模型请求、24 次工具调用和 3 次恢复。页面通过 `/__models/catalog` 读取已配置模型，并用同源 `/__models/probe` 或 `/__models/complete` 发起请求。代理嵌入 Vite 开发及生产预览进程，校验 socket 回环、本机精确 Host、相同 Origin 和 Sec-Fetch-Site。模型和官方端点由 Node 配置，请求体上限 256000 字节，单请求上限 60 秒，供应商响应上限 1 MB。浏览器断开、取消和服务关闭时中止上游。供应商错误以固定代码返回，代理不记录请求内容。既有 `/__deepseek/*` 路由保留兼容原 DeepSeek 客户端。
 
-本机可用 `pnpm dev` 或构建后用 `pnpm preview`，通过 Ctrl+C 结束。项目也提供 `node scripts/start-demo.mjs --no-open`、生产预览及 `node scripts/stop-demo.mjs`。云端代理需要回环 Node 服务。Node 优先读取进程环境，其次读取项目根目录的 `.env`，DeepSeek 在 Windows 上还可读取用户级环境变量。密钥由 Node 管理，页面获取模型配置状态。逐次供应商实际返回的模型标识及指纹进入本地审计，缺失指纹记为 null。
+本机可用 `pnpm dev` 或构建后用 `pnpm preview`，通过 Ctrl+C 结束。项目也提供 `node scripts/start-demo.mjs --no-open`、生产预览及 `node scripts/stop-demo.mjs`。云端代理需要回环 Node 服务。页面临时 Key 随业务或探测请求发给本机代理，代理仅使用对应的官方端点。服务配置优先读取进程环境，其次读取项目根目录的 `.env`，DeepSeek 在 Windows 上还可读取用户级环境变量。逐次供应商实际返回的模型标识及指纹进入本地审计，缺失指纹记为 null。
 
 完成分析需要匹配当前任务的真实工具结果；比较、最终视图、报告和导出分别核验。UI 应用和审计失败不能被模型的一次 completed 声明掩盖。
 
-Ollama 连接测试检查本地模型的 tools 能力，再发起结构化探测。页面使用 Ollama 的 JSON Schema 模式约束工具调用，按会话读取、规格声明、业务执行和结果提交开放工具。模型声明的动作与变更被转换为原有任务规格和补丁。模型用 `view: "comparison"` 绑定图表时，追问中的比较范围和侧别变更会同步到该图表。最终提交按工具选本轮真实证据，交由同一完成检查校验。原始媒体在浏览器本地处理。
+Ollama 连接测试检查本地模型的 tools 能力，再发起结构化探测。CLI 评测和页面使用 Ollama 的 JSON Schema 模式约束工具调用，按会话读取、规格声明、业务执行和结果提交开放工具。模型声明的动作与变更被转换为原有任务规格和补丁。「比较前后各 N 秒」这类明确表述约束两段分别锚定采样起点和终点。模型用 `view: "comparison"` 绑定图表时，追问中的比较范围和侧别变更会同步到该图表。追问明确请求绝对区间的 CSV 时，补丁要求模型单独填写该范围。最终提交按工具选本轮真实证据，交由同一完成检查校验。原始媒体在浏览器本地处理。
 
 Node 对照评测使用 `node scripts/evaluate-agent.mjs --provider deepseek --model deepseek-flash --case compare --repeat 1 --max-business-requests 12 --max-business-ms 120000 --output .qa/core-work/<唯一目录>/compare.json`；quality 必须另开一次独立评测。凭据仅从该 Node 进程的 `DEEPSEEK_API_KEY` 环境变量读取，不支持密钥命令行参数，不进入配置/正文/审计，不导入页面。地址固定为 `https://api.deepseek.com`；现有 run-agent-screen.mjs 原始记录器仍仅支持 Ollama，并在 IO 前拒绝其他 provider。
 

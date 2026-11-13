@@ -1,16 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import type { AnalysisSession, SessionInfo } from '../analysis/session.ts';
 import type { createToolRegistry } from '../analysis/tools.ts';
+import { sourceClock, sourceLabel, sourceTimeSpan } from '../analysis/sourceDisplay.ts';
 import { OllamaProvider } from '../agent/provider.ts';
-import { cloudProviders } from '../agent/modelCatalog.ts';
+import { cloudProviderIds, cloudProviders, modelNotes } from '../agent/modelCatalog.ts';
 import type { ProviderId } from '../agent/modelCatalog.ts';
-import {
-  choiceKey,
-  createProvider,
-  providerNames,
-  useAgentModels,
-} from '../agent/useAgentModels.ts';
+import { choiceKey, providerNames, useAgentModels } from '../agent/useAgentModels.ts';
 import { CloudPageProvider, modelError } from '../agent/providers/cloudPage.ts';
 import type { ModelReply } from '../agent/provider.ts';
 import { AgentRuntime } from '../agent/runtime.ts';
@@ -52,8 +48,16 @@ const {
   settingsStatus,
   choice,
   selected,
+  selectedConfigured,
+  ready,
+  temporaryKey,
+  keyValid,
+  customModel,
+  customModelValid,
+  selectCustom,
+  createProvider,
   options,
-  cloud,
+  cloudOptions,
   select,
   openSettings,
   refresh,
@@ -64,13 +68,10 @@ const {
   dispose,
 } = useAgentModels();
 const localOptions = computed(() => options.value.filter((item) => item.provider === 'ollama'));
-const cloudOptions = computed(() => options.value.filter((item) => item.provider !== 'ollama'));
-const unconfigured = computed(
-  () =>
-    Object.keys(cloudProviders).filter(
-      (id) => !cloud.value.some((p) => p.provider === id && p.models.length),
-    ) as (keyof typeof cloudProviders)[],
-);
+const activeCloud = computed(() => {
+  const provider = selected.value?.provider;
+  return provider && provider !== 'ollama' ? cloudProviders[provider] : undefined;
+});
 const running = ref(false);
 let submissionCheck: AbortController | undefined;
 watch(
@@ -90,6 +91,12 @@ function changeModel(event: Event) {
     if (!running.value) error.value = '';
   }
 }
+function testSelected() {
+  const item = selected.value;
+  if (!item || !ready.value || running.value || testing.value) return;
+  openSettings(item.provider);
+  void testConnection();
+}
 const exampleGoal = '比较已采样数据前后各 5 秒的左右膝 filtered ROM，并展示覆盖两段的图表';
 const goal = ref(exampleGoal);
 const runs = shallowRef<AgentRun[]>([]);
@@ -98,8 +105,9 @@ const error = ref('');
 const dismissedRuns = new Set<string>();
 const draftProvider = computed(() => {
   const item = selected.value;
-  if (item?.provider === 'ollama') return new OllamaProvider(item.address!, item.model);
-  return item?.provider === 'deepseek' ? createProvider(item) : undefined;
+  if (!item || !ready.value) return undefined;
+  if (item.provider === 'ollama') return new OllamaProvider(item.address!, item.model);
+  return createProvider(item);
 });
 const lastRomCard = shallowRef<RomCardExecution & { runId: string }>();
 const freeReview = shallowRef<FreeRomReview>();
@@ -137,11 +145,13 @@ const statusNames: Record<string, string> = {
   failed: '失败',
   limit: '已达上限',
 };
-const range = computed(() =>
-  props.info.range
-    ? `${props.info.range[0].toFixed(2)}–${props.info.range[1].toFixed(2)} s`
-    : '暂无采样',
-);
+const dateTime = new Intl.DateTimeFormat('zh-CN', {
+  dateStyle: 'medium',
+  timeStyle: 'medium',
+});
+const reportedModels = (run: AgentRun) => [
+  ...new Set(responseMetadata.value[run.id]?.map((response) => response.model)),
+];
 const stale = (run: AgentRun) =>
   run.reference.sessionId !== props.info.sessionId ||
   run.reference.revision !== props.info.revision;
@@ -156,6 +166,9 @@ const evidenceCalls = (run: AgentRun) =>
   );
 const artifactCalls = (run: AgentRun) =>
   run.calls.filter((c) => c.output.ok && ['prepare_report', 'prepare_export'].includes(c.name));
+const hasEvidenceCard = (run: AgentRun, id: string) =>
+  evidenceCalls(run).some((call) => call.id === id) ||
+  artifactCalls(run).some((call) => call.id === id);
 function locate(call: CallRecord, second = false, interval?: [number, number]) {
   if (!call.output.ok) return;
   const result = call.output.result as any;
@@ -165,7 +178,12 @@ function locate(call: CallRecord, second = false, interval?: [number, number]) {
   const selection = call.name === 'get_quality_summary' ? metric.selection : metric;
   const input = { sessionId: ev.sessionId, revision: ev.revision };
   const selectedInterval = interval ?? ev.interval;
-  const outputs = [props.tools.execute('seek_to_time', { ...input, time: selectedInterval[0] })];
+  const outputs = [
+    props.tools.execute('seek_to_time', {
+      ...input,
+      time: interval?.[0] ?? ev.sampledRange?.[0] ?? selectedInterval[0],
+    }),
+  ];
   if (selection?.joint)
     outputs.push(
       props.tools.execute('set_chart_view', {
@@ -215,7 +233,7 @@ watch(
 async function submit() {
   const item = selected.value;
   const task = goal.value;
-  if (!item || !task.trim() || running.value || testing.value) return;
+  if (!item || !ready.value || !task.trim() || running.value || testing.value) return;
   const submission = {
     submittedAt: Date.now(),
     monotonicAt: performance.now(),
@@ -318,6 +336,17 @@ function cancel() {
   submissionCheck?.abort();
   runtime.cancel();
 }
+function clearTemporaryKey() {
+  temporaryKey.value = '';
+}
+watch(
+  temporaryKey,
+  (_, previous) => {
+    if (previous.trim() && running.value) cancel();
+    error.value = '';
+  },
+  { flush: 'sync' },
+);
 function clear() {
   for (const run of runs.value) if (run.status === 'running') dismissedRuns.add(run.id);
   runtime.clear();
@@ -338,7 +367,9 @@ async function saveAudit(run: AgentRun) {
     error.value = `审计读取失败：${e instanceof Error ? e.message : '未知错误'}`;
   }
 }
+onMounted(() => window.addEventListener('pagehide', clearTemporaryKey));
 onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', clearTemporaryKey);
   dispose();
   cancel();
   runtime.clear();
@@ -347,6 +378,20 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="agent-panel">
+    <div class="panel agent-source">
+      <h2>当前分析素材</h2>
+      <p class="source-name"
+        >{{ sourceLabel(info)
+        }}<span v-if="info.source !== 'demo' && info.synthetic"> · 合成素材</span></p
+      >
+      <p
+        >{{ sourceClock(info) }} ·
+        <template v-if="info.range"
+          >已采样 {{ sourceTimeSpan(info.range) }} · {{ info.sampleCount }} 帧</template
+        >
+        <template v-else>暂无采样</template></p
+      >
+    </div>
     <RomTaskCard
       :provider="draftProvider"
       :session="session"
@@ -361,13 +406,7 @@ onBeforeUnmount(() => {
     />
 
     <div class="panel goal-panel">
-      <div class="agent-header"
-        ><h2>让工具完成分析目标</h2
-        ><span
-          >{{ info.synthetic ? 'SYNTHETIC · 合成演示' : '本地采集' }} · {{ info.sampleCount }} 帧 ·
-          {{ range }}</span
-        ></div
-      >
+      <div class="agent-header"><h2>让工具完成分析目标</h2></div>
       <p
         >分析时自动暂停采集。支持接续修改区间或侧别；改变会话版本后重新取数。可定位图表、准备报告和
         CSV，成果卡保存文件；只分析不会下载。</p
@@ -424,16 +463,17 @@ onBeforeUnmount(() => {
                   >Ollama · 查看配置</option
                 >
               </optgroup>
-              <optgroup label="云端">
+              <optgroup
+                v-for="provider in cloudProviderIds"
+                :key="provider"
+                :label="providerNames[provider]"
+              >
                 <option
-                  v-for="item in cloudOptions"
+                  v-for="item in cloudOptions.filter((item) => item.provider === provider)"
                   :key="choiceKey(item)"
                   :value="choiceKey(item)"
                 >
                   {{ item.model }} · {{ providerNames[item.provider] }}
-                </option>
-                <option v-for="id in unconfigured" :key="id" :value="'settings:' + id">
-                  {{ providerNames[id] }} · 待配置
                 </option>
               </optgroup>
             </select>
@@ -444,13 +484,95 @@ onBeforeUnmount(() => {
             @click="settings = !settings"
             >模型设置</el-button
           >
+        </div>
+        <details class="model-guide">
+          <summary>首次连接？查看连接指南</summary>
+          <ol v-if="selected?.provider !== 'ollama'">
+            <li
+              >在项目目录运行
+              <code>pnpm dev</code
+              >，用终端显示的本机地址打开页面。静态网页版可以采集和分析，云端模型需要本机服务。</li
+            >
+            <li
+              >在上方选择云端模型，从
+              <a
+                v-if="activeCloud"
+                :href="activeCloud.keys"
+                target="_blank"
+                rel="noopener noreferrer"
+                >{{ activeCloud.name }} 控制台</a
+              >
+              <template v-else>所选供应商的开发者控制台</template>
+              创建 API Key，确认账户有 API 额度和模型权限。</li
+            >
+            <li
+              >将 Key 粘贴到下方，再点击「测试当前模型连接」。显示「已连接」后即可发送分析任务。</li
+            >
+          </ol>
+          <ol v-else>
+            <li>启动本机 Ollama，并用 <code>ollama list</code> 确认已安装支持工具的模型。</li>
+            <li
+              >在「模型设置」确认本机地址（默认
+              <code>http://127.0.0.1:11434</code>），刷新列表后选中模型。</li
+            >
+            <li>点击「测试当前模型连接」。第一次载入模型可能需要等待片刻。</li>
+          </ol>
+        </details>
+        <template v-if="selected && selected.provider !== 'ollama'">
+          <p v-if="modelNotes[selected.model]">{{ modelNotes[selected.model] }}</p>
+          <div class="agent-key">
+            <label>
+              {{ providerNames[selected.provider] }} 官方 API Key
+              <input
+                v-model="temporaryKey"
+                aria-label="临时 API Key"
+                aria-describedby="agent-key-note"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                :placeholder="selectedConfigured ? '可选，优先使用临时 Key' : '粘贴官方 API Key'"
+                :disabled="running || testing || !!cloudError"
+              />
+            </label>
+            <el-button :disabled="!temporaryKey" @click="clearTemporaryKey">清除 Key</el-button>
+          </div>
+          <p id="agent-key-note" class="agent-key-note">
+            仅本页临时使用，刷新后清除。{{
+              selectedConfigured ? '留空时使用已配置的服务密钥。' : ''
+            }}
+          </p>
+          <p v-if="cloudError" class="agent-error" role="status">{{ cloudError }}</p>
+          <p
+            v-else-if="
+              settingsConfig?.provider === selected.provider &&
+              settingsConfig.missing.some((name) => name.endsWith('_ENDPOINT'))
+            "
+            class="agent-error"
+            role="status"
+          >
+            官方端点配置无效。请在「模型设置 → 服务配置」查看需要修正的变量。
+          </p>
+          <p
+            v-else-if="temporaryKey.trim() && (!keyValid || temporaryKey.trim() === selected.model)"
+            class="agent-error"
+            role="status"
+            >请输入有效的官方 API Key。</p
+          >
+        </template>
+        <div class="goal-actions">
+          <el-button
+            v-if="selected && !settings"
+            :disabled="!ready || running || testing"
+            @click="testSelected"
+            >测试当前模型连接</el-button
+          >
           <el-button :disabled="running || !runs.length" @click="clear">清空上下文</el-button>
           <el-button v-if="running" type="danger" @click="cancel">取消分析</el-button>
           <el-button
             v-else
             type="primary"
             native-type="submit"
-            :disabled="!selected || !goal.trim() || testing"
+            :disabled="!ready || !goal.trim() || testing"
             >发送</el-button
           >
         </div>
@@ -480,7 +602,7 @@ onBeforeUnmount(() => {
           <h3>模型设置</h3>
           <span
             class="connection-status"
-            :class="{ connected: settingsStatus === '可发送' }"
+            :class="{ connected: settingsStatus === '已连接' }"
             role="status"
             >{{ settingsStatus }}</span
           >
@@ -506,6 +628,18 @@ onBeforeUnmount(() => {
             /></label>
             <el-button @click="applyAddress">应用地址</el-button>
           </template>
+          <template v-else>
+            <label>
+              自定义模型 ID
+              <input
+                v-model="customModel"
+                maxlength="200"
+                placeholder="输入官方模型 ID"
+                @keydown.enter.prevent="selectCustom"
+              />
+            </label>
+            <el-button :disabled="!customModelValid" @click="selectCustom">选择此模型</el-button>
+          </template>
           <label v-if="settingsOptions.length"
             >模型 ID
             <select v-model="testModel" aria-label="设置中的模型 ID">
@@ -521,28 +655,38 @@ onBeforeUnmount(() => {
           未找到已安装的本地模型。运行 <code>ollama list</code> 检查，安装支持 tools 的模型后刷新。
         </p>
         <template v-if="settingsProvider !== 'ollama'">
+          <p>
+            预设为已适配接口的官方模型 ID，实际可用版本取决于 API Key 所属账户。
+            也可填写支持工具调用的官方模型 ID 或快照 ID，再测试连接。
+            <a
+              :href="cloudProviders[settingsProvider].docs"
+              target="_blank"
+              rel="noopener noreferrer"
+              >查看官方模型文档</a
+            >
+          </p>
           <p v-if="settingsConfig"
             >官方地址 <code>{{ settingsConfig.endpoint }}</code></p
           >
           <p v-if="cloudError">{{ cloudError }}</p>
-          <p v-if="settingsConfig?.missing.length"
-            >请检查 <code>{{ settingsConfig.missing.join('、') }}</code
-            >。</p
-          >
-          <p>
-            在 <code>{{ envFile }}</code> 设置
-            <code>{{ cloudProviders[settingsProvider].prefix }}_API_KEY</code> 与
-            <code>{{ cloudProviders[settingsProvider].prefix }}_MODELS</code>（账户可用的模型
-            ID，多个用逗号分隔）。
-            {{
-              settingsProvider === 'deepseek' ? 'DeepSeek 的模型列表默认包含 deepseek-flash。' : ''
-            }}
-            如需指定官方端点，设置
-            <code>{{ cloudProviders[settingsProvider].prefix }}_ENDPOINT</code>。 保存后重启本机
-            Node 服务（<code>pnpm dev</code> 或 <code>pnpm preview</code>），然后刷新模型列表。
-          </p>
+          <details>
+            <summary>服务配置（可选）</summary>
+            <p v-if="settingsConfig?.missing.length"
+              >请检查 <code>{{ settingsConfig.missing.join('、') }}</code
+              >。</p
+            >
+            <p>
+              在 <code>{{ envFile }}</code> 设置
+              <code>{{ cloudProviders[settingsProvider].prefix }}_API_KEY</code> 与
+              <code>{{ cloudProviders[settingsProvider].prefix }}_MODELS</code>（可选，多个模型 ID
+              用逗号分隔；留空使用首个预设）。 若 Key 属于国际版智谱或
+              Kimi，需配置对应地区的官方端点。变量为
+              <code>{{ cloudProviders[settingsProvider].prefix }}_ENDPOINT</code>。 保存后重启本机
+              Node 服务（<code>pnpm dev</code> 或 <code>pnpm preview</code>），然后刷新模型列表。
+            </p>
+          </details>
           <p
-            >云端接收任务指令和必要的有界工具反馈。姿态数据、计算、图表与导出留在本机。测试连接会发送一条探测请求，可能产生费用。</p
+            >云端接收任务指令和必要的工具反馈。视频、原始关键点、计算、图表与导出留在本机。测试连接会调用所选模型，可能产生费用。</p
           >
         </template>
         <div class="goal-actions">
@@ -590,6 +734,22 @@ onBeforeUnmount(() => {
           }}
           个请求）</template
         ></p
+      >
+      <p class="source-name"
+        >{{ sourceLabel(run.reference)
+        }}<span v-if="run.reference.source !== 'demo' && run.reference.synthetic"> · 合成素材</span>
+        · {{ sourceClock(run.reference) }}</p
+      >
+      <p class="run-meta"
+        >执行开始 {{ dateTime.format(run.startedAt) }}（本机时间） ·
+        <template v-if="run.reference.range">
+          当时已采样 {{ sourceTimeSpan(run.reference.range) }} · {{ run.reference.sampleCount }} 帧
+        </template>
+        <template v-else>当时暂无采样</template>
+        · 版本 {{ run.reference.revision }}</p
+      >
+      <p v-if="reportedModels(run).length" class="run-meta"
+        >API 返回模型 {{ reportedModels(run).join('、') }}</p
       >
       <p v-if="run.status === 'running'" role="status">{{ run.phase }}</p>
       <p v-if="run.conversationCosts" class="run-meta">
@@ -640,10 +800,14 @@ onBeforeUnmount(() => {
       >
       <AgentTaskSpec v-if="run.task" :task="run.task" />
       <p v-if="run.romCard" class="run-meta"
-        >{{
-          run.romCard.entry === 'model-draft' ? '模型草拟，用户审阅确认' : '手动填写，用户确认'
-        }}
-        · 证据由浏览器本地工作流关联</p
+        >{{ run.romCard.entry === 'model-draft' ? '模型草拟，用户审阅确认' : '手动填写，用户确认' }}
+        · 证据由浏览器本地工作流关联
+        <template v-if="run.romCard.draft">
+          · 草拟模型 {{ run.romCard.draft.model
+          }}<template v-if="run.romCard.draft.request.reply?.response">
+            · API 返回 {{ run.romCard.draft.request.reply.response.model }}</template
+          >
+        </template></p
       >
       <div v-if="run.completion" class="citation-list">
         <strong>本地完成检查 · {{ run.completion.state }}</strong>
@@ -667,22 +831,32 @@ onBeforeUnmount(() => {
             ? '本地工作流关联引用 · 值直接来自本地工具'
             : '已核验引用 · 值直接来自本地工具'
         }}</strong
-        ><p v-for="(citation, i) in run.citations" :key="i"
-          >{{ citation.callId }} {{ citation.path }} =
-          {{ citation.value === null ? '缺失' : citation.value }}</p
-        ></div
+        ><p v-for="(citation, i) in run.citations" :key="i">
+          <a
+            v-if="hasEvidenceCard(run, citation.callId)"
+            :href="`#agent-evidence-${citation.callId}`"
+            >{{ citation.callId }}</a
+          >
+          <span v-else>{{ citation.callId }}</span> {{ citation.path }} =
+          {{ citation.value === null ? '缺失' : citation.value }}
+        </p></div
       >
       <AgentEvidence
         v-for="call in evidenceCalls(run)"
         :key="call.id"
+        :id="`agent-evidence-${call.id}`"
         :call="call"
+        :source="run.reference"
         :disabled="invalid(run)"
         @locate="locate"
       />
       <AgentArtifact
         v-for="call in artifactCalls(run)"
         :key="call.id"
+        :id="`agent-evidence-${call.id}`"
         :call="call"
+        :run="run"
+        :reported-models="reportedModels(run)"
         :stale="invalid(run)"
         :tools="tools"
         @export="emit('export', $event)"
@@ -712,8 +886,18 @@ onBeforeUnmount(() => {
 }
 .goal-panel,
 .run-panel,
+.agent-source,
 .agent-empty {
   padding: 24px;
+}
+.agent-source {
+  padding-block: 16px;
+}
+.source-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: inherit;
+  overflow-wrap: anywhere;
 }
 .agent-header {
   display: flex;
@@ -821,6 +1005,36 @@ summary {
   flex: 1;
   min-width: 0;
   margin-top: 0;
+}
+.agent-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin-top: 14px;
+}
+.agent-key label {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.agent-key-note {
+  margin-top: 5px;
+}
+.model-guide {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--surface-muted);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.model-guide summary {
+  cursor: pointer;
+  color: var(--ink);
+}
+.model-guide ol {
+  margin: 8px 0 4px;
+  padding-inline-start: 1.6em;
+  line-height: 1.65;
 }
 .agent-model-settings {
   margin-top: 16px;

@@ -1,11 +1,21 @@
 import type { AnalysisParameters, Landmark, PoseFrame, Source } from '../types.ts';
+import { METRIC_VERSION } from '../types.ts';
 import { LandmarkFilter, measureFrame } from '../utils/poseMath.ts';
+import { SampleContinuity } from './sampleTiming.ts';
 
-export const METRIC_VERSION = '2.0' as const;
+export { METRIC_VERSION };
 export type SessionReference = { sessionId: string; revision: number };
 export interface Acquisition {
-  mode: 'webcodecs' | 'webcodecs-transcoded';
-  status: 'preparing' | 'running' | 'paused' | 'completed' | 'cancelled' | 'truncated' | 'failed';
+  mode: 'webcodecs' | 'webcodecs-transcoded' | 'webcodecs-sampled' | 'webcodecs-transcoded-sampled';
+  status:
+    | 'preparing'
+    | 'running'
+    | 'paused'
+    | 'completed'
+    | 'sampled'
+    | 'cancelled'
+    | 'truncated'
+    | 'failed';
   expectedFrames: number | null;
   processedFrames: number;
   codec: string;
@@ -14,11 +24,15 @@ export interface Acquisition {
 }
 export interface SessionInfo extends SessionReference {
   source: Source;
+  fileName?: string;
   synthetic: boolean;
   parameters: AnalysisParameters;
   range: [number, number] | null;
   sampleCount: number;
   acquisition: Acquisition | null;
+}
+export function modelSessionInfo({ fileName: _fileName, ...info }: SessionInfo) {
+  return info;
 }
 export function validateParameters(p: AnalysisParameters) {
   if (
@@ -43,7 +57,9 @@ export class AnalysisSession {
   private data: PoseFrame[] = [];
   private parameters: AnalysisParameters;
   private source: Source;
+  private fileName?: string;
   private filter = new LandmarkFilter();
+  private continuity = new SampleContinuity();
   private rawHistory: Landmark[][] = [];
   private filteredHistory: Landmark[][] = [];
   private times: number[] = [];
@@ -63,6 +79,7 @@ export class AnalysisSession {
       sessionId: this.id,
       revision: this.revision,
       source: this.source,
+      ...(this.fileName ? { fileName: this.fileName } : {}),
       synthetic: this.source === 'demo' || this.syntheticFile,
       parameters: { ...this.parameters },
       range: this.data.length ? [this.data[0].time, this.data.at(-1)!.time] : null,
@@ -82,15 +99,17 @@ export class AnalysisSession {
     this.filteredHistory = [];
     this.times = [];
   }
-  reset(source = this.source, parameters = this.parameters) {
+  reset(source = this.source, parameters = this.parameters, fileName = this.fileName) {
     validateParameters(parameters);
     this.id = globalThis.crypto.randomUUID();
     this.revision = 0;
     this.source = source;
+    this.fileName = source === 'file' ? fileName : undefined;
     this.parameters = { ...parameters };
     this.data = [];
     this.acquisition = null;
     this.syntheticFile = false;
+    this.continuity = new SampleContinuity();
     this.clearPipeline();
   }
   // Uploaded pixels can also be generated. Explicit provenance is versioned,
@@ -128,7 +147,11 @@ export class AnalysisSession {
   }
   private add(points: Landmark[], time: number) {
     const raw = points.map((p) => ({ ...p }));
-    if (!raw.length) this.clearPipeline();
+    const previous = this.data.at(-1);
+    const samplingGapLimit = previous
+      ? this.continuity.observe(time - previous.time, this.source === 'camera')
+      : null;
+    if (!raw.length || samplingGapLimit !== null) this.clearPipeline();
     const filtered = raw.length
       ? this.filter.apply(raw, this.parameters.window, this.parameters.threshold)
       : [];
@@ -144,13 +167,14 @@ export class AnalysisSession {
       measureFrame(
         filtered,
         time,
-        this.data.at(-1),
+        previous,
         this.filteredHistory,
         this.parameters.threshold,
         this.parameters.aspect,
         raw,
         this.rawHistory,
         [this.times[0] ?? time, time],
+        samplingGapLimit,
       ),
     );
   }
@@ -160,6 +184,7 @@ export class AnalysisSession {
     const samples = this.data;
     this.parameters = { ...parameters };
     this.data = [];
+    this.continuity = new SampleContinuity();
     this.clearPipeline();
     for (const f of samples) this.add(f.rawPoints, f.time);
     this.revision++;

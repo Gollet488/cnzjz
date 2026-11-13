@@ -1,4 +1,4 @@
-import type { Landmark, Settings } from '../types';
+import type { Angles, Landmark, Settings } from '../types';
 import { CONNECTIONS, JOINTS } from '../config';
 import { jointAngles, centerOfMass } from './poseMath';
 import { angleValue } from './poseMath';
@@ -12,6 +12,7 @@ export function renderPose(
   trail: ({ x: number; y: number } | null)[] = [],
   sourceAspect?: number,
   synthetic = !video,
+  measuredAngles?: Angles,
 ) {
   const ctx = canvas.getContext('2d')!;
   const w = canvas.width,
@@ -189,7 +190,8 @@ export function renderPose(
     ctx.stroke();
   }
   if (settings.labels) {
-    const angles = jointAngles(points, settings.threshold, dw / dh);
+    const angles =
+      measuredAngles ?? jointAngles(points, settings.threshold, sourceAspect ?? dw / dh);
     ctx.font = '500 14px sans-serif';
     const occupied: LabelBox[] = [];
     for (const { joint, index, channel } of LABEL_ANCHORS) {
