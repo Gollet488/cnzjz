@@ -1,5 +1,16 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, shallowReactive, reactive, watch, nextTick } from 'vue';
+import {
+  computed,
+  defineAsyncComponent,
+  defineComponent,
+  h,
+  ref,
+  shallowRef,
+  shallowReactive,
+  reactive,
+  watch,
+  nextTick,
+} from 'vue';
 import {
   LayoutDashboard,
   ChartNoAxesCombined,
@@ -40,8 +51,6 @@ import { ElMessage } from './ui';
 import PoseStage from './components/PoseStage.vue';
 import TimeChart from './components/TimeChart.vue';
 import MarkerTimeline from './components/MarkerTimeline.vue';
-import PoseCompare from './components/PoseCompare.vue';
-import AgentPanel from './components/AgentPanel.vue';
 import PoseCorrection from './components/PoseCorrection.vue';
 import { WorkspaceApplicationError } from './agent/completion.ts';
 import type { AgentRun } from './agent/runtime.ts';
@@ -49,17 +58,37 @@ import { DEFAULT_SETTINGS, JOINTS, MAX_FRAMES, POINT_NAMES } from './config';
 import { DEMO_SIZE } from './utils/dimensions';
 import { angleValue } from './utils/poseMath';
 import { METRIC_VERSION } from './analysis/session';
+import { sourceClock, sourceLabel, sourceTimeSpan } from './analysis/sourceDisplay';
 import { createToolRegistry } from './analysis/tools';
 import type { ChartView } from './analysis/tools';
 import { intervalFrames, timeBound } from './analysis/frameIndex';
 import { useSessionStore } from './composables/useSessionStore';
 import { useCSVExport } from './composables/useCSVExport';
 import { demoPose } from './utils/demo';
-import { exportReport } from './utils/export';
 import type { Landmark, Joint, Marker, PoseFrame, Source, Channel } from './types';
 import type { OfflineState, OfflineMetadata } from './video/protocol';
 
 const brandMark = `${import.meta.env.BASE_URL}favicon.svg`;
+const featureLoading = {
+  delay: 0,
+  loadingComponent: defineComponent({
+    inheritAttrs: false,
+    setup: () => () => h('p', { class: 'panel feature-status', role: 'status' }, '正在加载功能…'),
+  }),
+  errorComponent: defineComponent({
+    inheritAttrs: false,
+    setup: () => () =>
+      h('p', { class: 'panel feature-status', role: 'alert' }, '功能加载失败，请刷新页面重试。'),
+  }),
+};
+const PoseCompare = defineAsyncComponent({
+  ...featureLoading,
+  loader: () => import('./components/PoseCompare.vue'),
+});
+const AgentPanel = defineAsyncComponent({
+  ...featureLoading,
+  loader: () => import('./components/AgentPanel.vue'),
+});
 const nav = [
   { id: 'workspace', label: '采集与分析', icon: LayoutDashboard },
   { id: 'analysis', label: '时序可视化', icon: ChartNoAxesCombined },
@@ -88,9 +117,12 @@ const joint = ref<Joint>('knee'),
   selectedIndex = ref(-1);
 const pointIndex = ref(15),
   pointBasis = ref<'raw' | 'filtered'>('filtered');
-const analysisMounted = ref(false);
+const analysisMounted = ref(false),
+  agentMounted = ref(false);
+const noMarkers: Marker[] = [];
 watch(page, (value) => {
   if (value === 'analysis') analysisMounted.value = true;
+  if (value === 'agent') agentMounted.value = true;
 });
 const stage = ref<InstanceType<typeof PoseStage>>();
 const { session, frames, sessionInfo, summaryIndex, publishSession, publication } = useSessionStore(
@@ -163,6 +195,8 @@ const analysisTools = createToolRegistry(session, {
   },
 });
 let origin: number | null = null;
+let cameraOffset = 0;
+let lastCameraCaptureAt = 0;
 // Corrections need every accepted camera sample, including invalid readings
 // between the batched publications used by charts and the rest of the workspace.
 const correctionCamera = shallowReactive<{ frame?: PoseFrame }>({});
@@ -196,7 +230,9 @@ const latest = computed(() =>
 const duration = computed(() => frames.value.at(-1)?.time ?? 0);
 const confidence = computed(() => (latest.value ? latest.value.confidence * 100 : 0));
 const lowConfidenceCount = computed(
-  () => latest.value?.points.filter((p) => p.visibility < settings.threshold).length ?? 0,
+  () =>
+    latest.value?.points.filter((p) => p.visibility <= 0 || p.visibility < settings.threshold)
+      .length ?? 0,
 );
 const wholeSummary = computed(() => {
   void frames.value;
@@ -260,14 +296,14 @@ function capture(
   time: number,
   aspect: number,
   frameSource: Source,
-  accept?: (sampleTime?: number) => void,
+  accept?: (frame?: PoseFrame) => void,
 ) {
-  let acceptedTime: number | undefined;
+  let acceptedFrame: PoseFrame | undefined;
   try {
     if (!playing.value || frameSource !== source.value) return;
     if (source.value === 'camera') {
       if (origin === null) origin = time;
-      time -= origin;
+      time = time - origin + cameraOffset;
     }
     if (session.frames.length >= MAX_FRAMES && source.value !== 'file') {
       playing.value = false;
@@ -284,13 +320,16 @@ function capture(
     }
     try {
       if (!session.append(points, time)) return;
-      acceptedTime = time;
+      acceptedFrame = session.frames.at(-1);
     } catch (error) {
       playing.value = false;
       ElMessage.error(`样本未写入：${error instanceof Error ? error.message : '未知错误'}`);
       return;
     }
-    if (source.value === 'camera') correctionCamera.frame = session.frames.at(-1);
+    if (source.value === 'camera') {
+      lastCameraCaptureAt = performance.now();
+      correctionCamera.frame = acceptedFrame;
+    }
     publication.schedule();
     selectedIndex.value = -1;
     if (session.frames.length >= MAX_FRAMES && source.value !== 'file') {
@@ -298,7 +337,7 @@ function capture(
       ElMessage.warning('已达到 18,000 帧上限，请导出或重置后继续。');
     }
   } finally {
-    accept?.(acceptedTime);
+    accept?.(acceptedFrame);
   }
 }
 function changeSource(value: Source) {
@@ -314,19 +353,21 @@ function changeSource(value: Source) {
     playing.value = true;
   }
 }
-function reset(resume = true) {
+function reset(resume = true, fileName?: string) {
   cancelCSV();
   publication.cancel();
   playing.value = false;
-  session.reset(source.value, {
-    ...session.info().parameters,
-    threshold: settings.threshold,
-    window: settings.window,
-  });
+  session.reset(
+    source.value,
+    { ...session.info().parameters, threshold: settings.threshold, window: settings.window },
+    fileName,
+  );
   if (source.value === 'file') session.setFileSynthetic(syntheticFile.value);
   publishSession();
   markers.value = [];
   origin = null;
+  cameraOffset = 0;
+  lastCameraCaptureAt = 0;
   message.value = '';
   selectedIndex.value = -1;
   clipStart.value = null;
@@ -416,13 +457,29 @@ function status(text: string) {
   message.value = text;
 }
 function ready(name: string) {
-  if (source.value === 'file') reset(false);
+  if (source.value === 'file') reset(false, name);
+  if (source.value === 'camera') {
+    const previous = session.frames.at(-1);
+    // A replacement stream starts its media clock again at zero.
+    if (previous) {
+      cameraOffset =
+        previous.time + Math.max(0.001, (performance.now() - lastCameraCaptureAt) / 1000);
+      origin = null;
+    }
+  }
   sessionName.value = name;
 }
 function offlineStatus(state: OfflineState, metadata: OfflineMetadata | null) {
   if (source.value !== 'file' || state === 'idle') return;
+  const sampled = metadata && metadata.sampleTotal < metadata.total;
   session.setAcquisition({
-    mode: metadata?.transcoded ? 'webcodecs-transcoded' : 'webcodecs',
+    mode: metadata?.transcoded
+      ? sampled
+        ? 'webcodecs-transcoded-sampled'
+        : 'webcodecs-transcoded'
+      : sampled
+        ? 'webcodecs-sampled'
+        : 'webcodecs',
     status: state,
     expectedFrames: metadata?.total ?? null,
     processedFrames: session.frames.length,
@@ -459,6 +516,8 @@ async function report() {
       )
         throw new Error('报告画面或区间已改变，请重新生成。');
     };
+    assertCurrent();
+    const { exportReport } = await import('./utils/export');
     assertCurrent();
     await reportStage.waitUntilRendered();
     assertCurrent();
@@ -591,7 +650,7 @@ defineExpose({ analysisTools, sessionInfo });
                 : page === 'analysis'
                   ? '从变化中，读懂运动。'
                   : page === 'compare'
-                    ? '并肩观察，量化差异。'
+                    ? '姿态对比'
                     : page === 'agent'
                       ? '从目标，到有据的分析。'
                       : '把观察，变成可用的数据。'
@@ -602,14 +661,14 @@ defineExpose({ analysisTools, sessionInfo });
                 : page === 'analysis'
                   ? '探索关节角度、重心与时序变化，所有指标均来自本次会话。'
                   : page === 'compare'
-                    ? '使用你提供的两段视频，观察姿态序列的几何相似程度。'
+                    ? '找出同一动作在哪个关节、哪个时刻出现差异。'
                     : page === 'agent'
                       ? '由模型动态选择本地工具，以真实计算结果完成分析目标。'
                       : '将原始关键点与计算指标带入你的下一步研究。'
             }}</p></div
           ><div class="heading-actions"
             ><span class="local-badge"><i />浏览器本地运行</span
-            ><el-button @click="exportOpen = true"
+            ><el-button v-if="page !== 'compare'" @click="exportOpen = true"
               ><Download :size="15" />导出数据<ChevronDown :size="13" /></el-button></div
         ></div>
 
@@ -635,7 +694,11 @@ defineExpose({ analysisTools, sessionInfo });
                 >{{ frames.length.toLocaleString() }}<span>帧</span
                 ><span class="metric-badge">{{ display(fps, 0) }} FPS</span></div
               ><small
-                >33 个姿态关键点 / 帧
+                >{{
+                  source === 'demo' || !latest
+                    ? '最多 33 个姿态关键点 / 帧'
+                    : `当前帧可用 ${latest.points.length - lowConfidenceCount} / 33 个关键点`
+                }}
                 <span class="quiet"
                   >· {{ source === 'demo' ? '演示序列' : '单人姿态' }}</span
                 ></small
@@ -721,13 +784,19 @@ defineExpose({ analysisTools, sessionInfo });
               ><span class="capture-quality"
                 ><i
                   class="mini-dot"
-                  :class="confidence >= settings.threshold * 100 ? 'green-dot' : 'red-dot'"
+                  :class="
+                    latest?.points.length === 33 && !lowConfidenceCount ? 'green-dot' : 'red-dot'
+                  "
                 />{{
                   source === 'demo'
                     ? '合成序列 · 非推理结果'
-                    : confidence < settings.threshold * 100
-                      ? '置信度偏低，请调整光照与遮挡'
-                      : '单人姿态 · 本地分析'
+                    : !latest
+                      ? '等待采集'
+                      : !latest.points.length
+                        ? '当前帧无可用姿态'
+                        : lowConfidenceCount
+                          ? '部分关键点可用'
+                          : '单人姿态 · 本地分析'
                 }}</span
               ></div
             >
@@ -742,8 +811,11 @@ defineExpose({ analysisTools, sessionInfo });
                     ><button class="icon-button reset-button" aria-label="重置会话" @click="reset()"
                       ><RotateCcw :size="16" /></button></el-tooltip
                   ><button class="text-button" @click="recalculate">重算指标</button
-                  ><button v-if="source === 'file'" class="text-button" @click="redecode"
-                    >重新逐帧分析</button
+                  ><button v-if="source === 'file'" class="text-button" @click="redecode">{{
+                    sessionInfo.acquisition?.mode.endsWith('-sampled')
+                      ? '重新抽样分析'
+                      : '重新逐帧分析'
+                  }}</button
                   ><span class="transport-divider" /><button class="text-button" @click="mark"
                     ><Flag :size="14" />手动打点</button
                   ><button
@@ -863,7 +935,7 @@ defineExpose({ analysisTools, sessionInfo });
           ><Info :size="15" />{{
             lowConfidenceCount
           }}
-          个关键点低于置信阈值，相关关节角度留空。请调整光照、遮挡或拍摄视角。</div
+          个关键点不可用，仍记录可测关节；缺失角度留空。请检查光照、遮挡和拍摄视角。</div
         >
         <div v-if="clipRange && (page === 'workspace' || page === 'analysis')" class="clip-banner"
           ><Scissors :size="15" />当前片段 {{ clipRange[0].toFixed(2) }}–{{
@@ -925,7 +997,7 @@ defineExpose({ analysisTools, sessionInfo });
               :frames="visibleFrames"
               :revision="sessionInfo.revision"
               :joint="joint"
-              :markers="[]"
+              :markers="noMarkers"
               :interval="range"
               kind="center"
               :active="page === 'workspace' || page === 'analysis'"
@@ -989,7 +1061,7 @@ defineExpose({ analysisTools, sessionInfo });
               :frames="rangeFrames"
               :revision="sessionInfo.revision"
               :joint="joint"
-              :markers="[]"
+              :markers="noMarkers"
               kind="heatmap"
               :active="page === 'analysis'"
             /><div class="info-line"
@@ -1068,6 +1140,7 @@ defineExpose({ analysisTools, sessionInfo });
         />
 
         <AgentPanel
+          v-if="agentMounted"
           v-show="page === 'agent'"
           :active="page === 'agent'"
           @manual="page = 'workspace'"
@@ -1095,8 +1168,10 @@ defineExpose({ analysisTools, sessionInfo });
               }}</h2
             >
             <p
-              >回看位置 {{ display(latest?.time, 3) }} s · 图表区间
-              {{ agentChart?.interval.join('–') ?? '完整会话' }} s</p
+              >{{ sourceLabel(sessionInfo) }} · {{ sourceClock(sessionInfo) }} · 回看位置
+              {{ display(latest?.time, 6) }} s · 图表区间
+              <template v-if="!agentChart">完整会话 · </template>
+              {{ sourceTimeSpan(agentChart?.interval ?? sessionInfo.range) }}</p
             >
             <TimeChart
               ref="agentTimeChart"
@@ -1261,7 +1336,7 @@ defineExpose({ analysisTools, sessionInfo });
           ><p
             >单目 2D
             投影角度不是真实三维角度，不等同专业动捕。左右髋中点只是重心近似。遮挡、光照和视角都会影响置信度；仅检测单人，多人会干扰结果。系统不识别运动类型、不判断动作对错、不内置运动知识库。连续分析最多
-            18,000 帧。</p
+            18,000 帧。超过上限的本地视频会抽样覆盖全片，帧间快速动作可能漏采。</p
           ><a
             href="https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker/web_js"
             target="_blank"

@@ -12,6 +12,7 @@ import { createToolRegistry } from '../src/analysis/tools.ts';
 import type { ChartView } from '../src/analysis/tools.ts';
 import { AgentRuntime } from '../src/agent/runtime.ts';
 import { AGENT_PROTOCOL_VERSION } from '../src/agent/controlProtocol.ts';
+import { CONSTRAINED_SYSTEM_PROMPT } from '../src/agent/modelProtocol.ts';
 import type { AgentRun } from '../src/agent/runtime.ts';
 import type { ModelProvider } from '../src/agent/provider.ts';
 import {
@@ -629,6 +630,93 @@ async function outputPath(name = 'evaluation.json') {
   temporaryDirectories.push(directory);
   return join(directory, name);
 }
+
+test('Ollama evaluation forwards the browser Agent tool mode through its instrumentation', async () => {
+  const output = await outputPath();
+  const options = parseEvaluationArgs([
+    '--case',
+    'compare',
+    '--repeat',
+    '1',
+    '--model',
+    'fixture',
+    '--output',
+    output,
+  ]);
+  const businessTools: string[] = [];
+  const { record, exitCode } = await evaluateProtocol(options, {
+    async fetch(url: string, request: RequestInit) {
+      if (new URL(url).pathname === '/api/show') return Response.json({ capabilities: ['tools'] });
+      const body = JSON.parse(String(request.body));
+      assert.ok(body.format);
+      assert.equal(body.tools, undefined);
+      const variants = body.format.properties.calls.items.anyOf;
+      assert.equal(variants.length, businessTools.length === 2 ? 2 : 1);
+      const [{ properties }] = variants;
+      const [tool] = properties.tool.enum;
+      const reply = (calls: { tool: string; values: object }[]) =>
+        Response.json({
+          done: true,
+          message: { role: 'assistant', content: JSON.stringify({ calls }) },
+        });
+      if (tool === 'connection_check') return reply([{ tool, values: { echo: 'kinetic' } }]);
+      assert.equal(body.messages[0].content, CONSTRAINED_SYSTEM_PROMPT);
+      businessTools.push(tool);
+      if (tool === 'get_session_info') return reply([{ tool, values: {} }]);
+      if (tool === 'set_task_spec') {
+        assert.equal(body.format.properties.calls.maxItems, 1);
+        const fields = properties.values.properties;
+        assert.equal(fields.sources, undefined);
+        assert.deepEqual(fields.interval.properties.anchor.enum, ['start']);
+        assert.deepEqual(fields.second.properties.anchor.enum, ['end']);
+        return reply([
+          {
+            tool,
+            values: {
+              actions: ['comparison', 'view'],
+              ...select,
+              interval: { anchor: 'start', seconds: 5 },
+              second: { anchor: 'end', seconds: 5 },
+              metrics: ['rom'],
+              view: 'comparison',
+            },
+          },
+        ]);
+      }
+      if (tool === 'compare_intervals')
+        return reply(
+          variants.map(({ properties }: any) => ({
+            tool: properties.tool.enum[0],
+            values: { taskRef: properties.values.properties.taskRef.enum[0] },
+          })),
+        );
+      assert.equal(tool, 'finish_analysis');
+      const evidence = properties.values.properties.evidence.properties;
+      return reply([
+        {
+          tool,
+          values: {
+            outcome: 'completed',
+            messageCode: 'evidence_ready',
+            evidence: {
+              compare_intervals: evidence.compare_intervals.items.enum,
+              set_chart_view: [evidence.set_chart_view.items.enum[0]],
+            },
+          },
+        },
+      ]);
+    },
+  });
+  assert.equal(exitCode, 0, record.error ?? JSON.stringify(record.runs[0]?.assessment));
+  assert.deepEqual(businessTools, [
+    'get_session_info',
+    'set_task_spec',
+    'compare_intervals',
+    'finish_analysis',
+  ]);
+  assert.equal(record.config.systemPrompt.content, CONSTRAINED_SYSTEM_PROMPT);
+  assert.equal(record.status, 'executed_protocol_only');
+});
 
 // Deterministic provider for the script orchestration contract, never model quality.
 function protocolProvider(failBusiness = false) {

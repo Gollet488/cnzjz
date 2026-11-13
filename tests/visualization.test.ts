@@ -1,6 +1,33 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { peakDisplaySeries, peakDisplayTrajectory } from '../src/utils/visualization.ts';
+import {
+  peakDisplaySeries,
+  peakDisplayTrajectory,
+  seriesInterval,
+} from '../src/utils/visualization.ts';
+
+test('linked chart ranges retain inclusive endpoints, duplicates and gap points', () => {
+  const data = [
+    [0, 30],
+    [0.25, 31],
+    [0.25, 32],
+    [0.5, null],
+    [0.9, 35],
+    [1, 36],
+  ] as const;
+  for (const range of [
+    [0.25, 0.9],
+    [0.25, 0.25],
+    [0.3, 0.5],
+    [0, 1],
+    [2, 3],
+    [1, 0],
+  ] as [number, number][])
+    assert.deepEqual(
+      seriesInterval(data, range),
+      data.filter(([t]) => t >= range[0] && t <= range[1]),
+    );
+});
 
 test('display aggregation retains extrema, endpoints and missing breaks without changing source', () => {
   const data: [number, number | null][] = Array.from({ length: 18000 }, (_, i) => [
@@ -73,7 +100,7 @@ const session = () =>
     threshold: 0.5,
     window: 1,
     aspect: 850 / 590,
-    metricVersion: '2.0',
+    metricVersion: '2.1',
   });
 const make = (times: number[]) => {
   const s = session();

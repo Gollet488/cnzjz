@@ -18,7 +18,7 @@ const params = {
   threshold: 0.5,
   window: 5,
   aspect: DEMO_SIZE.width / DEMO_SIZE.height,
-  metricVersion: '2.0' as const,
+  metricVersion: '2.1' as const,
 };
 const absolute = (start: number, end: number) => ({ mode: 'absolute' as const, start, end });
 function fixture() {

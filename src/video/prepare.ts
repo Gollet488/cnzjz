@@ -1,6 +1,3 @@
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { readMP4 } from './mp4.ts';
-
 // Extensions supplement video/* because Windows often reports no video MIME for
 // MKV, TS, RMVB and other containers. Content, rather than the suffix, is decoded.
 export const VIDEO_ACCEPT =
@@ -15,6 +12,41 @@ export interface PreparedVideo {
   transcoded: boolean;
 }
 
+function canDecode(file: File, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const worker = new Worker(new URL('./probe.worker.ts', import.meta.url), { type: 'module' });
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+      worker.terminate();
+    };
+    const abort = () => {
+      finish();
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      finish();
+      reject(new Error('读取视频索引超时，请重新选择视频重试。'));
+    }, 30_000);
+    signal.addEventListener('abort', abort, { once: true });
+    worker.onmessage = ({ data }: MessageEvent<boolean>) => {
+      finish();
+      resolve(data);
+    };
+    worker.onerror = worker.onmessageerror = () => {
+      finish();
+      reject(new Error('视频格式检查启动失败，请重新选择视频重试。'));
+    };
+    try {
+      worker.postMessage(file);
+    } catch (error) {
+      finish();
+      reject(error);
+    }
+  });
+}
+
 export async function prepareVideo(
   file: File,
   signal: AbortSignal,
@@ -26,19 +58,11 @@ export async function prepareVideo(
   if (typeof VideoDecoder === 'undefined')
     throw new Error('此浏览器缺少 WebCodecs，请使用新版 Chrome/Edge 的 localhost 或 HTTPS。');
   status('正在检查视频格式…');
-  const checkpoint = async () => signal.throwIfAborted();
-  try {
-    const source = await readMP4(file, checkpoint);
-    const support = await VideoDecoder.isConfigSupported(source.config);
-    signal.throwIfAborted();
-    if (support.supported) return { file, transcoded: false };
-  } catch (error) {
-    signal.throwIfAborted();
-    // Unsupported containers/codecs/transforms are normalized below. A damaged
-    // input must also pass the converter and the normal MP4 validation.
-    if (error instanceof DOMException && error.name === 'AbortError') throw error;
-  }
+  if (await canDecode(file, signal)) return { file, transcoded: false };
+  signal.throwIfAborted();
   status('正在加载本地视频转换器…');
+  const { FFmpeg, FFFSType } = await import('@ffmpeg/ffmpeg');
+  signal.throwIfAborted();
   const ffmpeg = new FFmpeg();
   const abort = () => ffmpeg.terminate();
   signal.addEventListener('abort', abort, { once: true });
@@ -59,9 +83,13 @@ export async function prepareVideo(
     )
       diagnostic = message.slice(0, 240);
   });
+  let reported = -1;
   ffmpeg.on('progress', ({ progress }) => {
-    if (!signal.aborted)
-      status(`正在本机转换视频… ${Math.round(Math.max(0, Math.min(0.99, progress)) * 100)}%`);
+    if (signal.aborted || !Number.isFinite(progress)) return;
+    const percent = Math.round(Math.max(0, Math.min(0.99, progress)) * 100);
+    if (percent <= reported) return;
+    reported = percent;
+    status(`正在本机转换视频… ${percent}%`);
   });
   try {
     await ffmpeg.load({
@@ -76,13 +104,19 @@ export async function prepareVideo(
     // Do not use user-provided names as virtual FS paths or command options.
     const suffix = /\.([a-z0-9]{1,8})$/i.exec(file.name)?.[1] ?? 'video';
     const input = `input.${suffix}`;
-    await ffmpeg.writeFile(input, new Uint8Array(await file.arrayBuffer()));
+    await ffmpeg.createDir('/source');
+    const mounted = await ffmpeg.mount(
+      FFFSType.WORKERFS,
+      { blobs: [{ name: input, data: file }] },
+      '/source',
+    );
+    if (!mounted) throw new Error('转换器无法读取本地文件。');
     signal.throwIfAborted();
     status('正在本机转换视频…');
     const code = await ffmpeg.exec([
       '-xerror',
       '-i',
-      input,
+      `/source/${input}`,
       '-map',
       '0:v:0',
       '-an',
@@ -108,19 +142,19 @@ export async function prepareVideo(
       '1:1000000',
       '-video_track_timescale',
       '1000000',
-      '-movflags',
-      '+faststart',
       'output.mp4',
     ]);
     signal.throwIfAborted();
     if (code !== 0) throw new Error(diagnostic || `转换器返回 ${code}`);
     const data = await ffmpeg.readFile('output.mp4');
     if (typeof data === 'string') throw new Error('转换输出不是视频数据。');
-    const converted = new File([new Uint8Array(data)], file.name, { type: 'video/mp4' });
-    const source = await readMP4(converted, checkpoint);
-    const support = await VideoDecoder.isConfigSupported(source.config);
-    signal.throwIfAborted();
-    if (!support.supported) throw new Error('当前浏览器无法解码转换后的 H.264 视频。');
+    // The read buffer is transferred out of the converter. Release its WASM
+    // heap before validating the output index in a separate worker.
+    ffmpeg.terminate();
+    clearTimeout(timer);
+    const converted = new File([data as Uint8Array<ArrayBuffer>], file.name, { type: 'video/mp4' });
+    if (!(await canDecode(converted, signal)))
+      throw new Error('当前浏览器无法解码转换后的 H.264 视频。');
     return { file: converted, transcoded: true };
   } catch (error) {
     signal.throwIfAborted();
@@ -129,7 +163,7 @@ export async function prepareVideo(
       throw new Error(
         timedOut
           ? `视频转换器初始化超时（${CONVERTER_STARTUP_MS / 1000} 秒），已停止。请重新选择视频重试。`
-          : `视频转换器加载失败：${detail}。请刷新页面或重新选择视频重试。`,
+          : `视频转换器加载失败：${detail}。请重新选择视频重试。`,
         { cause: error },
       );
     throw new Error(

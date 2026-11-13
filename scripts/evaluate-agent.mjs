@@ -28,6 +28,7 @@ import {
   MODEL_PROTOCOL_VERSION,
   MODEL_INSTRUCTION_VERSION,
   MODEL_SYSTEM_PROMPT,
+  CONSTRAINED_SYSTEM_PROMPT,
 } from '../src/agent/modelProtocol.ts';
 import { TASK_CONTEXT_VERSION, CONTEXT_LIMITS } from '../src/agent/taskContext.ts';
 import { createToolRegistry } from '../src/analysis/tools.ts';
@@ -244,7 +245,9 @@ async function humanReplayMaterials(indexPath, caseIds) {
       Number(first.media_time_offset_s) !== entry.mediaTimeOffset
     )
       throw new Error(`HUMAN_REPLAY_METADATA:${allowed.id}`);
-    const session = replayCSV(rows); // Actual product session/filter/metrics, no inference.
+    // Recompute the current metrics from archived raw data; the old derived
+    // columns were already audited against their own version.
+    const session = replayCSV(rows, { verifyDerived: false });
     session.setAcquisition({
       mode: 'webcodecs',
       status: 'completed',
@@ -494,6 +497,7 @@ function restoreFrame(row) {
     rawVelocity: angles('raw', 'velocity_deg_s'),
     variance: { raw: variance('raw'), filtered: filteredVariance },
     windowInterval: [number('window_start_s'), number('window_end_s')],
+    samplingGapLimit: null, // No acquisition-time gap flag in the frozen 2.0 export.
     center: row.center_x === '' ? null : { x: number('center_x'), y: number('center_y') },
     confidence: number('confidence'),
     asymmetry: number('asymmetry_percent'),
@@ -915,7 +919,14 @@ export async function runEvaluation(options, dependencies = {}) {
   const deepseek = options.provider === 'deepseek';
   const scripted = !!(dependencies.provider || dependencies.fetch || dependencies.apiKey);
   const legacy = dependencies.modelProtocol === 'legacy-v2';
-  const prompt = legacy ? AGENT_SYSTEM_PROMPT : MODEL_SYSTEM_PROMPT;
+  const constrained =
+    !legacy &&
+    (dependencies.provider ? dependencies.provider.toolMode === 'constrained' : !deepseek);
+  const prompt = legacy
+    ? AGENT_SYSTEM_PROMPT
+    : constrained
+      ? CONSTRAINED_SYSTEM_PROMPT
+      : MODEL_SYSTEM_PROMPT;
   const config = {
     evaluationVersion: EVALUATION_VERSION,
     agentProtocolVersion: AGENT_PROTOCOL_VERSION,
@@ -1172,7 +1183,7 @@ export async function runEvaluation(options, dependencies = {}) {
                 options.model,
                 dependencies.fetch,
               )
-            : new OllamaProvider(options.address, options.model, dependencies.fetch));
+            : new OllamaProvider(options.address, options.model, dependencies.fetch, constrained));
       record.status = 'running';
       if (admittedProbe) {
         record.connectionProbe = { ...record.connectionProbe, ...admittedProbe };
@@ -1276,6 +1287,7 @@ export async function runEvaluation(options, dependencies = {}) {
           const instrumented = {
             id: provider.id,
             model: provider.model,
+            toolMode: provider.toolMode,
             requestBytes: provider.requestBytes?.bind(provider),
             async complete(request) {
               if (scenario.id === 'failure_recovery' && turnIndex === 0) {

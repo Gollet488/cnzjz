@@ -29,7 +29,7 @@ test('full downloaded CSV replay checks non-knee channels, raw/filtered coordina
     threshold: 0.5,
     window: 3,
     aspect: 9 / 16,
-    metricVersion: '2.0',
+    metricVersion: '2.1',
   });
   session.append(demoPose(0), 0);
   session.append(demoPose(0.1), 0.1);
@@ -56,7 +56,7 @@ test('download verification rejects an individually stale tool reference before 
     threshold: 0.5,
     window: 5,
     aspect: 1,
-    metricVersion: '2.0',
+    metricVersion: '2.1',
   });
   session.append(demoPose(0), 0);
   session.append(demoPose(1), 1);

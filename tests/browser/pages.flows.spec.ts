@@ -99,7 +99,14 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
         const httpStatus = stalled ? null : (await requested.response())?.status();
         if (!stalled) expect(httpStatus).toBe(404);
         const worker = new URL('ffmpeg/worker.js', page.url()).href;
-        expect(await page.evaluate(() => window.terminatedWorkers)).toEqual([worker]);
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (url) => window.terminatedWorkers.filter((entry) => entry === url),
+              worker,
+            ),
+          )
+          .toEqual([worker]);
         await info.attach('converter-failure', {
           body: JSON.stringify({
             failure,

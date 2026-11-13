@@ -100,7 +100,11 @@ export async function exportCSV(
   session: SessionInfo,
   options: CSVOptions = {},
 ) {
-  const name = `kinetic-${Date.now()}.csv`;
+  const source = (session.fileName ?? session.source).replace(/[<>:"/\\|?*\p{Cc}]/gu, '_');
+  const first = frames[0]?.time;
+  const last = frames.at(-1)?.time;
+  const times = first === undefined ? '' : `-${first}s${last === first ? '' : `-${last}s`}`;
+  const name = `kinetic-${[...source].slice(0, 32).join('')}${times}-${session.sessionId.slice(0, 8)}-r${session.revision}.csv`;
   const picker = (globalThis as { showSaveFilePicker?: SavePicker }).showSaveFilePicker;
   if (picker) {
     // Called directly from the click handler to retain transient user activation.

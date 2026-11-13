@@ -16,14 +16,14 @@ import { demoPose } from '../src/utils/demo.ts';
 import { taskFixture } from './agentFixtures.ts';
 
 const goal = '检查 filtered 左右肘 0–5 秒的有效样本、覆盖和连续缺失';
-function fixture() {
+function fixture(duration = 5) {
   const session = new AnalysisSession('demo', {
     threshold: 0.5,
     window: 5,
     aspect: 1,
-    metricVersion: '2.0',
+    metricVersion: '2.1',
   });
-  for (let i = 0; i <= 100; i++) {
+  for (let i = 0; i <= duration * 20; i++) {
     const points = demoPose(i / 20);
     // Different sides, local visibility gaps, plus full no-detection samples.
     if (i % 5 === 1) points[13]!.visibility = 0.1;
@@ -71,6 +71,294 @@ test('local quality declarations require the complete selection, global quality 
   const global = { ...spec, joint: null, channels: null, basis: null };
   assert.deepEqual(missingTaskFields(global), []);
   assert.doesNotThrow(() => validateTaskAnalysis(global));
+});
+
+test('a constrained quality task preserves a labelled absolute interval before binding tools', async () => {
+  const h = fixture();
+  const absoluteGoal = '请查询绝对区间 [1.01, 4.01] 秒内 raw 右膝角度的样本质量。';
+  const declaration = {
+    actions: ['quality'],
+    joint: 'knee',
+    basis: 'raw',
+    channels: ['right'],
+    metrics: [],
+    second: null,
+    view: null,
+  };
+  let specAttempts = 0;
+  const provider: ModelProvider = {
+    id: 'scripted-local-quality',
+    model: 'no-real-model',
+    toolMode: 'constrained',
+    async complete(request) {
+      const user = JSON.parse(request.messages.find((m) => m.role === 'user')!.content);
+      const offered = request.tools.map((tool) => tool.name);
+      if (offered.includes('get_session_info'))
+        return { calls: [{ name: 'get_session_info', arguments: {} }] };
+      if (offered.includes('set_task_spec')) {
+        const intervals = ['sampled', [1.01, 1.01], [1.01, 4.01]];
+        return {
+          calls: [
+            {
+              name: 'set_task_spec',
+              arguments: { ...declaration, interval: intervals[specAttempts++] },
+            },
+          ],
+        };
+      }
+      if (offered.includes('get_quality_summary'))
+        return {
+          calls: [{ name: 'get_quality_summary', arguments: { taskRef: user.bindings.taskRef } }],
+        };
+      const entries = user.availableEvidence.find(
+        (e: any) => e.tool === 'get_quality_summary',
+      ).entries;
+      return {
+        calls: [
+          {
+            name: 'finish_analysis',
+            arguments: {
+              outcome: 'completed',
+              messageCode: 'evidence_ready',
+              evidence: {
+                get_quality_summary: [
+                  entries.find((e: any) => e.label === 'selection.channels.0.coverage').evidenceId,
+                ],
+              },
+            },
+          },
+        ],
+      };
+    },
+  };
+  const runtime = new AgentRuntime({ session: h.session, registry: h.registry, provider });
+  const run = await runtime.run(absoluteGoal);
+  assert.equal(run.status, 'completed', run.message);
+  assert.equal(specAttempts, 3);
+  assert.match((run.calls[1]!.output as any).error.message, /\$\.interval/);
+  assert.match((run.calls[2]!.output as any).error.message, /TASK_SPEC_QUALITY_INTERVAL/);
+  const quality = run.calls.filter((call) => call.name === 'get_quality_summary');
+  assert.equal(quality.length, 1);
+  assert.deepEqual((quality[0]!.arguments as any).interval, [1.01, 4.01]);
+});
+
+const historicalQualityGoals = [
+  '请检查 35.01–40.01 秒 raw 右膝角度的样本质量。给出实际采样范围、有效样本数、无效样本数和帧覆盖率，说明分母与限制，并引用有效数、无效数和覆盖率。',
+  '请查询 raw 右膝角度在第 35.01 秒到第 40.01 秒的样本质量（绝对区间 [35.01, 40.01]）。请引用有效样本数、无效样本数和帧覆盖率。',
+];
+const rightKneeQuality = {
+  actions: ['quality'],
+  joint: 'knee',
+  basis: 'raw',
+  channels: ['right'],
+  metrics: [],
+  second: null,
+  view: null,
+};
+const qualityLabels = ['validSamples', 'invalidSamples', 'coverage'];
+
+function scriptedQuality(declare: (tool: string, user: any) => object): ModelProvider {
+  return {
+    id: 'scripted-local-quality',
+    model: 'no-real-model',
+    toolMode: 'constrained',
+    async complete(request) {
+      const user = JSON.parse(request.messages.find((m) => m.role === 'user')!.content);
+      const offered = request.tools.map((tool) => tool.name);
+      const call = (name: string, args: object) => ({ calls: [{ name, arguments: args }] });
+      if (offered.includes('get_session_info')) return call('get_session_info', {});
+      const declaration =
+        offered.find((name) => name === 'set_task_patch') ??
+        offered.find((name) => name === 'set_task_spec');
+      if (declaration) return call(declaration, declare(declaration, user));
+      if (offered.includes('get_quality_summary'))
+        return call('get_quality_summary', { taskRef: user.bindings.taskRef });
+      const entries = user.availableEvidence.find(
+        (item: any) => item.tool === 'get_quality_summary',
+      )?.entries;
+      return call(
+        'finish_analysis',
+        entries
+          ? {
+              outcome: 'completed',
+              messageCode: 'evidence_ready',
+              evidence: {
+                get_quality_summary: qualityLabels.map(
+                  (label) =>
+                    entries.find((entry: any) => entry.label === `selection.channels.0.${label}`)
+                      .evidenceId,
+                ),
+              },
+            }
+          : { outcome: 'needs_input', messageCode: 'specify_parameters', evidence: {} },
+      );
+    },
+  };
+}
+
+for (const [index, query] of [
+  ...historicalQualityGoals,
+  '想了解从 35.01 秒至 40.01 秒右膝 raw 角度的样本质量，请列出有效帧和覆盖率。',
+].entries()) {
+  test(`quality range replay ${index + 1} rejects substituted bounds before computing`, async () => {
+    const h = fixture(67);
+    const intervals = ['sampled', [35.01, 35.01], [35.01, 40.01]];
+    let attempts = 0;
+    const provider = scriptedQuality(() => ({
+      ...rightKneeQuality,
+      ...(index < 2 && attempts === 0
+        ? {
+            metrics: index === 1 ? ['coverage'] : [],
+            second: 'sampled',
+            view: 'sampled',
+          }
+        : {}),
+      interval: intervals[attempts++],
+    }));
+    const run = await new AgentRuntime({ session: h.session, registry: h.registry, provider }).run(
+      query,
+    );
+    const quality = run.calls.filter((call) => call.name === 'get_quality_summary');
+    const declarations = run.calls.filter((call) => call.name === 'set_task_spec');
+    const result = quality[0]?.output.ok ? (quality[0].output.result as any) : undefined;
+    assert.deepEqual(
+      {
+        accepted: declarations.map((call) => call.output.ok),
+        status: run.status,
+        bound: run.task?.spec.interval,
+        queried: (quality[0]?.arguments as any)?.interval,
+        evidenceRange: result?.evidence.interval,
+        sampledRange: result?.evidence.sampledRange,
+        sampleCount: result?.evidence.sampleCount,
+      },
+      {
+        accepted: [false, false, true],
+        status: 'completed',
+        bound: [35.01, 40.01],
+        queried: [35.01, 40.01],
+        evidenceRange: [35.01, 40.01],
+        sampledRange: [35.05, 40],
+        sampleCount: 100,
+      },
+    );
+    assert.deepEqual(
+      run.calls.map((call) => call.name),
+      [
+        'get_session_info',
+        'set_task_spec',
+        'set_task_spec',
+        'set_task_spec',
+        'get_quality_summary',
+        'finish_analysis',
+      ],
+    );
+    assert.deepEqual(quality[0]!.arguments, {
+      sessionId: h.session.info().sessionId,
+      revision: h.session.info().revision,
+      interval: [35.01, 40.01],
+      selection: { joint: 'knee', channels: ['right'], basis: 'raw' },
+    });
+    assert.equal(run.completion?.state, 'ready');
+    assert.deepEqual(
+      run.citations.map(({ callId, path, value }) => ({ callId, path, value })),
+      qualityLabels.map((label) => ({
+        callId: quality[0]!.id,
+        path: `/selection/channels/0/${label}`,
+        value: result.selection.channels[0][label],
+      })),
+    );
+  });
+}
+
+for (const [name, query, missing] of [
+  [
+    'conflicting ranges',
+    '请检查 raw 右膝在 35.01–40.01 秒或 36.01–41.01 秒的样本质量。',
+    ['interval'],
+  ],
+  ['missing selection', '请检查 35.01–40.01 秒膝关节的样本质量。', ['channels', 'basis']],
+] as const) {
+  test(`quality range ${name} needs clarification without querying samples`, async () => {
+    const h = fixture(67);
+    let attempts = 0;
+    const provider = scriptedQuality(() => {
+      attempts++;
+      if (name === 'conflicting ranges')
+        return {
+          ...rightKneeQuality,
+          interval: attempts === 1 ? [35.01, 40.01] : null,
+          unresolved: attempts === 1 ? [] : missing,
+        };
+      return {
+        ...rightKneeQuality,
+        interval: [35.01, 40.01],
+        channels: null,
+        basis: null,
+        unresolved: missing,
+      };
+    });
+    const run = await new AgentRuntime({ session: h.session, registry: h.registry, provider }).run(
+      query,
+    );
+    assert.equal(run.status, 'needs_input', run.message);
+    assert.equal(run.completion?.state, 'needs_input');
+    assert.deepEqual(run.completion?.missing, missing);
+    assert.deepEqual(
+      run.task?.spec.interval,
+      name === 'conflicting ranges' ? null : [35.01, 40.01],
+    );
+    assert.deepEqual(
+      run.calls.map((call) => [call.name, call.output.ok]),
+      [
+        ['get_session_info', true],
+        ...(name === 'conflicting ranges' ? [['set_task_spec', false]] : []),
+        ['set_task_spec', true],
+        ['finish_analysis', true],
+      ],
+    );
+    assert.deepEqual(run.citations, []);
+  });
+}
+
+test('quality scope retains full and relative selections and the unchanged fields in follow-ups', async () => {
+  const h = fixture(67);
+  let absoluteAttempts = 0;
+  const provider = scriptedQuality((tool, user) => {
+    if (tool === 'set_task_spec') return { ...rightKneeQuality, interval: 'sampled' };
+    if (user.goal.includes('末尾')) return { changes: { first: { anchor: 'end', seconds: 5 } } };
+    if (user.goal.includes('35.01'))
+      return { changes: { first: absoluteAttempts++ === 0 ? 'sampled' : [35.01, 40.01] } };
+    return { changes: { channels: ['left'] } };
+  });
+  const runtime = new AgentRuntime({ session: h.session, registry: h.registry, provider });
+  for (const [query, interval, channel, declarations] of [
+    ['请检查全片 raw 右膝样本质量。', [0, 67], 'right', [true]],
+    ['区间改成采样末尾 5 秒，其他照旧。', [62, 67], 'right', [true]],
+    ['区间改成 35.01-40.01 秒，其他照旧。', [35.01, 40.01], 'right', [false, true]],
+    ['只改左侧，区间和口径照旧。', [35.01, 40.01], 'left', [true]],
+  ] as const) {
+    const run = await runtime.run(query);
+    assert.equal(run.status, 'completed', run.message);
+    assert.equal(run.completion?.state, 'ready');
+    assert.deepEqual(
+      run.calls
+        .filter((call) => ['set_task_spec', 'set_task_patch'].includes(call.name))
+        .map((call) => call.output.ok),
+      declarations,
+    );
+    const quality = run.calls.filter((call) => call.name === 'get_quality_summary');
+    assert.equal(quality.length, 1);
+    assert.deepEqual(quality[0]!.arguments, {
+      sessionId: h.session.info().sessionId,
+      revision: h.session.info().revision,
+      interval,
+      selection: { joint: 'knee', channels: [channel], basis: 'raw' },
+    });
+    assert.ok(quality[0]!.output.ok);
+    assert.deepEqual((quality[0]!.output.result as any).evidence.interval, interval);
+    assert.equal(run.citations.length, qualityLabels.length);
+    assert.ok(run.citations.every(({ callId }) => callId === quality[0]!.id));
+  }
 });
 
 test('local quality completion requires both selected sides and basis; global evidence cannot substitute', () => {

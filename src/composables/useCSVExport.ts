@@ -56,18 +56,17 @@ export function useCSVExport({
     // Let PoseStage apply pause/acquisition metadata before fixing the revision.
     await nextTick();
     flush();
-    if (!visibleFrames().length) {
+    const reference = prepared?.reference ?? session.info();
+    const snapshot = prepared
+      ? intervalFrames(session.frames, prepared.interval)
+      : visibleFrames().slice();
+    if (!snapshot.length) {
       ElMessage.info('暂无可导出的数据。');
       csvState.value = 'idle';
       return;
     }
     const controller = new AbortController();
     csvController = controller;
-    const reference = prepared?.reference ?? session.info();
-    // Reference snapshot only; the frame objects are never cloned or edited by export.
-    const snapshot = prepared
-      ? intervalFrames(session.frames, prepared.interval)
-      : visibleFrames().slice();
     const markerSnapshot = markers.value.map((m) => ({ ...m }));
     csvState.value = 'writing';
     csvMessage.value = csvFileStream ? '选择保存位置后开始写入…' : '正在准备分块下载…';

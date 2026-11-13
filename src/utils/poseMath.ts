@@ -1,5 +1,9 @@
 import type { Landmark, Angles, PoseFrame, Joint, Channel, VarianceSummary } from '../types.ts';
 
+// A very short projection cannot establish a stable direction. This is a
+// geometry floor in units of source image height, not an accuracy estimate.
+const MIN_PROJECTED_SEGMENT = 0.005;
+
 // Monocular coordinates yield 2D projection angles, not anatomical 3D measurements.
 export function angle(a: Landmark, b: Landmark, c: Landmark, aspect = 1): number | null {
   if (![aspect, a.x, a.y, b.x, b.y, c.x, c.y].every(Number.isFinite) || aspect <= 0) return null;
@@ -7,10 +11,15 @@ export function angle(a: Landmark, b: Landmark, c: Landmark, aspect = 1): number
     uy = a.y - b.y,
     vx = (c.x - b.x) * aspect,
     vy = c.y - b.y;
-  const denominator = Math.hypot(ux, uy) * Math.hypot(vx, vy);
-  return denominator < 1e-10
-    ? null
-    : (Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / denominator))) * 180) / Math.PI;
+  const u = Math.hypot(ux, uy),
+    v = Math.hypot(vx, vy);
+  if (!Number.isFinite(u) || !Number.isFinite(v) || Math.min(u, v) < MIN_PROJECTED_SEGMENT)
+    return null;
+  const ax = ux / u,
+    ay = uy / u,
+    bx = vx / v,
+    by = vy / v;
+  return (Math.atan2(Math.abs(ax * by - ay * bx), ax * bx + ay * by) * 180) / Math.PI;
 }
 const midpoint = (a: Landmark, b: Landmark): Landmark => ({
   x: (a.x + b.x) / 2,
@@ -37,7 +46,10 @@ export function emptyAngles(): Angles {
   };
 }
 const reliable = (p: Landmark | undefined, threshold: number): boolean =>
-  !!p && [p.x, p.y, p.z, p.visibility].every(Number.isFinite) && p.visibility >= threshold;
+  !!p &&
+  [p.x, p.y, p.z, p.visibility].every(Number.isFinite) &&
+  p.visibility > 0 &&
+  p.visibility >= threshold;
 export function jointAngles(p: Landmark[], threshold = 0.5, aspect = 1): Angles {
   const result = emptyAngles();
   if (p.length !== 33) return result;
@@ -75,11 +87,29 @@ export function jointAngles(p: Landmark[], threshold = 0.5, aspect = 1): Angles 
         ? angle(p[a], p[b], p[c], aspect)
         : null;
     });
-  const spinePoints = [midpoint(p[11], p[12]), midpoint(p[23], p[24]), midpoint(p[27], p[28])];
-  const spine = spinePoints.every((v) => reliable(v, threshold))
-    ? angle(spinePoints[0], spinePoints[1], spinePoints[2], aspect)
+  const spine = [11, 12, 23, 24, 27, 28].every((i) => reliable(p[i], threshold))
+    ? angle(midpoint(p[11], p[12]), midpoint(p[23], p[24]), midpoint(p[27], p[28]), aspect)
     : null;
   result.spine = { midline: spine };
+  return result;
+}
+export function filteredJointAngles(
+  points: Landmark[],
+  raw: Angles,
+  threshold: number,
+  aspect: number,
+): Angles {
+  const result = jointAngles(points, threshold, aspect);
+  // Smoothed coordinates cannot rescue an angle that was unobservable in the
+  // current raw frame. Keep independently observable joints and sides.
+  for (const joint of JOINT_KEYS) {
+    if (joint === 'spine') {
+      if (raw.spine.midline === null) result.spine.midline = null;
+    } else {
+      for (const side of ['left', 'right'] as const)
+        if (raw[joint][side] === null) result[joint][side] = null;
+    }
+  }
   return result;
 }
 export function centerOfMass(p: Landmark[], threshold = 0.5): { x: number; y: number } | null {
@@ -156,8 +186,9 @@ function angularVelocity(current: Angles, previous: Angles | undefined, delta: n
     for (const side of channels(joint)) {
       const a = angleValue(current, joint, side),
         b = previous ? angleValue(previous, joint, side) : null;
-      const value =
+      const speed =
         a !== null && b !== null && Number.isFinite(delta) && delta > 0 ? (a - b) / delta : null;
+      const value = speed !== null && Number.isFinite(speed) ? speed : null;
       if (joint === 'spine') result.spine.midline = value;
       else if (side !== 'midline') result[joint][side] = value;
     }
@@ -173,11 +204,13 @@ export function measureFrame(
   rawPoints: Landmark[] = points,
   rawHistory: Landmark[][] = rawPoints === points ? history : [rawPoints],
   windowInterval: [number, number] = [time, time],
+  samplingGapLimit: number | null = null,
 ): PoseFrame {
   const valid = points.length === 33;
-  const angles = jointAngles(points, threshold, aspect),
-    rawAngles = jointAngles(rawPoints, threshold, aspect);
-  const delta = previous ? time - previous.time : 0;
+  const rawAngles = jointAngles(rawPoints, threshold, aspect);
+  const angles =
+    points === rawPoints ? rawAngles : filteredJointAngles(points, rawAngles, threshold, aspect);
+  const delta = previous && samplingGapLimit === null ? time - previous.time : 0;
   const velocity = angularVelocity(angles, previous?.angles, delta);
   const rawVelocity = angularVelocity(rawAngles, previous?.rawAngles, delta);
   // Each spine measurement is one midline value and never enters bilateral asymmetry.
@@ -204,6 +237,7 @@ export function measureFrame(
     rawVelocity,
     variance,
     windowInterval,
+    samplingGapLimit,
     center: centerOfMass(points, threshold),
     confidence: rawPoints.length === 33 ? rawPoints.reduce((s, p) => s + p.visibility, 0) / 33 : 0,
     asymmetry: diffs.length ? diffs.reduce((s, v) => s + v, 0) / diffs.length : null,

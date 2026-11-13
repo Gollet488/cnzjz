@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { AnalysisSession } from '../src/analysis/session.ts';
+import { AnalysisSession, METRIC_VERSION } from '../src/analysis/session.ts';
 import { createToolRegistry } from '../src/analysis/tools.ts';
 import { AgentRuntime } from '../src/agent/runtime.ts';
 import { OllamaProvider, localOllamaURL } from '../src/agent/provider.ts';
@@ -60,7 +60,7 @@ if (values.help || !values.model) {
       threshold: 0.5,
       window: 5,
       aspect: 1,
-      metricVersion: '2.0',
+      metricVersion: METRIC_VERSION,
     });
     for (let i = 0; i <= 400; i++)
       session.append(i >= 200 && i < 205 ? [] : demoPose(i / 20), i / 20);

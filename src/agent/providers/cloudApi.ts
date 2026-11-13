@@ -1,10 +1,12 @@
 import { chatMessages } from './deepseek.ts';
 import type { ModelCall, ModelMessage, ModelProvider, ModelReply } from '../provider.ts';
 import { ProviderResponseError } from '../provider.ts';
+import { usesChatReasoning } from '../modelCatalog.ts';
 import type { CloudProviderId } from '../modelCatalog.ts';
 
 type Provider = Exclude<CloudProviderId, 'deepseek'>;
 type Request = Parameters<ModelProvider['complete']>[0];
+type Replay = { prefix: object[]; output: object[]; callIds: string[]; context: string };
 
 function protocolError(): never {
   throw new Error('CLOUD_RESPONSE_PROTOCOL');
@@ -67,59 +69,82 @@ function messagesForClaude(messages: ModelMessage[]) {
   return { system: system.join('\n\n'), messages: turns };
 }
 
-// Node-only. Responses reasoning and native call IDs stay with the current task.
+// Node-only. Reasoning and native call IDs stay with the current task.
 // Each follow-up preserves the exact previous input prefix and response items.
 export class CloudApiProvider implements ModelProvider {
   readonly id: string;
   readonly model: string;
-  readonly #key: string;
+  readonly #key?: string;
   private readonly kind: Provider;
   private readonly endpoint: string;
   private readonly fetcher: typeof fetch;
-  private openai?: { prefix: object[]; output: object[]; callIds: string[]; context: string };
+  private readonly chatReasoning: boolean;
+  private replay?: Replay;
 
   constructor(options: {
     kind: Provider;
     model: string;
     endpoint: string;
-    key: string;
+    key?: string;
     fetcher?: typeof fetch;
   }) {
     this.kind = options.kind;
     this.id = options.kind + '-api';
     this.model = options.model;
+    this.chatReasoning = usesChatReasoning(options.kind, options.model);
     this.endpoint = options.endpoint;
     this.#key = options.key;
     this.fetcher = options.fetcher ?? fetch;
   }
 
-  private responseInput(messages: ModelMessage[]) {
+  private responseInput(messages: ModelMessage[], freshRequest: boolean) {
     const texts = messages.filter((m) => m.role === 'system' || m.role === 'user');
     const context = JSON.stringify(texts);
     const fresh = texts.map((m) => ({ role: m.role, content: m.content }));
-    if (!this.openai) return { context, input: fresh };
+    if (freshRequest || !this.replay) return { context, input: fresh };
     const results = new Map(
       messages.filter((m) => m.role === 'tool').map((m) => [m.toolCallId, m.content]),
     );
     return {
       context,
       input: [
-        ...this.openai.prefix,
-        ...this.openai.output,
-        ...this.openai.callIds.map((id) => ({
-          type: 'function_call_output',
-          call_id: id,
-          output: results.get(id) ?? '{"ok":false,"omitted":"No local result in this round"}',
-        })),
+        ...this.replay.prefix,
+        ...this.replay.output,
+        ...this.replay.callIds.map((id) => {
+          const output =
+            results.get(id) ?? '{"ok":false,"omitted":"No local result in this round"}';
+          return this.chatReasoning
+            ? { role: 'tool', tool_call_id: id, content: output }
+            : { type: 'function_call_output', call_id: id, output };
+        }),
         // The system prompt is constant. Only append changes to task bindings
         // and any runtime correction, after all pending tool results.
-        ...(this.openai.context === context ? [] : fresh.filter((m) => m.role === 'user')),
+        ...(this.replay.context === context ? [] : fresh.filter((m) => m.role === 'user')),
       ],
     };
   }
 
-  async complete({ messages, tools, signal }: Request): Promise<ModelReply> {
-    const responseInput = this.kind === 'openai' ? this.responseInput(messages) : undefined;
+  private chatThinkingOptions() {
+    if (!this.chatReasoning) return { thinking: { type: 'disabled' } };
+    if (this.kind === 'zhipu')
+      return { thinking: { type: 'enabled', clear_thinking: false }, reasoning_effort: 'low' };
+    return this.model.toLowerCase().startsWith('kimi-k3') ? { reasoning_effort: 'low' } : {};
+  }
+
+  complete(input: Request, key = this.#key): Promise<ModelReply> {
+    return this.requestCompletion(input, key);
+  }
+
+  private async requestCompletion(
+    { messages, tools, signal }: Request,
+    key?: string,
+    probe = false,
+  ): Promise<ModelReply> {
+    if (!key) throw new Error('CLOUD_CONFIGURATION');
+    const responseInput =
+      this.kind === 'openai' || this.chatReasoning
+        ? this.responseInput(messages, probe)
+        : undefined;
     const functions = tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -127,12 +152,13 @@ export class CloudApiProvider implements ModelProvider {
     }));
     const body = JSON.stringify({
       model: this.model,
-      ...(responseInput
+      ...(this.kind === 'openai'
         ? {
-            input: responseInput.input,
+            input: responseInput!.input,
             store: false,
             include: ['reasoning.encrypted_content'],
             max_output_tokens: 4096,
+            ...(probe && { tool_choice: { type: 'function', name: 'connection_check' } }),
             tools: functions.map((fn) => ({ type: 'function', strict: false, ...fn })),
           }
         : this.kind === 'anthropic'
@@ -145,9 +171,9 @@ export class CloudApiProvider implements ModelProvider {
               })),
             }
           : {
-              messages: chatMessages(messages),
-              max_tokens: 2048,
-              thinking: { type: 'disabled' },
+              messages: responseInput?.input ?? chatMessages(messages),
+              max_tokens: this.chatReasoning ? 8192 : 2048,
+              ...this.chatThinkingOptions(),
               tools: functions.map((fn) => ({ type: 'function', function: fn })),
               tool_choice: 'auto',
               stream: false,
@@ -156,8 +182,8 @@ export class CloudApiProvider implements ModelProvider {
     if (Buffer.byteLength(body) > 512_000) throw new Error('CLOUD_CONTEXT_LIMIT');
     const auth: Record<string, string> =
       this.kind === 'anthropic'
-        ? { 'x-api-key': this.#key, 'anthropic-version': '2023-06-01' }
-        : { Authorization: 'Bearer ' + this.#key };
+        ? { 'x-api-key': key, 'anthropic-version': '2023-06-01' }
+        : { Authorization: 'Bearer ' + key };
     let response: Response;
     try {
       response = await this.fetcher(this.endpoint, {
@@ -167,9 +193,9 @@ export class CloudApiProvider implements ModelProvider {
         body,
         signal,
       });
-    } catch {
+    } catch (error) {
       signal.throwIfAborted();
-      throw new Error('CLOUD_TRANSPORT');
+      throw new Error('CLOUD_TRANSPORT', { cause: error });
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
@@ -192,15 +218,20 @@ export class CloudApiProvider implements ModelProvider {
         if (size > 1_000_000) throw new Error('CLOUD_RESPONSE_LIMIT');
         content += decoder.decode(chunk.value, { stream: true });
       }
+    } catch (error) {
+      signal.throwIfAborted();
+      if (error instanceof Error && error.message === 'CLOUD_RESPONSE_LIMIT') throw error;
+      throw new Error('CLOUD_TRANSPORT', { cause: error });
     } finally {
       await reader.cancel().catch(() => {});
       reader.releaseLock();
     }
-    const data = jsonArguments((content + decoder.decode()).replaceAll(this.#key, '[REDACTED]'));
+    const data = jsonArguments((content + decoder.decode()).replaceAll(key, '[REDACTED]'));
     if (typeof data?.id !== 'string' || typeof data.model !== 'string') protocolError();
     let calls: ModelCall[];
     let reason: string;
-    if (responseInput) {
+    let output: object[] | undefined;
+    if (this.kind === 'openai') {
       reason = data.status;
       if (reason !== 'completed' || !Array.isArray(data.output)) protocolError();
       calls = data.output
@@ -210,14 +241,7 @@ export class CloudApiProvider implements ModelProvider {
             protocolError();
           return call(item.name, jsonArguments(item.arguments), item.call_id);
         });
-      const callIds = calls.map((c) => c.id!);
-      if (new Set(callIds).size !== callIds.length || calls.length > 8) protocolError();
-      this.openai = {
-        context: responseInput.context,
-        prefix: responseInput.input,
-        output: data.output,
-        callIds,
-      };
+      output = data.output;
     } else if (this.kind === 'anthropic') {
       reason = data.stop_reason;
       if (!['tool_use', 'end_turn'].includes(reason) || !Array.isArray(data.content))
@@ -254,8 +278,18 @@ export class CloudApiProvider implements ModelProvider {
           item.id,
         );
       });
+      if (this.chatReasoning) output = [choice.message];
     }
-    if (calls.length > 8) protocolError();
+    const callIds = calls.map((c) => c.id!);
+    if (calls.length > 8 || new Set(callIds).size !== callIds.length) protocolError();
+    if (!probe && responseInput && output) {
+      this.replay = {
+        context: responseInput.context,
+        prefix: responseInput.input,
+        output,
+        callIds,
+      };
+    }
     return {
       calls,
       usage: {
@@ -272,26 +306,30 @@ export class CloudApiProvider implements ModelProvider {
     };
   }
 
-  async probe(signal: AbortSignal) {
-    const reply = await this.complete({
-      signal,
-      messages: [
-        { role: 'user', content: '连接测试：请仅调用 connection_check，参数 echo 为 kinetic。' },
-      ],
-      tools: [
-        {
-          name: 'connection_check',
-          description: '验证结构化工具调用协议。',
-          inputSchema: {
-            type: 'object',
-            properties: { echo: { type: 'string', enum: ['kinetic'] } },
-            required: ['echo'],
-            additionalProperties: false,
+  async probe(signal: AbortSignal, key = this.#key) {
+    const reply = await this.requestCompletion(
+      {
+        signal,
+        messages: [
+          { role: 'user', content: '连接测试：请仅调用 connection_check，参数 echo 为 kinetic。' },
+        ],
+        tools: [
+          {
+            name: 'connection_check',
+            description: '验证结构化工具调用协议。',
+            inputSchema: {
+              type: 'object',
+              properties: { echo: { type: 'string', enum: ['kinetic'] } },
+              required: ['echo'],
+              additionalProperties: false,
+            },
+            outputSchema: { type: 'boolean' },
           },
-          outputSchema: { type: 'boolean' },
-        },
-      ],
-    });
+        ],
+      },
+      key,
+      true,
+    );
     if (
       reply.calls.length !== 1 ||
       reply.calls[0]?.name !== 'connection_check' ||

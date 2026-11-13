@@ -4,6 +4,7 @@ self.exports = {};
 const assets = new URL('./mediapipe/', self.location.href).href;
 importScripts(`${assets}vision_bundle.js`);
 let engine;
+let runningMode = 'VIDEO';
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === 'init') {
@@ -20,7 +21,14 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ type: 'ready' });
     } else if (data.type === 'detect') {
       try {
-        const result = engine.detectForVideo(data.bitmap, data.timestamp);
+        const mode = data.redetect ? 'IMAGE' : 'VIDEO';
+        if (mode !== runningMode) {
+          await engine.setOptions({ runningMode: mode });
+          runningMode = mode;
+        }
+        const result = data.redetect
+          ? engine.detect(data.bitmap)
+          : engine.detectForVideo(data.bitmap, data.timestamp);
         const points =
           result.landmarks[0]?.map((p) => ({
             x: p.x,
@@ -29,7 +37,9 @@ self.onmessage = async ({ data }) => {
             visibility: p.visibility ?? 0,
           })) ?? [];
         result.close();
-        self.postMessage({ type: 'result', points });
+        if (data.preview)
+          self.postMessage({ type: 'result', points, bitmap: data.bitmap }, [data.bitmap]);
+        else self.postMessage({ type: 'result', points });
       } finally {
         data.bitmap.close();
       }

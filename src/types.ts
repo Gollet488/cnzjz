@@ -1,3 +1,5 @@
+export const METRIC_VERSION = '2.1' as const;
+
 export interface Landmark {
   x: number;
   y: number;
@@ -14,7 +16,7 @@ export interface AnalysisParameters {
   threshold: number;
   window: number;
   aspect: number;
-  metricVersion: '2.0';
+  metricVersion: typeof METRIC_VERSION;
 }
 export interface VarianceSummary {
   value: number | null;
@@ -35,6 +37,8 @@ export interface PoseFrame {
   rawVelocity: Angles;
   variance: { raw: VarianceSummary; filtered: VarianceSummary };
   windowInterval: [number, number];
+  // Non-null only when the interval from the previous sample was rejected.
+  samplingGapLimit: number | null;
   center: { x: number; y: number } | null;
   confidence: number;
   asymmetry: number | null;

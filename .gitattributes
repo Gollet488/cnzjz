@@ -14,6 +14,11 @@
 .node-version text eol=lf
 .gitattributes text eol=lf
 .env.example text eol=lf
+# Preserve candidate bytes across checkouts regardless of core.autocrlf.
+*.patch text eol=lf
+*.md text eol=crlf
+docs/assets/cover-prompt.txt text eol=crlf
+public/pose-inference.worker.js text eol=crlf
 *.cmd text eol=crlf
 # Preserve upstream bytes for pinned resource hashes on every platform.
 public/mediapipe/** -text

@@ -1,7 +1,7 @@
 import { expect, type Page, type TestInfo } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
-import { AnalysisSession } from '../../src/analysis/session.ts';
+import { AnalysisSession, type Acquisition } from '../../src/analysis/session.ts';
 import { POINT_NAMES } from '../../src/config.ts';
 import { createToolRegistry } from '../../src/analysis/tools.ts';
 import { serializeCSV } from '../../src/utils/csv.ts';
@@ -142,13 +142,13 @@ export async function fullCSV(page: Page, info: TestInfo, name: string) {
   );
 }
 
-export function replayCSV(rows: Record<string, string>[]) {
+export function replayCSV(rows: Record<string, string>[], { verifyDerived = true } = {}) {
   const first = rows[0];
   const session = new AnalysisSession(first.source as any, {
     threshold: Number(first.confidence_threshold),
     window: Number(first.filter_window_frames),
     aspect: Number(first.source_aspect),
-    metricVersion: '2.0',
+    metricVersion: '2.1',
   });
   if (first.source === 'file' && first.synthetic === 'true') session.setFileSynthetic(true);
   for (const row of rows) {
@@ -162,24 +162,38 @@ export function replayCSV(rows: Record<string, string>[]) {
           ) as any);
     session.append(points, Number(row.time_s));
     const frame = session.frames.at(-1)!;
-    for (const [key, value] of [
-      ['filtered_knee_right_deg', frame.angles.knee.right],
-      ['filtered_knee_left_deg', frame.angles.knee.left],
-      ['raw_knee_right_deg', frame.rawAngles.knee.right],
-      ['filtered_knee_right_velocity_deg_s', frame.velocity.knee.right],
-      ['center_y', frame.center?.y ?? null],
-    ] as const) {
-      if (value === null) assert.equal(row[key], '');
-      else {
-        assert.notEqual(row[key], '');
-        assert.ok(Math.abs(Number(row[key]) - value) < 1e-8, `${key}: ${row[key]} != ${value}`);
+    if (verifyDerived)
+      for (const [key, value] of [
+        ['filtered_knee_right_deg', frame.angles.knee.right],
+        ['filtered_knee_left_deg', frame.angles.knee.left],
+        ['raw_knee_right_deg', frame.rawAngles.knee.right],
+        ['filtered_knee_right_velocity_deg_s', frame.velocity.knee.right],
+        ['center_y', frame.center?.y ?? null],
+      ] as const) {
+        if (value === null) assert.equal(row[key], '');
+        else {
+          assert.notEqual(row[key], '');
+          assert.ok(Math.abs(Number(row[key]) - value) < 1e-8, `${key}: ${row[key]} != ${value}`);
+        }
       }
-    }
     assert.equal(row.session_id, first.session_id);
     assert.equal(row.session_revision, first.session_revision);
     assert.equal(row.synthetic, first.synthetic);
   }
   return session;
+}
+
+function csvAcquisition(row: Record<string, string>): Acquisition | null {
+  if (!row.acquisition_mode) return null;
+  return {
+    mode: row.acquisition_mode as Acquisition['mode'],
+    status: row.acquisition_status as Acquisition['status'],
+    expectedFrames: row.source_expected_frames === '' ? null : Number(row.source_expected_frames),
+    processedFrames: Number(row.source_processed_frames),
+    codec: row.source_codec,
+    rotation: Number(row.source_rotation_deg),
+    mediaTimeOffset: Number(row.media_time_offset_s),
+  };
 }
 
 // Recompute every saved cell from raw points, including all joint channels,
@@ -190,16 +204,7 @@ export function replayFullCSV(rows: Record<string, string>[]) {
   const info = session.info();
   info.sessionId = first.session_id;
   info.revision = Number(first.session_revision);
-  if (first.acquisition_mode)
-    info.acquisition = {
-      mode: 'webcodecs',
-      status: first.acquisition_status as any,
-      expectedFrames: Number(first.source_expected_frames),
-      processedFrames: Number(first.source_processed_frames),
-      codec: first.source_codec,
-      rotation: Number(first.source_rotation_deg),
-      mediaTimeOffset: Number(first.media_time_offset_s),
-    };
+  info.acquisition = csvAcquisition(first);
   const markers = rows
     .filter((row) => row.markers)
     .map((row) => ({ time: Number(row.time_s), label: row.markers }));
@@ -256,6 +261,8 @@ export function rom(rows: Record<string, string>[], interval: number[], channel:
 // browser tool results. Random handles and new replay reference are normalized.
 export function verifyAudit(rows: Record<string, string>[], audit: any) {
   const session = replayCSV(rows);
+  const acquisition = csvAcquisition(rows[0]);
+  if (acquisition) session.setAcquisition(acquisition);
   const registry = createToolRegistry(session, {
     setChartView: (view) => view,
     seekToTime: (time) => ({

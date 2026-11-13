@@ -1,7 +1,7 @@
 import type { AgentRun } from './runtime.ts';
 import { checkedText, resolveCitation } from './runtime.ts';
 import { AGENT_PROTOCOL_VERSION, checkRenderedControl } from './controlProtocol.ts';
-import { AnalysisSession } from '../analysis/session.ts';
+import { AnalysisSession, METRIC_VERSION } from '../analysis/session.ts';
 import { createToolRegistry } from '../analysis/tools.ts';
 import type { ChartView, PreparedArtifact } from '../analysis/tools.ts';
 import { demoPose } from '../utils/demo.ts';
@@ -10,7 +10,7 @@ export const EVAL_PARAMETERS = {
   threshold: 0.5,
   window: 5,
   aspect: 1,
-  metricVersion: '2.0' as const,
+  metricVersion: METRIC_VERSION,
 };
 export function evaluationSession(empty = false) {
   const session = new AnalysisSession('demo', EVAL_PARAMETERS);

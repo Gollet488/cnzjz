@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { CloudApiProvider } from '../src/agent/providers/cloudApi.ts';
 import type { ModelMessage } from '../src/agent/provider.ts';
 import { cloudConfiguration } from '../scripts/cloud-model-config.mjs';
+import { fetchCloudModel } from '../scripts/cloud-transport.mjs';
 import { createDeepSeekMiddleware } from '../scripts/deepseek-proxy.mjs';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -19,6 +20,95 @@ const tools = [
   { name: call.name, description: 'ROM', inputSchema: { type: 'object' }, outputSchema: {} },
 ];
 const signal = new AbortController().signal;
+
+test('cloud transport retries one short explicit rejection and preserves long waits and auth errors', async (t) => {
+  const fetcher = t.mock.method(
+    globalThis,
+    'fetch',
+    async () => new Response(null, { status: 200 }),
+  );
+  const send = () => fetchCloudModel('https://api.openai.com/v1/responses', { signal });
+  const reply = (status: number, seconds: string) =>
+    new Response(null, { status, headers: { 'Retry-After': seconds } });
+  fetcher.mock.mockImplementationOnce(async () => reply(429, '0'));
+  assert.equal((await send()).status, 200);
+  assert.equal(fetcher.mock.callCount(), 2);
+  fetcher.mock.mockImplementationOnce(async () => reply(503, '120'));
+  assert.equal((await send()).status, 503);
+  fetcher.mock.mockImplementationOnce(async () => reply(401, '0'));
+  assert.equal((await send()).status, 401);
+  assert.equal(fetcher.mock.callCount(), 4);
+  fetcher.mock.mockImplementation(async () => reply(529, '0'));
+  assert.equal((await send()).status, 529);
+  assert.equal(fetcher.mock.callCount(), 6);
+});
+
+test('cloud retry stops when the user cancels and does not retry ambiguous transport failures', async (t) => {
+  const controller = new AbortController();
+  const fetcher = t.mock.method(globalThis, 'fetch', async () => {
+    controller.abort();
+    return new Response(null, { status: 503 });
+  });
+  const send = (signal: AbortSignal) =>
+    fetchCloudModel('https://api.openai.com/v1/responses', { signal });
+  await assert.rejects(send(controller.signal), { name: 'AbortError' });
+  assert.equal(fetcher.mock.callCount(), 1);
+  fetcher.mock.mockImplementation(async () => {
+    throw new TypeError('fetch failed');
+  });
+  await assert.rejects(send(signal), /fetch failed/);
+  assert.equal(fetcher.mock.callCount(), 2);
+});
+
+test('a server key alone enables the default preset; invalid region endpoints are never silently replaced', () => {
+  const config = cloudConfiguration(tmpdir(), () => '', {
+    OPENAI_API_KEY: 'example-configured-key',
+    ZHIPU_API_KEY: 'example-glm-key',
+    ZHIPU_ENDPOINT: 'https://api.z.ai/incorrect',
+  });
+  const openai = config.catalog.providers.find((p) => p.provider === 'openai')!;
+  assert.equal(openai.models.length, 1);
+  assert(config.create('openai', openai.models[0]));
+  assert(
+    config.catalog.providers
+      .find((p) => p.provider === 'zhipu')
+      ?.missing.includes('ZHIPU_ENDPOINT'),
+  );
+  assert.equal(config.create('zhipu', 'glm-5.3', 'example-temporary-key'), undefined);
+});
+
+test('GPT probe forces a real tool call without adding its response to analysis context', async () => {
+  const bodies: any[] = [];
+  const provider = new CloudApiProvider({
+    kind: 'openai',
+    model: 'gpt-test',
+    key: 'example-test-key',
+    endpoint: 'https://api.openai.com/v1/responses',
+    fetcher: async (_url, options) => {
+      const body = JSON.parse(String(options?.body));
+      bodies.push(body);
+      const probe = body.tools[0].name === 'connection_check';
+      return Response.json({
+        id: 'resp_test',
+        model: 'gpt-test',
+        status: 'completed',
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call_test',
+            name: probe ? 'connection_check' : call.name,
+            arguments: JSON.stringify(probe ? { echo: 'kinetic' } : call.arguments),
+          },
+        ],
+      });
+    },
+  });
+  assert.equal((await provider.probe(signal)).response?.model, 'gpt-test');
+  await provider.complete({ messages, tools, signal });
+  assert.deepEqual(bodies[0].tool_choice, { type: 'function', name: 'connection_check' });
+  assert.equal(bodies[1].tool_choice, undefined);
+  assert.deepEqual(bodies[1].input, messages);
+});
 
 test('GPT Responses replays native reasoning and function calls with matching bounded tool outputs', async () => {
   const bodies: any[] = [];
@@ -177,7 +267,67 @@ for (const kind of ['anthropic', 'zhipu', 'moonshot'] as const) {
   });
 }
 
-test('Node catalog is read-only and model selection cannot override credentials or endpoints', async () => {
+for (const [kind, model] of [
+  ['zhipu', 'glm-5.3'],
+  ['moonshot', 'kimi-k3.1-pro'],
+] as const) {
+  test(`${model} retains native thinking and matches tool IDs without exposing reasoning`, async () => {
+    const bodies: any[] = [];
+    const assistant = {
+      role: 'assistant',
+      content: null,
+      reasoning_content: 'upstream-context',
+      tool_calls: [
+        {
+          type: 'function',
+          id: 'call_native',
+          function: { name: call.name, arguments: '{ "joint": "knee" }' },
+        },
+      ],
+    };
+    const provider = new CloudApiProvider({
+      kind,
+      model,
+      endpoint:
+        kind === 'zhipu'
+          ? 'https://api.z.ai/api/paas/v4/chat/completions'
+          : 'https://api.moonshot.ai/v1/chat/completions',
+      key: 'test-secret',
+      fetcher: async (_url, options) => {
+        bodies.push(JSON.parse(String(options?.body)));
+        return Response.json({
+          id: 'resp_1',
+          model,
+          choices: [{ finish_reason: 'tool_calls', message: assistant }],
+        });
+      },
+    });
+    const reply = await provider.complete({ messages, tools, signal });
+    assert(!JSON.stringify(reply).includes(assistant.reasoning_content));
+    assert.deepEqual(reply.calls, [{ ...call, id: 'call_native' }]);
+    await provider.complete({
+      messages: [
+        ...messages,
+        { role: 'assistant', content: '', calls: reply.calls },
+        { role: 'tool', toolName: call.name, toolCallId: 'call_native', content: 'ROM 42' },
+      ],
+      tools,
+      signal,
+    });
+    assert.equal(bodies[0].reasoning_effort, 'low');
+    assert.deepEqual(
+      bodies[0].thinking,
+      kind === 'zhipu' ? { type: 'enabled', clear_thinking: false } : undefined,
+    );
+    assert.deepEqual(bodies[1].messages, [
+      ...bodies[0].messages,
+      assistant,
+      { role: 'tool', tool_call_id: 'call_native', content: 'ROM 42' },
+    ]);
+  });
+}
+
+test('Node proxy uses temporary credentials only for their task and official endpoint', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'kinetic-model-config-'));
   writeFileSync(
     join(root, '.env'),
@@ -196,10 +346,33 @@ test('Node catalog is read-only and model selection cannot override credentials 
   ]);
   assert.equal(config.create('openai', 'not-enabled'), undefined);
   assert.equal(config.catalog.providers.find((p) => p.provider === 'zhipu')?.missing.length, 0);
+  const localFetch = globalThis.fetch;
+  const temporaryKey = 'temporary-test-secret';
+  const upstream: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    assert.equal(url, 'https://api.openai.com/v1/responses');
+    assert.equal(new Headers(options.headers).get('authorization'), 'Bearer ' + temporaryKey);
+    assert.equal(options.redirect, 'error');
+    upstream.push(JSON.parse(String(options.body)).model);
+    return Response.json({
+      id: 'resp_test',
+      model: 'gpt-custom',
+      status: 'completed',
+      output: [
+        {
+          type: 'function_call',
+          name: call.name,
+          call_id: 'call_1',
+          arguments: JSON.stringify({ ...call.arguments, echo: temporaryKey }),
+        },
+      ],
+    });
+  });
   let calls = 0;
   const cloud = {
     ...config,
-    create(provider: string, model: string) {
+    create(provider: string, model: string, apiKey?: string) {
+      if (apiKey !== undefined) return config.create(provider, model, apiKey);
       if (provider !== 'openai' || model !== 'gpt-test') return;
       return {
         model,
@@ -220,7 +393,7 @@ test('Node catalog is read-only and model selection cannot override credentials 
   assert(addr && typeof addr !== 'string');
   const origin = 'http://127.0.0.1:' + addr.port;
   const post = (route: string, body: object, from = origin) =>
-    fetch(origin + '/__models/' + route, {
+    localFetch(origin + '/__models/' + route, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: from },
       body: JSON.stringify(body),
@@ -255,6 +428,31 @@ test('Node catalog is read-only and model selection cannot override credentials 
     assert.equal((await post('release', { task: request.task })).status, 200);
     assert.equal((await post('complete', followUp)).status, 409);
     assert.equal(calls, 2);
+
+    const temporary = {
+      ...request,
+      task: crypto.randomUUID(),
+      model: 'gpt-custom',
+      apiKey: temporaryKey,
+    };
+    assert.equal((await post('complete', temporary, 'https://other.invalid')).status, 403);
+    assert.equal((await post('complete', { ...temporary, apiKey: 'bad key' })).status, 400);
+    assert.equal(
+      (await post('complete', { ...temporary, endpoint: 'https://other.invalid' })).status,
+      400,
+    );
+    assert.deepEqual(upstream, []);
+    const reply = await post('complete', temporary);
+    assert.equal(reply.status, 200);
+    assert(!(await reply.text()).includes(temporaryKey));
+
+    const nextRound = { ...temporary, messages: followUp.messages };
+    assert.equal((await post('complete', { ...nextRound, apiKey: 'other-key' })).status, 409);
+    assert.equal((await post('complete', { ...nextRound, apiKey: undefined })).status, 409);
+    assert.equal((await post('complete', nextRound)).status, 200);
+    assert.deepEqual(upstream, ['gpt-custom', 'gpt-custom']);
+    assert.equal((await post('release', { task: temporary.task })).status, 200);
+    assert.equal((await post('complete', nextRound)).status, 409);
   } finally {
     proxy.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));

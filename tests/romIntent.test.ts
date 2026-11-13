@@ -115,6 +115,45 @@ test('real anchors resolve against the sampled range while ambiguous prose stays
   );
 });
 
+test('explicit ranges in a paraphrase bind to comparison, revision and delivery', () => {
+  const session = evaluationSession();
+  const goal = '用 filtered 口径看双膝 ROM：对照 5 到 10 秒和 15 到 20 秒，图表涵盖这两段。';
+  const followup = '改为右膝，后段换成第 12 到第 17 秒，前段照旧。';
+  const delivery = '沿用刚才的对照和图表，准备一份报告和 5 到 17 秒的 CSV。';
+  const bind = (text: string, previous?: Parameters<typeof bindRomIntent>[4]) =>
+    bindRomIntent(
+      parseRomIntent(text, previous?.input)!,
+      text,
+      session.info(),
+      session.frames,
+      previous,
+    );
+  const prior = (text: string, bound: ReturnType<typeof bindRomIntent>) => ({
+    input: bound.review.input,
+    task: {
+      runId: text,
+      goal: text,
+      spec: bound.review.proposed,
+      validation: 'structure_and_provenance_only' as const,
+    },
+  });
+  const initial = bind(goal);
+  assert.deepEqual(initial.review.proposed.interval, [5, 10]);
+  assert.deepEqual(initial.review.proposed.comparison?.second, [15, 20]);
+  assert.deepEqual(initial.review.proposed.deliveries.view?.interval, [5, 20]);
+  const revised = bind(followup, prior(goal, initial));
+  assert.deepEqual(revised.review.proposed.interval, [5, 10]);
+  assert.deepEqual(revised.review.proposed.channels, ['right']);
+  assert.deepEqual(revised.review.proposed.comparison?.second, [12, 17]);
+  assert.deepEqual(revised.review.proposed.deliveries.view?.interval, [5, 17]);
+  const delivered = bind(delivery, prior(followup, revised));
+  assert.equal(delivered.review.proposed.deliveries.report, true);
+  assert.deepEqual(delivered.review.proposed.deliveries.export?.interval, [5, 17]);
+  assert.equal(parseRomIntent(goal.replace('5 到 10', '大概 5 到 10')), undefined);
+  assert.equal(parseRomIntent(followup.replace('右膝', '右肘'), initial.review.input), undefined);
+  assert.equal(parseRomIntent(delivery + ' 或换成原始口径', revised.review.input), undefined);
+});
+
 test('a structured intent precedes confirmation and one local execution per turn', async () => {
   const session = evaluationSession();
   const audits: RunAudit[] = [];

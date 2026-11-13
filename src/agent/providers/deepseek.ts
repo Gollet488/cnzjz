@@ -79,10 +79,14 @@ export class DeepSeekProvider implements ModelProvider {
     this.fetcher = fetcher.bind(globalThis);
   }
 
-  private chatBody(input: Pick<Parameters<ModelProvider['complete']>[0], 'messages' | 'tools'>) {
+  private chatBody(
+    input: Pick<Parameters<ModelProvider['complete']>[0], 'messages' | 'tools'>,
+    probe: boolean,
+  ) {
     return {
       model: this.model,
       ...DEEPSEEK_INFERENCE,
+      ...(probe && { tool_choice: { type: 'function', function: { name: 'connection_check' } } }),
       messages: chatMessages(input.messages),
       tools: input.tools.map((tool) => ({
         type: 'function',
@@ -96,7 +100,7 @@ export class DeepSeekProvider implements ModelProvider {
   }
 
   requestBytes(input: Pick<Parameters<ModelProvider['complete']>[0], 'messages' | 'tools'>) {
-    return new TextEncoder().encode(JSON.stringify(this.chatBody(input))).length;
+    return new TextEncoder().encode(JSON.stringify(this.chatBody(input, false))).length;
   }
 
   private async readResponse(response: Response): Promise<any> {
@@ -143,8 +147,15 @@ export class DeepSeekProvider implements ModelProvider {
     }
   }
 
-  async complete(input: Parameters<ModelProvider['complete']>[0]): Promise<ModelReply> {
-    const body = JSON.stringify(this.chatBody(input));
+  complete(input: Parameters<ModelProvider['complete']>[0]): Promise<ModelReply> {
+    return this.requestCompletion(input);
+  }
+
+  private async requestCompletion(
+    input: Parameters<ModelProvider['complete']>[0],
+    probe = false,
+  ): Promise<ModelReply> {
+    const body = JSON.stringify(this.chatBody(input, probe));
     const request: RequestInit = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.#apiKey}` },
@@ -212,25 +223,28 @@ export class DeepSeekProvider implements ModelProvider {
   }
 
   async probe(signal: AbortSignal) {
-    const reply = await this.complete({
-      signal,
-      messages: [
-        { role: 'user', content: '连接测试：请仅调用 connection_check，参数 echo 为 kinetic。' },
-      ],
-      tools: [
-        {
-          name: 'connection_check',
-          description: '验证结构化工具调用协议，不访问姿态数据。',
-          inputSchema: {
-            type: 'object',
-            properties: { echo: { type: 'string', enum: ['kinetic'] } },
-            required: ['echo'],
-            additionalProperties: false,
+    const reply = await this.requestCompletion(
+      {
+        signal,
+        messages: [
+          { role: 'user', content: '连接测试：请仅调用 connection_check，参数 echo 为 kinetic。' },
+        ],
+        tools: [
+          {
+            name: 'connection_check',
+            description: '验证结构化工具调用协议，不访问姿态数据。',
+            inputSchema: {
+              type: 'object',
+              properties: { echo: { type: 'string', enum: ['kinetic'] } },
+              required: ['echo'],
+              additionalProperties: false,
+            },
+            outputSchema: { type: 'boolean' },
           },
-          outputSchema: { type: 'boolean' },
-        },
-      ],
-    });
+        ],
+      },
+      true,
+    );
     if (
       reply.calls.length !== 1 ||
       reply.calls[0]!.name !== 'connection_check' ||

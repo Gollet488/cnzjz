@@ -15,6 +15,10 @@ declare global {
   }
 }
 
+// Version 2.1 includes the revised angle calculation and sampling metadata.
+export const FIXED_ROM_FINGERPRINT =
+  '5a9bd4d311e467304fb8a7308454e9662fc6275c277abb745f21db310a3d143f';
+
 export async function fixedRomSession(page: Page, info: TestInfo, keepClock = false) {
   // Drive the normal demo acquisition with a fixed RAF timeline. 62.5 ms has
   // an exact binary representation, and all 217 ticks pass its 50 ms gate.

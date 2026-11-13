@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import type { CallRecord } from '../agent/runtime.ts';
-defineProps<{ call: CallRecord; disabled?: boolean }>();
+import type { SessionInfo } from '../analysis/session.ts';
+import { sourceTimeSpan } from '../analysis/sourceDisplay.ts';
+import AgentEvidenceScope from './AgentEvidenceScope.vue';
+defineProps<{ call: CallRecord; source: SessionInfo; disabled?: boolean }>();
 const emit = defineEmits<{
   locate: [call: CallRecord, second?: boolean, interval?: [number, number]];
 }>();
@@ -11,7 +14,7 @@ const evidence = (call: CallRecord): any =>
   call.name === 'compare_intervals' ? result(call).first.evidence : result(call).evidence;
 const n = (value: number | null, digits = 3) =>
   value === null ? '缺失' : Number(value.toFixed(digits)).toString();
-const interval = (v: number[]) => `${n(v[0])}–${n(v[1])} s`;
+const interval = sourceTimeSpan;
 const channel = (s: string) => ({ left: '左侧', right: '右侧', midline: '中线' })[s] ?? s;
 const joints: Record<string, string> = {
   knee: '膝',
@@ -42,11 +45,17 @@ const joints: Record<string, string> = {
       >
       <span>{{ evidence(call).synthetic ? 'SYNTHETIC · 合成数据' : '本地采集数据' }}</span>
     </header>
-    <p class="evidence-meta"
-      >{{ call.id }} · {{ evidence(call).basis }} · {{ interval(evidence(call).interval) }} ·
-      {{ evidence(call).sampleCount }} 个采样 · 实际采样范围
-      {{ interval(evidence(call).sampledRange) }}</p
-    >
+    <AgentEvidenceScope
+      :source="source"
+      :evidence="evidence(call)"
+      :segment="call.name === 'compare_intervals' ? '前段' : undefined"
+    />
+    <AgentEvidenceScope
+      v-if="call.name === 'compare_intervals'"
+      :source="source"
+      :evidence="result(call).second.evidence"
+      segment="后段"
+    />
     <el-button size="small" :disabled="disabled" @click="emit('locate', call)"
       >定位图表 / 区间起点</el-button
     >
@@ -58,17 +67,14 @@ const joints: Record<string, string> = {
       >定位后段</el-button
     >
     <template v-if="call.name === 'compare_intervals'">
-      <p
-        >第二段 {{ interval(result(call).second.evidence.interval) }} ·
-        {{ result(call).second.evidence.sampleCount }} 个采样 · 实际采样范围
-        {{ interval(result(call).second.evidence.sampledRange) }}；差值 = 第二段 − 第一段</p
-      >
+      <p v-if="result(call).comparable">差值 = 后段 − 前段</p>
       <div class="evidence-table"
         ><table
           ><thead
             ><tr
-              ><th>侧别</th><th>前段 ROM · deg</th><th>后段 ROM · deg</th><th>差值 · deg</th
-              ><th>有效角度样本 前 / 后</th><th>覆盖率 前 / 后</th></tr
+              ><th>侧别</th><th>前段 ROM · deg</th><th>后段 ROM · deg</th
+              ><th v-if="result(call).comparable">差值 · deg</th><th>有效角度样本 前 / 后</th
+              ><th>覆盖率 前 / 后</th></tr
             ></thead
           >
           <tbody
@@ -76,7 +82,7 @@ const joints: Record<string, string> = {
               <td>{{ channel(row.channel) }}</td
               ><td>{{ n(row.rom) }}</td
               ><td>{{ n(result(call).second.channels[i].rom) }}</td
-              ><td>{{ n(result(call).differences[i].rom) }}</td>
+              ><td v-if="result(call).comparable">{{ n(result(call).differences[i].rom) }}</td>
               <td
                 >{{ row.angle.sampleCount }} /
                 {{ result(call).second.channels[i].angle.sampleCount }}</td
@@ -91,7 +97,7 @@ const joints: Record<string, string> = {
       <p class="evidence-limit">{{
         result(call).comparable
           ? '满足本地样本可比条件；不保证动作阶段、视角等价或统计显著性。'
-          : `可比性不足：${result(call).reasons.join('；')}`
+          : `可比性不足：${result(call).reasons.join('；')}。仅显示各段统计。`
       }}</p>
     </template>
     <template v-else-if="call.name === 'query_metrics'">
@@ -177,11 +183,7 @@ const joints: Record<string, string> = {
             {{ row.omittedValidIntervals }} 段；缩小查询区间可核对。</p
           >
         </div>
-        <p
-          >连续段仅连接相邻有效采样；采样间隔大于
-          {{ n(result(call).timing.continuityGapSeconds, 6) }} s
-          时拆段。帧覆盖率不代表持续时间覆盖、人体精度或同一人物身份追踪。</p
-        >
+        <p>连续段遇到采样中断时拆段。帧覆盖率不代表持续时间覆盖、人体精度或同一人物身份追踪。</p>
         <p>“检出但角度无效”可含局部置信不足或几何退化，不能仅凭该计数判断遮挡原因。</p>
       </template>
       <div class="quality-values"
@@ -223,7 +225,7 @@ const joints: Record<string, string> = {
         <button :disabled="disabled" @click="emit('locate', call, false, gap.interval)"
           >{{ interval(gap.interval) }} · 定位</button
         >
-        · 间隔 {{ n(gap.seconds, 6) }} s（不证明中间有追踪数据）
+        · 间隔 {{ n(gap.seconds, 6) }} s / 当时上限 {{ n(gap.limitSeconds, 6) }} s
       </p>
       <p v-if="result(call).timing?.omittedGapIntervals"
         >另省略 {{ result(call).timing.omittedGapIntervals }} 个采样中断。</p
@@ -231,9 +233,10 @@ const joints: Record<string, string> = {
     </template>
     <footer>
       <p
-        >session {{ evidence(call).sessionId }} / revision {{ evidence(call).revision }} · threshold
-        {{ evidence(call).parameters.threshold }} · window {{ evidence(call).parameters.window }} 帧
-        · aspect {{ n(evidence(call).parameters.aspect) }} · metric
+        >{{ call.id }} · 会话 {{ evidence(call).sessionId }} / 版本 {{ evidence(call).revision }} ·
+        threshold {{ evidence(call).parameters.threshold }} · window
+        {{ evidence(call).parameters.window }} 帧 · aspect
+        {{ n(evidence(call).parameters.aspect) }} · metric
         {{ evidence(call).parameters.metricVersion }}</p
       >
       <p v-for="line in evidence(call).limitations" :key="line">{{ line }}</p>
@@ -264,7 +267,6 @@ header span {
   color: var(--accent);
   font-size: 11px;
 }
-.evidence-meta,
 footer {
   display: block;
   color: var(--muted);
