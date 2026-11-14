@@ -12,6 +12,18 @@ export function timeBound(frames: readonly PoseFrame[], time: number, after = fa
   }
   return lo;
 }
+export function nearestFrameIndex(
+  frames: readonly PoseFrame[],
+  time: number,
+  start = 0,
+  end = frames.length,
+) {
+  if (start >= end) return -1;
+  const index = Math.min(end - 1, Math.max(start, timeBound(frames, time)));
+  return index > start && time - frames[index - 1].time <= frames[index].time - time
+    ? index - 1
+    : index;
+}
 export function intervalFrames(frames: PoseFrame[], interval: readonly [number, number]) {
   return frames.slice(timeBound(frames, interval[0]), timeBound(frames, interval[1], true));
 }

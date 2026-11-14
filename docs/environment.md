@@ -94,7 +94,7 @@ pnpm preview
 
 浏览器通过回环向 Ollama 发送指令和有界工具反馈。Chrome 的回环权限和 Ollama 的 CORS 是两道独立检查。[Chrome Local Network Access](https://developer.chrome.com/docs/modern-web-guidance/guides/security/local-network-access)
 
-云端模型使用本机开发服务或生产预览的同源代理。选好模型后即可发送任务。选择未配置的供应商时，模型设置会显示对应变量、文件路径和生效步骤。
+云端模型通过同源代理调用。本机开发服务和生产预览可配置服务 Key，也可在页面临时填写。公网 HTTPS 版由访客填写自己的官方 Key。[公网部署步骤](delivery.md#公网部署云端-agent)
 
 ## 验证与排错
 
@@ -112,7 +112,7 @@ pnpm test:browser
 | 现象 | 处理 |
 | --- | --- |
 | 资源缺失或哈希不匹配 | 核对依赖版本，执行 `pnpm prepare:assets`；模型哈希异常时先保留检查，不直接绕过校验 |
-| DeepSeek 连接失败 | 核对是否通过本项目本机服务访问、密钥是否加载及账户/网络是否可用；静态托管无代理 |
+| 云端模型连接失败 | 确认当前地址已部署模型服务，并检查供应商、Key 权限、API 额度及网络。GitHub Pages 静态版支持本机 Ollama 和基础分析 |
 | 本地视频提示缺少 WebCodecs | 使用具备所需 API 的 Chrome / Edge，确认地址为 localhost 或 HTTPS |
 | 转换失败或内存不足 | 使用更短的视频，确认文件未损坏、未加密且不超过 500 MB；转换也受设备内存影响 |
 | 摄像头不可用 | 检查浏览器权限、系统摄像头权限及其他程序占用 |

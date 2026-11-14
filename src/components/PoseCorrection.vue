@@ -5,6 +5,7 @@ import { angleValue } from '../utils/poseMath';
 import { compareTarget, confirmCorrection } from '../utils/poseCorrection';
 import type { LiveCorrection } from '../utils/poseCorrection';
 import type { Joint, PoseFrame, Side } from '../types';
+import FloatingField from './FloatingField.vue';
 
 const props = defineProps<{
   frame?: PoseFrame;
@@ -179,28 +180,48 @@ const priority = computed(() => {
               ><option>中线</option></select
             >
           </label>
-          <label>
-            目标下限（°）
+          <FloatingField
+            v-slot="{ control }"
+            label="目标下限（°）"
+            :invalid="entry.target.status === 'invalid'"
+            :described-by="
+              entry.target.status === 'invalid' ? `correction-error-${entry.rule.id}` : undefined
+            "
+          >
             <input
+              v-bind="control"
               v-model.number="entry.rule.lower"
               type="number"
               min="0"
               max="180"
               step="1"
-              placeholder="未设置"
             />
-          </label>
-          <label>
-            目标上限（°）
+          </FloatingField>
+          <FloatingField
+            v-slot="{ control }"
+            label="目标上限（°）"
+            :invalid="entry.target.status === 'invalid'"
+            :described-by="
+              entry.target.status === 'invalid' ? `correction-error-${entry.rule.id}` : undefined
+            "
+          >
             <input
+              v-bind="control"
               v-model.number="entry.rule.upper"
               type="number"
               min="0"
               max="180"
               step="1"
-              placeholder="未设置"
             />
-          </label>
+          </FloatingField>
+          <Transition name="field-error">
+            <p
+              v-if="entry.target.status === 'invalid'"
+              :id="`correction-error-${entry.rule.id}`"
+              class="field-error-message"
+              >{{ entry.hint }}</p
+            >
+          </Transition>
           <div class="correction-actions">
             <button
               v-if="entry.rule.lower !== '' || entry.rule.upper !== ''"
@@ -226,7 +247,7 @@ const priority = computed(() => {
           </div>
           <span v-if="entry.previous">当前读数待确认 · 上次稳定状态 · </span>
           <strong role="status" :aria-label="entry.label">{{ entry.title }}</strong>
-          <p>
+          <p v-if="entry.target.status !== 'invalid'">
             <template v-if="entry.target.status === 'valid'"
               >目标 {{ entry.target.lower }}–{{ entry.target.upper }}°。 </template
             >{{ entry.hint }}
@@ -271,6 +292,7 @@ const priority = computed(() => {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   align-content: center;
+  align-items: end;
 }
 .correction-fields label {
   display: grid;
@@ -278,15 +300,18 @@ const priority = computed(() => {
   min-width: 0;
   color: var(--muted);
 }
-.correction-fields :is(select, input) {
+.correction-fields select {
   width: 100%;
-  height: 32px;
+  height: 43px;
   padding: 0 7px;
   border: 1px solid var(--line-strong);
   border-radius: 5px;
-  background: #fff;
+  background: var(--surface);
   color: var(--ink);
   font: inherit;
+}
+.correction-fields .field-error-message {
+  grid-column: 1 / -1;
 }
 .correction-fields select:disabled {
   background: var(--surface-muted);
@@ -307,12 +332,12 @@ const priority = computed(() => {
   line-height: 1.6;
 }
 .correction-feedback.within {
-  background: #e9f5ec;
-  color: #2c6743;
+  background: var(--success-soft);
+  color: var(--success);
 }
 .correction-feedback.adjust {
-  background: #fff3e2;
-  color: #804c20;
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 .correction-feedback.priority {
   outline: 1px solid currentColor;

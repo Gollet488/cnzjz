@@ -1,0 +1,17 @@
+{$POSE_DOMAIN} {
+	root * {$POSE_DIST}
+	encode zstd gzip
+	header {
+		Referrer-Policy same-origin
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+	}
+	handle /__models/* {
+		reverse_proxy 127.0.0.1:8787 {
+			header_up X-Real-IP {http.request.remote.host}
+		}
+	}
+	handle {
+		file_server
+	}
+}

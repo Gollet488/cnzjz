@@ -249,7 +249,7 @@ const joints: Record<string, string> = {
   border: 1px solid var(--line);
   border-radius: 9px;
   padding: 18px;
-  background: #fff;
+  background: var(--surface);
   margin-top: 12px;
   font-size: 12px;
   line-height: 1.8;
@@ -299,7 +299,7 @@ footer {
   font-size: 11px;
 }
 .evidence-limit {
-  color: #846524;
+  color: var(--warning);
 }
 .quality-values {
   display: flex;

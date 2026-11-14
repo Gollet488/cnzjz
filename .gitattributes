@@ -20,6 +20,7 @@
 docs/assets/cover-prompt.txt text eol=crlf
 public/pose-inference.worker.js text eol=crlf
 *.cmd text eol=crlf
+*.pdf binary
 # Preserve upstream bytes for pinned resource hashes on every platform.
 public/mediapipe/** -text
 public/ffmpeg/** -text

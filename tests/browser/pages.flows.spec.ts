@@ -35,8 +35,17 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
       expect((await request.get(path)).status(), path).toBe(404);
   });
 
-  test('two-video comparison survives a slow FFmpeg WASM response', async ({ page }) => {
-    await page.route('**/ffmpeg/ffmpeg-core.wasm', async (route) => {
+  test('two-video comparison survives a slow FFmpeg WASM response', async ({ page }, info) => {
+    const wasm = '**/ffmpeg/ffmpeg-core.wasm';
+    const start = Date.now();
+    const downloads: number[] = [];
+    const convertedAt: number[] = [];
+    let clickedAt: number | undefined;
+    let firstPairAt: number | undefined;
+    page.on('requestfinished', (request) => {
+      if (request.url().endsWith('/ffmpeg-core.wasm')) downloads.push(Date.now() - start);
+    });
+    await page.route(wasm, async (route) => {
       await new Promise<void>((resolve) => setTimeout(resolve, 17_000));
       await route.continue();
     });
@@ -44,12 +53,73 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
     await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
     const panel = page.locator('.comparison-panel');
     const files = panel.locator('input[type=file]');
-    await files.nth(0).setInputFiles(resolve('tests/fixtures/format.avi'));
-    await files.nth(1).setInputFiles(resolve('tests/fixtures/format.webm'));
-    await expect(panel.locator('[role=status]')).toHaveText(
-      ['已在本机转换，使用转换后时间轴。', '已在本机转换，使用转换后时间轴。'],
-      { timeout: 30_000 },
-    );
+    const videos = panel.locator('video');
+    const playback = () =>
+      videos.evaluateAll((items: HTMLVideoElement[]) =>
+        items.map((video) => ({
+          playingAt: Number(video.dataset.playingAt) || null,
+          advancedAt: Number(video.dataset.advancedAt) || null,
+          time: Number(video.dataset.advancedTime) || null,
+        })),
+      );
+    try {
+      await files.nth(0).setInputFiles(resolve('tests/fixtures/format.avi'));
+      await files.nth(1).setInputFiles(resolve('tests/fixtures/format.webm'));
+      const status = panel.locator('[role=status]');
+      await Promise.all(
+        [0, 1].map(async (index) => {
+          await expect(status.nth(index)).toHaveText('已在本机转换，使用转换后时间轴。', {
+            timeout: 60_000,
+          });
+          convertedAt[index] = Date.now() - start;
+        }),
+      );
+      expect(downloads).toHaveLength(2);
+      await videos.evaluateAll((items: HTMLVideoElement[], start) => {
+        for (const video of items) {
+          video.addEventListener(
+            'playing',
+            () => {
+              video.dataset.playingAt = String(Date.now() - start);
+            },
+            { once: true },
+          );
+          video.addEventListener('timeupdate', () => {
+            if (!video.dataset.playingAt || video.dataset.advancedAt || video.currentTime < 0.1)
+              return;
+            video.dataset.advancedAt = String(Date.now() - start);
+            video.dataset.advancedTime = String(video.currentTime);
+          });
+        }
+      }, start);
+      clickedAt = Date.now() - start;
+      await panel.getByRole('button', { name: '开始对比', exact: true }).click();
+      await Promise.all([
+        expect
+          .poll(async () => (await playback()).map(({ time }) => time !== null), {
+            timeout: 55_000,
+          })
+          .toEqual([true, true]),
+        (async () => {
+          // The playhead is published only after the first paired frame is analyzed and drawn.
+          await expect(panel.locator('.compare-playhead')).toContainText(/参考 .+ s · 待测 .+ s/, {
+            timeout: 55_000,
+          });
+          firstPairAt = Date.now() - start;
+        })(),
+      ]);
+    } finally {
+      await info.attach('slow-comparison-timing', {
+        body: JSON.stringify({
+          downloads,
+          convertedAt,
+          clickedAt,
+          playback: await playback().catch(() => []),
+          firstPairAt,
+        }),
+        contentType: 'application/json',
+      });
+    }
   });
 
   for (const failure of ['worker 404', 'WASM 404', 'unresponsive initialization'] as const) {

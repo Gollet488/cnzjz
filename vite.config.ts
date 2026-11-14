@@ -9,9 +9,20 @@ export default defineConfig({
     watch: { ignored: ['**/.qa/**', '**/.delivery/**', '**/test-results/**', '**/.pnpm-store/**'] },
   },
   preview: { host: '127.0.0.1' },
-  // Prebundle worker-only MP4 and lazy FFmpeg imports before the first upload.
+  // Prebundle lazy chart and video imports so opening a panel does not reload the page.
   // Limit discovery to the real entry; ignored historical QA pages are not inputs.
-  optimizeDeps: { entries: ['index.html'], include: ['mp4box', '@ffmpeg/ffmpeg'] },
+  optimizeDeps: {
+    entries: ['index.html'],
+    include: [
+      'mp4box',
+      '@ffmpeg/ffmpeg',
+      '@mediapipe/tasks-vision',
+      'echarts/core',
+      'echarts/charts',
+      'echarts/components',
+      'echarts/renderers',
+    ],
+  },
   build: {
     rollupOptions: {
       output: {

@@ -309,6 +309,100 @@ test.beforeEach(async ({ page }) => {
   await page.getByRole('button', { name: '暂停分析', exact: true }).click();
 });
 
+test('playback transport advances while running and retracts on pause', async ({ page }, info) => {
+  const player = page.getByRole('group', { name: '采集播放器' });
+  const time = player.locator('.rolling-text');
+  const spectrum = player.locator('.playback-spectrum');
+  const bar = player.locator('.playback-progress span');
+  const transform = () => bar.evaluate((element) => getComputedStyle(element).transform);
+
+  await expect(player.getByRole('button', { name: '开始分析', exact: true })).toBeVisible();
+  await expect(spectrum.locator('span').first()).toHaveCSS('animation-play-state', 'paused');
+  const initialTime = await time.innerText();
+  await player.getByRole('button', { name: '开始分析', exact: true }).press('Enter');
+  await expect(spectrum.locator('span').first()).toHaveCSS('animation-play-state', 'running');
+  await expect(spectrum).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
+  await player.screenshot({ path: info.outputPath('playback-running.png') });
+  const firstPosition = await transform();
+  await expect.poll(transform).not.toBe(firstPosition);
+  await expect(time).not.toHaveText(initialTime);
+
+  await player.getByRole('button', { name: '暂停分析', exact: true }).click();
+  await expect(spectrum).toHaveCSS('transform', 'matrix(1, 0, 0, 0.16, 0, 0)');
+  await expect(spectrum.locator('span').first()).toHaveCSS('animation-play-state', 'paused');
+  await expect(bar).toHaveCSS('opacity', '0');
+  const pausedTime = await time.innerText();
+  await expect(page.locator('.angle-panel .echart canvas')).toBeVisible();
+  await expect(time).toHaveText(pausedTime);
+
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(player).toBeVisible();
+    expect(await player.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(
+      await player.evaluate((element) => element.clientWidth),
+    );
+  }
+  await player.screenshot({ path: info.outputPath('playback-mobile-paused.png') });
+});
+
+test('chart scrub snaps to source samples and links the selected frame', async ({ page }, info) => {
+  const rows = await fullCSV(page, info, 'chart-cursor-source.csv');
+  const samples = rows.map((row) => ({
+    time: Number(row.time_s),
+    angle: Number(row.filtered_knee_left_deg),
+    center: Number(row.center_y),
+  }));
+  await page.locator('nav').getByRole('button', { name: '采集与分析' }).click();
+  const plot = page.getByRole('img', { name: '关节角度时序图' });
+  const slider = page.getByRole('slider', { name: /^关节角度时序图游标/ });
+  const readout = plot.locator('.chart-readout');
+  const timeline = page.locator('.timeline-row > span');
+  const center = page.getByRole('img', { name: '重心起伏时序图' });
+  await expect(slider).toBeVisible();
+  await plot.scrollIntoViewIfNeeded();
+
+  const box = (await plot.boundingBox())!;
+  const [start, end] = [samples[0].time, samples.at(-1)!.time];
+  const xAt = (time: number) => box.x + 52 + ((time - start) / (end - start)) * (box.width - 76);
+  const y = box.y + 75;
+  const seconds = (time: number) => `${time.toFixed(2)} s`;
+  const [first, last] = [samples[32], samples[106]];
+  await page.mouse.move(xAt(first.time + 0.008), y);
+  await expect(readout).toContainText(seconds(first.time));
+  await expect(readout).toContainText(`${first.angle.toFixed(1)}°`);
+  await page.mouse.down();
+  await page.mouse.move(xAt(last.time + 0.008), y, { steps: 12 });
+  await expect(readout).toContainText(seconds(last.time));
+  await expect(readout).toContainText(`${last.angle.toFixed(1)}°`);
+  await expect(timeline).not.toHaveText(seconds(last.time));
+  await page.mouse.up();
+  await expect(timeline).toHaveText(seconds(last.time));
+  await expect(center.locator('.chart-readout')).toContainText(last.center.toFixed(4));
+  await expect(plot.locator('.chart-cursor-dot')).toHaveCount(2);
+  await plot.screenshot({ path: info.outputPath('chart-cursor-desktop.png') });
+
+  await slider.press('Home');
+  await slider.press('ArrowRight');
+  await expect(slider).toHaveAttribute(
+    'aria-valuetext',
+    new RegExp(`^${seconds(samples[1].time)}`),
+  );
+  await slider.press('Enter');
+  await expect(timeline).toHaveText(seconds(samples[1].time));
+
+  await page.setViewportSize({ width: 320, height: 844 });
+  await plot.scrollIntoViewIfNeeded();
+  const [reading, canvas] = await Promise.all([
+    readout.boundingBox(),
+    plot.locator('canvas').first().boundingBox(),
+  ]);
+  expect(reading!.y + reading!.height).toBeLessThanOrEqual(canvas!.y);
+  expect(await readout.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(
+    await readout.evaluate((element) => element.clientWidth),
+  );
+  await plot.screenshot({ path: info.outputPath('chart-cursor-mobile.png') });
+});
+
 for (const fixture of [
   'format.mkv',
   'format.mov',
@@ -394,6 +488,11 @@ test('comparison lifecycle: settings pause/reset real preview and source replace
   page.on('pageerror', (error) => errors.push(error.message));
   await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
   const panel = page.locator('.comparison-panel');
+  const player = panel.getByRole('group', { name: '对比播放器' });
+  const progress = player.getByRole('progressbar', { name: '对比进度' });
+  await expect(player.getByRole('button', { name: '开始对比', exact: true })).toBeDisabled();
+  await expect(player.locator('.rolling-text')).toHaveText('00:00.00');
+  await expect(progress).toHaveAttribute('aria-valuenow', '0');
   const inputs = panel.locator('input[type=file]');
   await inputs.nth(0).setInputFiles(resolve('tests/fixtures/30fps.mp4'));
   await inputs.nth(1).setInputFiles(resolve('tests/fixtures/rotate.mp4'));
@@ -430,6 +529,11 @@ test('comparison lifecycle: settings pause/reset real preview and source replace
   await expect(panel).toContainText('可对比 0.60 s');
   await start();
   await expect(playhead).toContainText('对齐后');
+  await expect(player.locator('.playback-spectrum span').first()).toHaveCSS(
+    'animation-play-state',
+    'running',
+  );
+  await expect(progress).toHaveAttribute('aria-valuenow', /^[1-9]\d*$/);
   await expect(panel).toContainText('双路可比 0 / 13 项');
   await expect(panel).toContainText('当前画面缺少两路都清晰可见的关节');
   await expect
@@ -452,6 +556,10 @@ test('comparison lifecycle: settings pause/reset real preview and source replace
   await expect(playhead).toContainText('分析中');
   await page.getByRole('button', { name: '暂停对比', exact: true }).click();
   await expect(playhead).toContainText('已暂停');
+  await expect(player.locator('.playback-spectrum span').first()).toHaveCSS(
+    'animation-play-state',
+    'paused',
+  );
   await page.getByRole('button', { name: '继续分析', exact: true }).click();
   await expect(playhead).toContainText('分析中');
   await page.getByRole('button', { name: '暂停对比', exact: true }).click();
@@ -1234,6 +1342,14 @@ test('pause/resume, cancel and reset reject late writes from production pipeline
   await expect(page.locator('.offline-progress progress')).toHaveAttribute('value', /[1-9]\d*/);
   await page.getByRole('button', { name: '暂停分析', exact: true }).click();
   await expect(page.locator('.offline-progress')).toContainText('已暂停');
+  const offlineMeter = page.getByRole('progressbar', { name: '本地视频分析进度' });
+  const frameProgress = page.locator('.offline-progress progress');
+  const pausedCount = Number(await frameProgress.getAttribute('value'));
+  const total = Number(await frameProgress.getAttribute('max'));
+  await expect(offlineMeter).toHaveAttribute(
+    'aria-valuenow',
+    String(Math.round((pausedCount / total) * 100)),
+  );
   const snapshot = await fullCSV(page, info, 'paused.csv');
   await page.waitForTimeout(500); // Deliberate late-result observation window.
   const again = await fullCSV(page, info, 'paused-again.csv');
@@ -2316,7 +2432,7 @@ test('Agent model setup, failure, restored preference and unavailable manual ana
   expect([requests, probes]).toEqual([1, 1]);
 });
 
-test('Agent sends with a temporary official key and clears it on demand or reload', async ({
+test('public Agent sends with a temporary official key and clears it on demand or reload', async ({
   page,
 }) => {
   const temporaryKey = 'scripted-temporary-key';
@@ -2330,10 +2446,10 @@ test('Agent sends with a temporary official key and clears it on demand or reloa
     if (path.endsWith('/catalog'))
       return route.fulfill({
         json: {
-          envFile: 'D:/project/.env',
+          public: true,
           providers: [
-            { provider: 'deepseek', models: [], missing: ['DEEPSEEK_API_KEY'] },
-            { provider: 'anthropic', models: [], missing: ['ANTHROPIC_API_KEY'] },
+            { provider: 'deepseek', models: [], missing: [] },
+            { provider: 'anthropic', models: [], missing: [] },
           ],
         },
       });
@@ -2352,6 +2468,10 @@ test('Agent sends with a temporary official key and clears it on demand or reloa
   const send = page.getByRole('button', { name: '发送', exact: true });
   await model.selectOption({ label: 'deepseek-v4-pro · DeepSeek' });
   await expect(key).toHaveAttribute('type', 'password');
+  await expect(page.locator('#agent-key-note')).toContainText('本站 HTTPS');
+  await page.getByRole('button', { name: '模型设置', exact: true }).click();
+  await expect(page.getByText('服务配置（可选）', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '模型设置', exact: true }).click();
   await expect(send).toBeDisabled();
   await key.fill('  ' + temporaryKey + '  ');
   await send.click();

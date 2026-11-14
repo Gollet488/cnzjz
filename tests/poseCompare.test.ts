@@ -92,6 +92,7 @@ async function mount(t: any) {
     '../config': { JOINTS },
     '../utils/dimensions': { stageSize },
     '../utils/humanPose': { humanPose },
+    './PlaybackTransport.vue': { default: {} },
     '../video/prepare': {
       VIDEO_ACCEPT: 'video/*',
       prepareVideo: (...args: any[]) => state.prepare(...args),
@@ -111,6 +112,10 @@ async function mount(t: any) {
   const key = `compareUnit${Math.random().toString(36).slice(2)}`;
   (globalThis as any)[key] = modules;
   const injected = `const moduleMocks = globalThis[${JSON.stringify(key)}];\n${js
+    .replace(/^import\s+(\w+)\s+from\s+['"]([^'"]+)['"];?$/gm, (_, binding, specifier) => {
+      assert.ok(modules[specifier], `Unexpected dependency: ${specifier}`);
+      return `const ${binding} = moduleMocks[${JSON.stringify(specifier)}].default;`;
+    })
     .replace(/^import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"];?$/gm, (_, bindings, specifier) => {
       assert.ok(modules[specifier], `Unexpected dependency: ${specifier}`);
       return `const {${bindings.replace(/\s+as\s+/g, ':')}} = moduleMocks[${JSON.stringify(specifier)}];`;

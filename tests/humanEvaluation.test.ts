@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readdir, rmdir, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rmdir, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -12,10 +13,12 @@ import {
   parseEvaluationArgs,
   runEvaluation,
 } from '../scripts/evaluate-agent.mjs';
-import { AgentRuntime, MAX_FINAL_CITATIONS } from '../src/agent/runtime.ts';
+import { AgentRuntime, MAX_FINAL_CITATIONS, resolveCitation } from '../src/agent/runtime.ts';
 import { assessRun, observeEvaluation } from '../src/agent/evaluation.ts';
 import { createToolRegistry } from '../src/analysis/tools.ts';
 import type { ChartView } from '../src/analysis/tools.ts';
+import { serializeCSV } from '../src/utils/csv.ts';
+import { parseCSV } from './browser/files.ts';
 
 const replay = [
   '--human-input-index',
@@ -88,6 +91,8 @@ test('human real configuration names the exact loopback transport and permits sm
 
 const frozenAvailable = existsSync('.qa/core-work/20261104-data-baseline/baseline.json');
 const frozen = () => frozenHumanMaterials(replay[1]);
+const archived1080 =
+  '.qa/core-work/20261105-R1-1080-single-target/real-evaluation.json.run-1a3874a1-62dd-4eb6-b356-3a4a9f5e75e6.audit.json';
 
 test(
   'human --case human-1080 enters only the selected business case with a mocked loopback transport',
@@ -135,6 +140,141 @@ test(
     );
     assert.equal(record.requestAccounting.businessRequests, 1);
     assert.deepEqual(requests, [`${origin}/__deepseek/probe`, `${origin}/__deepseek/complete`]);
+  },
+);
+
+test(
+  'human evaluation replays the 1080 submission and delivers all 20 citations from this run',
+  { skip: !frozenAvailable || !existsSync(archived1080) },
+  async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), 'human-1080-replay-'));
+    t.after(async () => {
+      await Promise.all((await readdir(directory)).map((file) => unlink(join(directory, file))));
+      await rmdir(directory);
+    });
+    const bytes = await readFile(archived1080);
+    assert.equal(
+      createHash('sha256').update(bytes).digest('hex'),
+      'ff2fa3df2d44e223ab6169af08c6a86b9e1569c901c3688bbd7828dec13173f5',
+    );
+    const archive = JSON.parse(bytes.toString());
+    const scenario = humanScenarios().find(({ id }) => id === 'human-1080')!;
+    assert.equal(archive.run.goal, scenario.turns[0].goal);
+    const evidenceLabels = new Map<string, { tool: string; label: string }>();
+    for (const call of archive.run.calls)
+      for (const entry of call.evidenceCatalog?.entries ?? [])
+        evidenceLabels.set(entry.evidenceId, { tool: call.name, label: entry.label });
+
+    const origin = 'http://127.0.0.1:5186';
+    let replies = 0;
+    const fetch = t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
+      if (url === `${origin}/__deepseek/probe`)
+        return Response.json({ requests: 1, usage: { inputTokens: 0, outputTokens: 0 } });
+      assert.equal(url, `${origin}/__deepseek/complete`);
+      const { messages } = JSON.parse(String(init.body));
+      const request = JSON.parse(messages.find((message: any) => message.role === 'user').content);
+      const reply = structuredClone(archive.requests[replies++]?.reply);
+      assert.ok(reply, 'archive exhausted before the evaluation finished');
+      // Replay the same choices and omissions. Only rebind opaque runtime IDs.
+      for (const { arguments: args } of reply.calls) {
+        for (const source of args.sources ?? [])
+          source.sourceId = request.userSources.find(
+            (item: any) => item.kind === 'current',
+          ).sourceId;
+        if (args.taskRef) args.taskRef = request.bindings.taskRef;
+        for (const citation of args.citations ?? []) {
+          const archived = evidenceLabels.get(citation.evidenceId)!;
+          const entry = request.availableEvidence
+            .findLast((item: any) => item.tool === archived.tool)
+            ?.entries.find((item: any) => item.label === archived.label);
+          assert.ok(entry, `${archived.tool}/${archived.label}`);
+          citation.evidenceId = entry.evidenceId;
+        }
+      }
+      return Response.json(reply);
+    });
+    const { record, exitCode } = await runEvaluation(
+      parseEvaluationArgs([
+        ...replay,
+        '--case',
+        'human-1080',
+        '--proxy-origin',
+        origin,
+        '--max-business-requests',
+        '12',
+        '--max-business-ms',
+        '120000',
+        '--output',
+        join(directory, 'entry.json'),
+      ]),
+    );
+    const [{ turns }] = record.runs;
+    const [{ run, observation, assessment }] = turns;
+    const finishes = run.calls.filter((call) => call.name === 'finish_analysis');
+    assert.equal(
+      exitCode,
+      0,
+      JSON.stringify({
+        status: run.status,
+        firstFinish: finishes[0]?.output,
+        failures: assessment.failures,
+      }),
+    );
+    assert.equal(replies, 6);
+    assert.equal(fetch.mock.callCount(), 7);
+    assert.equal(record.summary.passed, 1);
+    assert.equal(run.status, 'completed');
+    assert.equal(run.completion?.state, 'ready');
+    assert.equal(finishes.length, 1);
+    assert.equal(finishes[0].output.ok, true);
+    assert.equal(record.citationBudget.required['human-1080'], 20);
+    assert.equal(run.citations.length, 20);
+    const audit = JSON.parse(await readFile(record.auditFiles[0].path, 'utf8'));
+    assert.equal(audit.run.id, run.id);
+    assert.deepEqual(audit.run.citations, run.citations);
+    const { session, sidecar, provenance } = (
+      await frozenHumanMaterials(replay[1], ['human-1080'])
+    ).get('human-1080');
+    const submission = humanSubmissionEvidence(scenario, sidecar);
+    const reference = { sessionId: run.reference.sessionId, revision: run.reference.revision };
+    for (const citation of run.citations) {
+      const call = run.calls.find(({ id }) => id === citation.callId);
+      assert.ok(call?.output.ok, citation.path);
+      assert.equal(citation.source, 'local-executor');
+      assert.deepEqual(citation.value, resolveCitation(call.output.result, citation.path));
+      assert.equal((call.arguments as typeof reference).sessionId, reference.sessionId);
+      assert.equal((call.arguments as typeof reference).revision, reference.revision);
+      assert.equal(
+        submission.gaps(
+          run,
+          run.citations.filter((item) => item !== citation),
+        ).length,
+        1,
+      );
+    }
+    assert.deepEqual(observation.chart, {
+      joint: 'knee',
+      channels: ['left', 'right'],
+      basis: 'filtered',
+      interval: [0, 20],
+    });
+    const artifacts = Object.values(observation.artifacts);
+    assert.deepEqual(
+      artifacts.map((item) => item?.kind),
+      ['report', 'csv'],
+    );
+    for (const artifact of artifacts) {
+      assert.equal(artifact?.reference.sessionId, reference.sessionId);
+      assert.equal(artifact?.reference.revision, reference.revision);
+    }
+    const csv = artifacts.find((item) => item?.kind === 'csv')!;
+    const rows = parseCSV(Buffer.from(serializeCSV(session.frames, [], csv.reference)));
+    const expected = parseCSV(await readFile(provenance.selectedCSV.path));
+    assert.equal(rows.length, 601);
+    assert.deepEqual(
+      rows,
+      expected.map((row) => ({ ...row, session_id: reference.sessionId })),
+    );
   },
 );
 

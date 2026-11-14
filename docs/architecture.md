@@ -12,7 +12,7 @@ Kinetic Pose Lab 是浏览器端通用人体姿态量化分析应用。基础分
 | 视频准备与解码 | FFmpeg WebAssembly、MP4Box 2.5.0、WebCodecs、Worker | `src/video/prepare.ts`、`src/video/mp4.ts`、`src/video/offline.worker.ts` |
 | 分析与导出 | 会话版本、帧索引、几何计算、工具反馈与 CSV/PNG | `src/analysis/`、`src/utils/poseMath.ts`、`src/utils/csvExport.ts` |
 | Agent | 模型适配、任务规格、受控工具循环、证据、审计与评测 | `src/agent/` |
-| 本机服务 | Vite 开发/生产预览、DeepSeek 回环代理、进程健康检查 | `vite.config.ts`、`scripts/deepseek-proxy.mjs` |
+| 模型代理 | 本机 Vite 开发/生产预览，或公网 HTTPS 站点的同源 API | `scripts/deepseek-proxy.mjs`、`scripts/public-agent.mjs` |
 | 工程检查 | pnpm 锁文件、TypeScript、ESLint、Prettier、Node Test、Playwright | `package.json`、`tests/`、`.github/workflows/check.yml` |
 
 依赖声明在 `package.json`，完整解析版本在 `pnpm-lock.yaml`；运行环境见 [环境配置](environment.md)。
@@ -34,7 +34,7 @@ flowchart TD
   Tools --> Metrics
   Tools --> Feedback[有界反馈 / 证据与审计]
   Feedback --> Agent
-  Agent --> Model[本机 Ollama 或经本机代理访问 DeepSeek]
+  Agent --> Model[本机 Ollama 或经同源代理访问官方云端 API]
   Model --> Agent
   Agent --> Deliver[报告 / 视图 / 导出]
 ```
@@ -51,8 +51,8 @@ Agent 使用模型提供的工具调用，交由本地运行时校验和执行�
 
 - `pnpm dev` 运行本机 Vite 开发服务；`pnpm build` 校验资源、检查类型并生成 `dist/`；`pnpm preview` 提供本机生产预览。
 - MediaPipe、Lite 模型和 FFmpeg 资源由 `pnpm prepare:assets` 准备到 `public/`，随构建复制；模型哈希与上游包字节由 `pnpm check:assets` 检查。
-- `dist/` 可部署到根路径 HTTP 静态服务。当前资源使用绝对根路径，仓库子路径部署需要另行适配。
-- DeepSeek 代理只存在于本项目的本机开发或生产预览服务中。纯静态站点没有该代理；密钥保留在 Node 环境中。
+- `dist/` 可部署到站点根路径。GitHub Pages 用 `/cnzjz/` 作为构建基准路径，提供静态版。
+- 公网云端 Agent 由同源 HTTPS 站点转发到回环 Node 接口，访客提供自己的供应商 Key。[公网部署](delivery.md#公网部署云端-agent)
 - 视频和画面留在浏览器；选择外部模型时，用户指令和必要的分析工具反馈会发给所选服务。审计保存在本机浏览器 IndexedDB。
 
 ## 当前实现边界

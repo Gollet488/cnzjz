@@ -4,12 +4,24 @@
     ><meta charset="UTF-8" /><meta
       name="viewport"
       content="width=device-width, initial-scale=1.0"
-    /><meta name="theme-color" content="#fffefa" /><meta
-      name="description"
-      content="Kinetic 动观 · 浏览器本地人体姿态量化分析工作台"
-    /><link rel="icon" type="image/svg+xml" href="/favicon.svg" /><title
-      >Kinetic 动观 · 姿态分析工作台</title
-    ></head
+    /><meta name="theme-color" content="#e9efeb" /><script>
+      (() => {
+        let saved;
+        try {
+          saved = localStorage.getItem('kinetic.theme');
+        } catch {}
+        document.documentElement.dataset.theme =
+          saved === 'light' || saved === 'dark'
+            ? saved
+            : matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+      })();</script
+    ><meta name="description" content="Kinetic 动观 · 浏览器本地人体姿态量化分析工作台" /><link
+      rel="icon"
+      type="image/svg+xml"
+      href="/favicon.svg"
+    /><title>Kinetic 动观 · 姿态分析工作台</title></head
   ><body
     ><div id="app"></div
     ><script type="module" src="/src/main.ts"></script></body

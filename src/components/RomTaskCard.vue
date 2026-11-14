@@ -21,6 +21,7 @@ import { resolveFreeRom } from '../agent/freeRomReview.ts';
 import type { FreeRomConfirmation, FreeRomInput, FreeRomReview } from '../agent/freeRomReview.ts';
 import { JOINTS } from '../config.ts';
 import { download } from '../utils/download.ts';
+import FloatingField from './FloatingField.vue';
 
 const props = defineProps<{
   provider?: ModelProvider;
@@ -43,6 +44,7 @@ const locked = computed(() => (props.running && !freeCard.value) || drafting.val
 const open = ref(false);
 const showPrompt = ref(false);
 const goal = ref('');
+const draftGoalEdited = ref(false);
 const entry = ref<RomConfirmation['entry']>('manual');
 const draft = shallowRef<RomDraftAudit>();
 const attempt = shallowRef<RomDraftAudit>();
@@ -92,6 +94,13 @@ function fieldError(field: keyof typeof labels) {
   if (field === 'exportRange') return freeRanges.value?.csvError;
   if (field === 'chart' && freeRanges.value) return freeRanges.value.chartError;
   return review.value.errors[field];
+}
+function invalidEndpoint(field: keyof typeof labels, endpoint: 'start' | 'end') {
+  const value = fieldValue(field);
+  if (value.mode !== 'absolute' || !fieldError(field)) return false;
+  if (value.start === null) return endpoint === 'start';
+  if (value.end === null) return endpoint === 'end';
+  return true;
 }
 function fieldRange(field: keyof typeof labels) {
   return field === 'exportRange' ? freeRanges.value?.csvRange : review.value.ranges[field];
@@ -313,15 +322,25 @@ onBeforeUnmount(() => cancelDraft());
       >
     </div>
     <form v-if="showPrompt" class="draft-form" @submit.prevent="generate">
-      <label for="rom-draft-goal">模型草拟指令</label>
-      <textarea
+      <FloatingField
+        v-slot="{ control }"
         id="rom-draft-goal"
-        v-model="goal"
-        :disabled="drafting"
-        maxlength="2000"
-        rows="2"
-        placeholder="例如：比较左右膝 filtered ROM 的 0–5 秒与 15–20 秒，图表覆盖两段"
-      />
+        label="模型草拟指令"
+        described-by="rom-draft-example"
+        :error="draftGoalEdited && !goal.trim() ? '请输入草拟指令。' : undefined"
+      >
+        <textarea
+          v-bind="control"
+          v-model="goal"
+          :disabled="drafting"
+          maxlength="2000"
+          rows="2"
+          @input="draftGoalEdited = true"
+        />
+      </FloatingField>
+      <p id="rom-draft-example" class="draft-example"
+        >例如：比较左右膝 filtered ROM 的 0–5 秒与 15–20 秒，图表覆盖两段</p
+      >
       <p v-if="!provider" role="status">模型未连接，可继续手动填写。</p>
       <div class="card-actions">
         <el-button native-type="submit" :disabled="!provider || !goal.trim() || drafting || running"
@@ -419,11 +438,20 @@ onBeforeUnmount(() => cancelDraft());
           <input v-model="freeCard.linkChart" type="checkbox" />图表沿用比较的关节、侧别和口径
         </label>
         <p v-if="independentChart">图表选择 {{ independentChart }}</p>
-        <label
-          >定位秒数（留空则不定位）
-          <input type="number" step="any" min="0" :value="freeCard.time" @input="setSeek" />
-        </label>
-        <p v-if="freeRanges?.timeError" class="field-error">{{ freeRanges.timeError }}</p>
+        <FloatingField
+          v-slot="{ control }"
+          label="定位秒数（留空则不定位）"
+          :error="freeRanges?.timeError"
+        >
+          <input
+            v-bind="control"
+            type="number"
+            step="any"
+            min="0"
+            :value="freeCard.time"
+            @input="setSeek"
+          />
+        </FloatingField>
       </fieldset>
       <div class="card-fields">
         <fieldset v-for="field in displayedFields" :key="field" :disabled="locked">
@@ -450,37 +478,67 @@ onBeforeUnmount(() => cancelDraft());
           >
           <template v-for="value in [fieldValue(field)]" :key="value.mode">
             <template v-if="value.mode === 'absolute'">
-              <label
-                >开始秒<input
+              <FloatingField
+                v-slot="{ control }"
+                label="开始秒"
+                :invalid="invalidEndpoint(field, 'start')"
+                :described-by="invalidEndpoint(field, 'start') ? `rom-${field}-error` : undefined"
+              >
+                <input
+                  v-bind="control"
                   type="number"
                   step="any"
                   min="0"
                   :aria-label="`${labels[field]}开始秒`"
                   :value="value.start"
                   @input="setNumber(field, 'start', $event)"
-              /></label>
-              <label
-                >结束秒<input
+                />
+              </FloatingField>
+              <FloatingField
+                v-slot="{ control }"
+                label="结束秒"
+                :invalid="invalidEndpoint(field, 'end')"
+                :described-by="invalidEndpoint(field, 'end') ? `rom-${field}-error` : undefined"
+              >
+                <input
+                  v-bind="control"
                   type="number"
                   step="any"
                   min="0"
                   :aria-label="`${labels[field]}结束秒`"
                   :value="value.end"
                   @input="setNumber(field, 'end', $event)"
-              /></label>
+                />
+              </FloatingField>
             </template>
-            <label v-else-if="value.mode === 'start' || value.mode === 'end'"
-              >时长（秒）<input
+            <FloatingField
+              v-else-if="value.mode === 'start' || value.mode === 'end'"
+              v-slot="{ control }"
+              label="时长（秒）"
+              :invalid="Boolean(fieldError(field))"
+              :described-by="fieldError(field) ? `rom-${field}-error` : undefined"
+            >
+              <input
+                v-bind="control"
                 type="number"
                 step="any"
                 min="0"
                 :aria-label="`${labels[field]}时长`"
                 :value="value.seconds"
                 @input="setNumber(field, 'seconds', $event)"
-            /></label>
+              />
+            </FloatingField>
           </template>
-          <p v-if="fieldError(field)" class="field-error">{{ fieldError(field) }}</p>
-          <p v-else-if="fieldRange(field)" :data-rom-range="field"
+          <Transition name="field-error">
+            <p
+              v-if="fieldError(field)"
+              :id="`rom-${field}-error`"
+              class="field-error-message"
+              role="status"
+              >{{ fieldError(field) }}</p
+            >
+          </Transition>
+          <p v-if="!fieldError(field) && fieldRange(field)" :data-rom-range="field"
             >实际区间 {{ rangeLabel(fieldRange(field)!) }}</p
           >
         </fieldset>
@@ -569,9 +627,7 @@ label {
   display: flex;
   align-items: center;
 }
-input:not([type='checkbox']),
-select,
-textarea {
+select {
   width: 100%;
   padding: 6px;
   border: 1px solid var(--el-border-color);
@@ -579,6 +635,13 @@ textarea {
   background: var(--el-bg-color);
   color: var(--el-text-color-primary);
   font: inherit;
+}
+.card-fields .floating-field {
+  margin-bottom: 6px;
+}
+.draft-example {
+  color: var(--muted);
+  font-size: 12px;
 }
 .field-error {
   color: var(--el-color-danger);

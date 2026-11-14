@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, watch, onBeforeUnmount } from 'vue';
-import { UploadCloud, Play, Pause, RotateCcw, ArrowUpRight } from 'lucide-vue-next';
+import { UploadCloud, Upload, ScanLine, RotateCcw, ArrowUpRight } from 'lucide-vue-next';
 import type { PoseLandmarker } from '@mediapipe/tasks-vision';
 import { renderPose } from '../utils/renderer';
 import {
@@ -17,6 +17,7 @@ import type { Angles, Settings, Landmark } from '../types';
 import { stageSize } from '../utils/dimensions';
 import { prepareVideo, VIDEO_ACCEPT } from '../video/prepare';
 import { humanPose } from '../utils/humanPose';
+import PlaybackTransport from './PlaybackTransport.vue';
 const props = defineProps<{ settings: Settings }>();
 const emit = defineEmits<{ error: [message: string] }>();
 const videos: HTMLVideoElement[] = [];
@@ -71,6 +72,11 @@ const greatest = computed(() => {
   return best;
 });
 const overlap = computed(() => Math.min(...durations.value.map((d, i) => d - starts.value[i])));
+const progress = computed(() => {
+  if (overlap.value <= 0) return 0;
+  if (finished.value && !showingPeak.value) return 1;
+  return Math.min(1, time.value / overlap.value);
+});
 const sizes = ref([stageSize(), stageSize()]);
 const models: PoseLandmarker[] = [];
 const filters = [new LandmarkFilter(), new LandmarkFilter()];
@@ -486,7 +492,7 @@ onBeforeUnmount(() => {
           <b>{{ laneLabels[index] }}</b>
           <span :title="names[index]">{{ names[index] || '尚未选择' }}</span>
         </div>
-        <div class="compare-canvas">
+        <div class="pose-stage compare-canvas">
           <video
             :ref="
               (el) => {
@@ -510,9 +516,13 @@ onBeforeUnmount(() => {
             :height="sizes[index].height"
             :aria-label="`${laneLabels[index]}画面`"
           />
-          <button v-if="!names[index] && !preparing[index]" @click="files[index].click()">
-            <UploadCloud :size="28" />选择{{ laneLabels[index] }}
-          </button>
+          <div v-if="preparing[index]" class="model-loading">
+            <ScanLine class="spin" :size="24" aria-hidden="true" />正在准备视频…
+          </div>
+          <div v-else-if="!names[index]" class="stage-empty">
+            <UploadCloud :size="28" aria-hidden="true" />
+            <el-button @click="files[index].click()">选择{{ laneLabels[index] }}</el-button>
+          </div>
         </div>
         <input
           :ref="
@@ -542,49 +552,63 @@ onBeforeUnmount(() => {
               @input="setStart(index, $event)"
             />
           </label>
-          <el-button @click="files[index].click()" :aria-label="`更换${laneLabels[index]}`"
-            >更换视频</el-button
+          <button
+            type="button"
+            class="text-button"
+            :aria-label="`更换${laneLabels[index]}`"
+            @click="files[index].click()"
+            ><Upload :size="14" aria-hidden="true" />更换视频</button
           >
         </div>
         <p v-if="hints[index]" role="status" class="compare-hint">{{ hints[index] }}</p>
       </div>
     </div>
-    <div class="compare-controls">
-      <el-button
-        type="primary"
-        :disabled="!overlap || !names.every(Boolean) || preparing.some(Boolean) || reviewing"
-        :loading="busy"
-        @click="play(false)"
-      >
-        <component :is="running ? Pause : Play" :size="15" />
-        {{ running ? '暂停对比' : finished ? '重新分析' : latest ? '继续分析' : '开始对比' }}
-      </el-button>
-      <el-button
-        v-if="latest && !running && !finished"
-        :disabled="busy || reviewing"
-        @click="play()"
-      >
-        <RotateCcw :size="14" />从对齐点重来
-      </el-button>
-      <span v-if="frame" class="compare-playhead">
-        {{
-          reviewing
-            ? '正在定位'
-            : showingPeak
-              ? '差异回看'
-              : running
-                ? '分析中'
-                : finished
-                  ? '对比结束'
-                  : '已暂停'
-        }}
-        <b>对齐后 {{ time.toFixed(2) }} s</b>
-        <span>参考 {{ frame.times[0].toFixed(2) }} s · 待测 {{ frame.times[1].toFixed(2) }} s</span>
-      </span>
-      <span v-else-if="running">正在分析画面…</span>
-      <span v-else-if="finished">重叠区间内未取得同步画面，可将起点提前后重试。</span>
-      <span v-else-if="overlap > 0">可对比 {{ overlap.toFixed(2) }} s</span>
-      <span v-else>请先选择两段视频</span>
+    <div class="transport compare-transport">
+      <PlaybackTransport
+        label="对比播放器"
+        progress-label="对比进度"
+        :toggle-label="
+          running ? '暂停对比' : finished ? '重新分析' : latest ? '继续分析' : '开始对比'
+        "
+        :playing="running"
+        :busy="busy"
+        :disabled="overlap <= 0 || !names.every(Boolean) || preparing.some(Boolean) || reviewing"
+        :time="time"
+        :progress="progress"
+        @toggle="play(false)"
+      />
+      <div class="transport-main compare-controls">
+        <button
+          v-if="latest && !running && !finished"
+          type="button"
+          class="text-button"
+          :disabled="busy || reviewing"
+          @click="play()"
+        >
+          <RotateCcw :size="14" aria-hidden="true" />从对齐点重来
+        </button>
+        <span v-if="frame" class="compare-playhead">
+          {{
+            reviewing
+              ? '正在定位'
+              : showingPeak
+                ? '差异回看'
+                : running
+                  ? '分析中'
+                  : finished
+                    ? '对比结束'
+                    : '已暂停'
+          }}
+          <b>对齐后 {{ time.toFixed(2) }} s</b>
+          <span
+            >参考 {{ frame.times[0].toFixed(2) }} s · 待测 {{ frame.times[1].toFixed(2) }} s</span
+          >
+        </span>
+        <span v-else-if="running">正在分析画面…</span>
+        <span v-else-if="finished">重叠区间内未取得同步画面，可将起点提前后重试。</span>
+        <span v-else-if="overlap > 0">可对比 {{ overlap.toFixed(2) }} s</span>
+        <span v-else>请先选择两段视频</span>
+      </div>
     </div>
 
     <section v-if="frame" class="compare-results" aria-labelledby="compare-result-heading">
