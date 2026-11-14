@@ -75,7 +75,7 @@ export function realAgentBudget(
 }
 
 // Independent CSV parser: handles quoted delimiters, doubled quotes and CRLF.
-export function parseCSV(bytes: Buffer) {
+export function parseCSV(bytes: Buffer, expectedColumns: number | null = 354) {
   assert.deepEqual([...bytes.subarray(0, 3)], [239, 187, 191]);
   const text = bytes.toString('utf8').slice(1);
   const rows: string[][] = [];
@@ -104,7 +104,7 @@ export function parseCSV(bytes: Buffer) {
     rows.push(row);
   }
   const header = rows.shift()!;
-  assert.equal(header.length, 354);
+  if (expectedColumns !== null) assert.equal(header.length, expectedColumns);
   assert.ok(rows.length);
   return rows.map((values) => {
     assert.equal(values.length, header.length);
@@ -140,6 +140,21 @@ export async function fullCSV(page: Page, info: TestInfo, name: string) {
       )
     ).bytes,
   );
+}
+
+export async function pauseDemoAfterSampling(page: Page) {
+  const player = page.getByRole('group', { name: '采集播放器' });
+  const clock = player.locator('.rolling-text');
+  await expect
+    .poll(
+      async () => {
+        const [minutes, seconds] = (await clock.textContent({ timeout: 2000 }))!.split(':');
+        return Number(minutes) * 60 + Number(seconds);
+      },
+      { timeout: 35_000 },
+    )
+    .toBeGreaterThanOrEqual(21);
+  await player.getByRole('button', { name: '暂停分析', exact: true }).click();
 }
 
 export function replayCSV(rows: Record<string, string>[], { verifyDerived = true } = {}) {

@@ -4,11 +4,10 @@ import { parseArgs } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { AnalysisSession, METRIC_VERSION } from '../src/analysis/session.ts';
 import { createToolRegistry } from '../src/analysis/tools.ts';
+import { evaluationSession, FIXED_EVALUATIONS } from '../src/agent/evaluation.ts';
 import { AgentRuntime } from '../src/agent/runtime.ts';
 import { OllamaProvider, localOllamaURL } from '../src/agent/provider.ts';
-import { demoPose } from '../src/utils/demo.ts';
 
 const { values } = parseArgs({
   options: {
@@ -56,17 +55,27 @@ if (values.help || !values.model) {
     record.address = localOllamaURL(values.address);
     await provider.probe(controller.signal);
     clearTimeout(timer);
-    const session = new AnalysisSession('demo', {
-      threshold: 0.5,
-      window: 5,
-      aspect: 1,
-      metricVersion: METRIC_VERSION,
-    });
-    for (let i = 0; i <= 400; i++)
-      session.append(i >= 200 && i < 205 ? [] : demoPose(i / 20), i / 20);
+    const session = evaluationSession();
+    let chart = null;
+    let time = null;
     agent = new AgentRuntime({
       session,
-      registry: createToolRegistry(session),
+      registry: createToolRegistry(session, {
+        readWorkspace: () => ({ chart, time }),
+        setChartView(view) {
+          chart = structuredClone(view);
+          return chart;
+        },
+        seekToTime(target) {
+          const frame = session.frames.reduce((nearest, candidate) =>
+            Math.abs(candidate.time - target) < Math.abs(nearest.time - target)
+              ? candidate
+              : nearest,
+          );
+          time = frame.time;
+          return { appliedTime: time };
+        },
+      }),
       provider,
       async onAudit(audit) {
         const path = `${output}.run-${audit.run.id}.audit.json`;
@@ -78,16 +87,16 @@ if (values.help || !values.model) {
           console.log(`${run.status}: ${run.rounds} rounds, ${run.calls.length} calls`);
       },
     });
-    const goals = [
-      '比较前后各 5 秒的左右膝 filtered ROM 差值。',
-      '只看右侧，第二段改成 12–17 秒，保留前段，重新比较 ROM。',
-      '哪些区间不适合比较？请查询整个已采样区间的质量与缺失情况。',
-    ];
-    for (const goal of goals) {
-      if (controller.signal.aborted) throw new Error('cancelled');
-      const run = await agent.run(goal);
-      record.runs.push(run);
-      if (run.status !== 'completed') throw new Error(`Goal did not complete: ${run.status}`);
+    for (const scenarioId of ['multi_turn', 'quality']) {
+      agent.clear();
+      const scenario = FIXED_EVALUATIONS.find(({ id }) => id === scenarioId);
+      for (const goal of scenario.goals) {
+        if (controller.signal.aborted) throw new Error('cancelled');
+        const run = await agent.run(goal);
+        record.runs.push(run);
+        if (run.status !== 'completed')
+          throw new Error(`${scenarioId} did not complete: ${run.status} (${run.message})`);
+      }
     }
     const [comparison, modified, quality] = record.runs;
     const argsOf = (run, name) =>
@@ -109,6 +118,10 @@ if (values.help || !values.model) {
       !same(second.channels, ['right']) ||
       second.joint !== 'knee' ||
       second.basis !== 'filtered' ||
+      !same(chart?.interval, [0, 17]) ||
+      !same(chart?.channels, ['right']) ||
+      chart.joint !== 'knee' ||
+      chart.basis !== 'filtered' ||
       !last ||
       !same(last.interval, [0, 20])
     )

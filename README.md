@@ -10,7 +10,7 @@
 
 Vue 3 / TypeScript 负责页面和状态，Element Plus 提供交互组件，ECharts 展示时序图表。MediaPipe Pose Landmarker Lite 在浏览器内提取人体关键点；本地视频经过 MP4Box 索引、WebCodecs 解码与 Worker 推理，其他格式先由 FFmpeg WebAssembly 转换。分析层计算通用几何与时序指标，Agent 通过受控工具读取分析结果并交付带证据的报告、视图或导出。
 
-Ollama 由浏览器连接本机服务。DeepSeek、OpenAI GPT、Anthropic Claude、智谱 GLM 和 Moonshot Kimi 通过 Node 代理访问官方 API，支持本机版和带云端模型接口的 HTTPS 自托管版。[系统架构](docs/architecture.md) · [文档索引](docs/README.md)
+AI Agent 可发现本机 Ollama、LM Studio、llama.cpp 和 vLLM 等模型服务。DeepSeek、OpenAI GPT、Anthropic Claude、智谱 GLM 和 Moonshot Kimi 通过 Node 代理访问官方 API，支持本机版和带云端模型接口的 HTTPS 自托管版。[本机模型配置](docs/agent-model-selection.md#本机配置) · [系统架构](docs/architecture.md) · [文档索引](docs/README.md)
 
 ## 启动
 
@@ -37,7 +37,7 @@ pnpm dev
 5. 导出页保存 CSV 或 PNG；CSV 支持取消和进度，支持原生文件写入时使用文件流，否则使用内存 Blob。
 6. 在 Agent 页输入目标并选择模型。首次使用可展开「首次连接？查看连接指南」，测试通过后再发送任务。自定义模型 ID 位于「模型设置」。也可使用两段 ROM 比较任务卡手动填参或让已选模型草拟，核对后确认运行。详见 [Agent 工作台指南](docs/agent-workbench.md)。
 
-视频、画面、关键点推理和数值计算留在浏览器。云端任务的指令和必要的工具反馈，经当前站点的代理发给供应商官方 API。临时 Key 在当前页面内存中保留，刷新后清除。HTTPS 自托管代理逐次使用用户提供的 Key。Ollama 需允许页面来源跨域访问。
+视频、画面、关键点推理和数值计算留在浏览器。云端任务的指令和必要的工具反馈，经当前站点的代理发给供应商官方 API。临时 Key 在当前页面内存中保留，刷新后清除。HTTPS 自托管代理逐次使用用户提供的 Key。从公网网页连接本地模型时，需在本地服务允许该网页跨域访问。
 
 GitHub Pages 使用 `/cnzjz/` 静态构建，提供浏览器内视频分析、图表、双视频对比和 CSV/PNG 导出。公网云端 Agent 使用独立的 Node 接口和同源 HTTPS 站点。[公网部署步骤](docs/delivery.md#公网部署云端-agent)
 

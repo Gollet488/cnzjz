@@ -7,7 +7,7 @@ import ts from 'typescript';
 import * as math from '../src/utils/poseMath.ts';
 import { stageSize } from '../src/utils/dimensions.ts';
 import { humanPose } from '../src/utils/humanPose.ts';
-import { JOINTS } from '../src/config.ts';
+import * as comparison from '../src/video/comparison.ts';
 import type { Landmark } from '../src/types.ts';
 
 const fixture = (): Landmark[] => {
@@ -63,7 +63,7 @@ async function mount(t: any) {
       PoseLandmarker: {
         createFromOptions: async () => {
           if (state.create) return state.create();
-          const lane = state.models.length;
+          const lane = state.models.length % 2;
           const model = {
             closed: false,
             close() {
@@ -89,7 +89,8 @@ async function mount(t: any) {
         ),
     },
     '../utils/poseMath': math,
-    '../config': { JOINTS },
+    '../video/comparison': comparison,
+    '../utils/download': { download: (blob: Blob) => (state.exported = blob) },
     '../utils/dimensions': { stageSize },
     '../utils/humanPose': { humanPose },
     './PlaybackTransport.vue': { default: {} },
@@ -188,13 +189,11 @@ async function mount(t: any) {
     globalThis.requestAnimationFrame = oldRAF;
     globalThis.cancelAnimationFrame = oldCancel;
   });
-  let now = 0;
-  const step = () => {
-    now += 110;
+  const step = (seconds = 0.11) => {
     videos.forEach((v) => {
-      v.currentTime += 0.11;
+      v.currentTime += seconds;
     });
-    s.tick(now);
+    s.tick();
   };
   const load = (i: number, name: string) =>
     s.load(i, {
@@ -260,10 +259,92 @@ test('comparison missing detection resets only its lane; restart clears both his
   await q.s.play();
   q.step();
   near(q.s.distance, 0);
-  q.videos[1].ended = true;
+  q.videos[0].ended = true;
   q.step();
   assert.equal(q.s.running, false);
   near(q.s.distance, 0); // retained last valid paused result
+});
+
+test('comparison retains one pair per media-time slot and exports gaps and missing values', async (t) => {
+  const q = await mount(t);
+  await q.s.play();
+  q.s.tick();
+  q.step(0.04);
+  assert.equal(q.s.sampleCount, 1);
+  assert.equal(q.s.frame.slot, 0);
+  q.state.points[1] = [];
+  q.step(0.3);
+  assert.equal(q.s.sampleCount, 2);
+  assert.equal(q.s.missed, 2);
+  assert.equal(q.s.series.distanceCount, 1);
+  assert.deepEqual(q.s.series.poses, [2, 1]);
+  assert.equal(q.s.frame.distance, null);
+  assert.equal(q.s.frame.readings.find((reading: any) => reading.reference !== null).delta, null);
+  q.s.pause();
+  await q.s.exportSamples();
+  const csv = (await q.state.exported.text()).replace(/^\uFEFF/, '');
+  const rows: string[][] = csv.split('\r\n').map((row: string) => row.slice(1, -1).split('","'));
+  const header = rows.shift()!;
+  const value = (slot: number, field: string) => rows[slot][header.indexOf(field)];
+  assert.equal(rows.length, 40);
+  assert.ok(rows.every((row) => row.length === header.length));
+  assert.equal(value(0, 'sample_status'), 'paired');
+  assert.equal(value(0, 'candidate_time_s'), '0');
+  assert.equal(value(0, 'reference_time_basis'), 'playback_clock');
+  assert.equal(value(0, 'normalized_pose_distance'), '0');
+  assert.equal(value(2, 'sample_status'), 'missed');
+  assert.equal(value(2, 'candidate_pose_detected'), '');
+  assert.equal(value(3, 'candidate_pose_detected'), 'false');
+  assert.equal(value(3, 'filtered_elbow_left_delta_deg'), '');
+  assert.equal(value(4, 'sample_status'), 'not_reached');
+  assert.equal(value(39, 'analysis_status'), 'paused');
+  await q.s.review(q.s.series.samples[0]);
+  assert.equal(q.s.frameIndex, 0);
+  await q.s.play(false);
+  near(q.videos[0].currentTime, 0.34);
+  q.s.tick();
+  assert.equal(q.s.sampleCount, 2);
+  q.videos[0].ended = true;
+  q.s.tick();
+  await q.s.exportSamples();
+  const lastRow = (await q.state.exported.text()).split('\r\n').at(-1)!;
+  assert.equal(lastRow.split('","')[2], 'missed');
+  assert.equal(q.s.missed, 38);
+  q.settings.window = 3;
+  assert.equal(q.s.sampleCount, 0);
+});
+
+test('comparison uses presented frame times and skips pairs beyond sync tolerance', async (t) => {
+  const q = await mount(t);
+  const callbacks: VideoFrameRequestCallback[] = [];
+  q.videos.forEach((video, i) =>
+    Object.assign(video, {
+      requestVideoFrameCallback(callback: VideoFrameRequestCallback) {
+        callbacks[i] = callback;
+        return i;
+      },
+      cancelVideoFrameCallback() {},
+    }),
+  );
+  const present = (a: number, b: number) =>
+    [a, b].forEach((mediaTime, i) => callbacks[i](0, { mediaTime } as VideoFrameCallbackMetadata));
+  await q.s.play();
+  q.step(0.04);
+  assert.equal(q.s.sampleCount, 0);
+  present(0.025, 0.03);
+  q.s.tick();
+  assert.deepEqual(q.s.frame.times, [0.025, 0.03]);
+  assert.deepEqual(q.s.frame.timeBasis, ['presented_frame', 'presented_frame']);
+  present(0.23, 0.1);
+  q.step(0.2);
+  assert.equal(q.s.sampleCount, 1);
+  present(0.25, 0.23);
+  q.s.tick();
+  assert.equal(q.s.sampleCount, 2);
+  assert.equal(q.s.missed, 1);
+  near(q.s.frame.skew, -0.02);
+  assert.deepEqual(comparison.comparisonSchedule(0), { interval: 0.1, slots: 0 });
+  assert.deepEqual(comparison.comparisonSchedule(3600), { interval: 0.2, slots: 18000 });
 });
 
 test('aligned comparison retains signed joint differences and replays a peak with both source times', async (t) => {

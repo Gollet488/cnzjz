@@ -1,6 +1,18 @@
 import type { Landmark } from '../types';
+
+/** Inclusive, zero-based indices in the video's presentation order. */
+export interface VideoClip {
+  start: number;
+  end: number;
+}
+
+export interface VideoProbe {
+  timestamps: Float64Array;
+  codec: string;
+}
 export interface OfflineMetadata {
   transcoded?: boolean;
+  clipped?: boolean;
   codec: string;
   total: number;
   sampleTotal: number;
@@ -22,6 +34,7 @@ export type OfflineState =
   | 'failed';
 export type WorkerResult =
   | { type: 'metadata'; metadata: OfflineMetadata }
-  | { type: 'frame'; points: Landmark[]; time: number; index: number; preview: ImageBitmap }
+  | { type: 'decoding' }
+  | { type: 'frame'; points: Landmark[]; time: number; index: number; preview?: ImageBitmap }
   | { type: 'done'; truncated: boolean; sampled?: boolean; count: number }
   | { type: 'error'; message: string };

@@ -1,7 +1,7 @@
 import { readMP4 } from './mp4';
-import { analysisFrameIndices, PresentationAudit } from './timeline';
+import { analysisFrameIndices, planVideoClip, PresentationAudit } from './timeline';
 import { PoseEngine } from '../utils/poseEngine';
-import type { WorkerResult } from './protocol';
+import type { VideoClip, WorkerResult } from './protocol';
 
 const scope = self as unknown as {
   postMessage(value: WorkerResult, transfer?: Transferable[]): void;
@@ -33,9 +33,9 @@ self.onmessage = ({ data }) => {
     paused = false;
   }
   notify();
-  if (data.type === 'start') void run(data.file, data.limit);
+  if (data.type === 'start') void run(data.file, data.limit, data.clip);
 };
-async function run(file: File, limit: number) {
+async function run(file: File, limit: number, clip?: VideoClip) {
   let decoder: VideoDecoder | undefined;
   let inference: PoseEngine | undefined;
   const queue: VideoFrame[] = [];
@@ -51,26 +51,30 @@ async function run(file: File, limit: number) {
     const support = await VideoDecoder.isConfigSupported(source.config);
     if (!support.supported)
       throw new Error(`浏览器不支持解码 ${source.config.codec}，未降级为播放采样。`);
-    const indices = analysisFrameIndices(source.presentation.length, limit);
+    const { presentation, decodeStart, decodeEnd } = planVideoClip(source, clip);
+    const indices = analysisFrameIndices(presentation, limit);
     scope.postMessage({
       type: 'metadata',
       metadata: {
+        clipped: presentation !== source.presentation,
         codec: source.config.codec,
-        total: source.presentation.length,
+        total: presentation.length,
         sampleTotal: indices.length,
-        firstTime: source.presentation[0].timestamp / 1e6,
-        lastTime: source.presentation.at(-1)!.timestamp / 1e6,
+        firstTime: presentation[0].timestamp / 1e6,
+        lastTime: presentation.at(-1)!.timestamp / 1e6,
         aspect: source.aspect,
         rotation: source.rotation,
         mediaTimeOffset: source.mediaTimeOffset,
       },
     });
-    inference = new PoseEngine();
-    await inference.ready();
     await checkpoint();
-    const timestamps = source.presentation.map((s) => s.timestamp);
-    const expected = new Set(timestamps);
+    const timestamps = presentation.map((s) => s.timestamp);
     const audit = new PresentationAudit(timestamps);
+    const firstTimeUs = timestamps[0];
+    const lastTimeUs = timestamps[timestamps.length - 1];
+    let lastOutput = -Infinity;
+    let queued = 0;
+    let lastHeartbeat = performance.now();
     const budget = Math.max(
       4,
       Math.min(
@@ -81,14 +85,31 @@ async function run(file: File, limit: number) {
     decoder = new VideoDecoder({
       output(frame) {
         outputCount++;
-        if (stopped || fatal) {
-          frame.close();
-          return;
+        let retained = false;
+        try {
+          if (stopped || fatal) return;
+          const timestamp = frame.timestamp;
+          if (timestamp <= lastOutput)
+            throw new Error('解码器未按呈现顺序输出，已停止以保护时序。');
+          lastOutput = timestamp;
+          if (performance.now() - lastHeartbeat >= 5000) {
+            lastHeartbeat = performance.now();
+            scope.postMessage({ type: 'decoding' });
+          }
+          if (timestamp < firstTimeUs || timestamp > lastTimeUs) return; // GOP or edit-list preroll/outro.
+          audit.accept(timestamp);
+          if (audit.count !== indices[queued]) return;
+          if (queue.length >= Math.max(budget, 20))
+            throw new Error('解码输出超过有界队列，已停止；未丢帧或宣称完成。');
+          queue.push(frame);
+          queued++;
+          retained = true;
+        } catch (error) {
+          fatal = error instanceof Error ? error : new Error(String(error));
+        } finally {
+          if (!retained) frame.close();
+          notify();
         }
-        queue.push(frame);
-        if (queue.length > Math.max(budget, 20))
-          fatal = new Error('解码输出超过有界队列，已停止；未丢帧或宣称完成。');
-        notify();
       },
       error(error) {
         fatal = error;
@@ -98,17 +119,20 @@ async function run(file: File, limit: number) {
     decoder.configure(source.config);
     // Read/decode and consume concurrently in this worker. The output callback
     // cannot await: outstanding encoded inputs + decoded outputs share a budget.
+    inference = new PoseEngine();
+    const modelReady = inference.ready();
     const feed = (async () => {
       try {
         let blockStart = -1;
         let block = new Uint8Array();
-        for (const sample of source.decode) {
+        for (let i = decodeStart; i <= decodeEnd; i++) {
+          const sample = source.decode[i];
           await checkpoint();
           // A decoder may buffer reference frames before producing anything.
           // Allow additional input when the consumer has no output to drain.
           while (
-            inputCount - outputCount + queue.length >=
-            (queue.length ? budget : Math.max(budget, 20))
+            inputCount - outputCount >= 20 ||
+            (queue.length > 0 && inputCount - outputCount + queue.length >= budget)
           ) {
             await change;
             await checkpoint();
@@ -117,7 +141,9 @@ async function run(file: File, limit: number) {
           if (sample.offset < blockStart || end > blockStart + block.byteLength) {
             blockStart = sample.offset;
             block = new Uint8Array(
-              await file.slice(blockStart, Math.max(end, blockStart + 1024 * 1024)).arrayBuffer(),
+              await file
+                .slice(blockStart, Math.max(end, blockStart + 4 * 1024 * 1024))
+                .arrayBuffer(),
             );
           }
           const bytes = block.subarray(sample.offset - blockStart, end - blockStart);
@@ -140,15 +166,16 @@ async function run(file: File, limit: number) {
         notify();
       }
     })();
-    const scale = Math.min(1, 1280 / Math.max(source.displayWidth, source.displayHeight));
+    const scale = Math.min(1, 1600 / Math.max(source.displayWidth, source.displayHeight));
     const width = Math.max(1, Math.round(source.displayWidth * scale));
     const height = Math.max(1, Math.round(source.displayHeight * scale));
     const outWidth = source.rotation % 180 ? height : width;
     const outHeight = source.rotation % 180 ? width : height;
     const canvas = new OffscreenCanvas(outWidth, outHeight);
-    const ctx = canvas.getContext('2d')!;
-    let lastOutput = -Infinity;
+    const ctx = canvas.getContext('2d', { alpha: false })!;
     let analyzed = 0;
+    let lastPreviewAt = -Infinity;
+    await modelReady;
     while (!inputDone || queue.length) {
       await checkpoint();
       if (!queue.length) {
@@ -159,11 +186,6 @@ async function run(file: File, limit: number) {
       notify();
       const timestamp = frame.timestamp;
       try {
-        if (timestamp <= lastOutput) throw new Error('解码器未按呈现顺序输出，已停止以保护时序。');
-        lastOutput = timestamp;
-        if (!expected.has(timestamp)) continue; // Edit-list preroll/outro.
-        audit.accept(timestamp);
-        if (audit.count !== indices[analyzed]) continue;
         ctx.save();
         ctx.translate(outWidth / 2, outHeight / 2);
         ctx.rotate((source.rotation * Math.PI) / 180);
@@ -174,18 +196,21 @@ async function run(file: File, limit: number) {
       }
       // A fresh MediaPipe instance per decode run: source PTS + 1 ms is strictly
       // monotonic even at PTS zero. Wall-clock/performance time is never used.
+      const showPreview =
+        performance.now() - lastPreviewAt >= 1000 / 15 || analyzed + 1 === indices.length;
       const result = await inference.detect(
         canvas.transferToImageBitmap(),
         timestamp / 1000 + 1,
-        true,
+        showPreview,
         source.aspect,
+        true,
       );
       const preview = result.preview;
-      if (!preview) throw new Error('本地姿态 Worker 未返回预览画面。');
+      if (showPreview && !preview) throw new Error('本地姿态 Worker 未返回预览画面。');
       try {
         await checkpoint();
       } catch (error) {
-        preview.close();
+        preview?.close();
         throw error;
       }
       acknowledged = false;
@@ -197,14 +222,15 @@ async function run(file: File, limit: number) {
           index: ++analyzed,
           preview,
         },
-        [preview],
+        preview ? [preview] : [],
       );
+      if (preview) lastPreviewAt = performance.now();
       while (!acknowledged && !fatal && !stopped) await change;
     }
     if (!stopped) {
       await feed;
       await checkpoint();
-      if (outputCount !== source.decode.length)
+      if (presentation === source.presentation && outputCount !== source.decode.length)
         throw new Error(`解码样本数不匹配：${outputCount}/${source.decode.length}。`);
       audit.finish();
       scope.postMessage({

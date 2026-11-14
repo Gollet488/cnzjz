@@ -1,5 +1,11 @@
 import type { ModelProvider, ModelReply } from '../provider.ts';
-import { ProviderResponseError } from '../provider.ts';
+import {
+  localModelAddress,
+  localModelId,
+  localRequest,
+  probeLocalTools,
+  readLocalJSON,
+} from './localModel.ts';
 import { array, enumeration, object } from '../../analysis/schema.ts';
 
 type ChatInput = Pick<Parameters<ModelProvider['complete']>[0], 'messages' | 'tools'>;
@@ -25,67 +31,11 @@ function callFormat(tools: ChatInput['tools']) {
   return { anyOf: [format(finish, 1), format(working, 8)] };
 }
 export function localOllamaURL(address: string): string {
-  const url = new URL(address);
-  if (
-    !['http:', 'https:'].includes(url.protocol) ||
-    !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    url.pathname !== '/'
-  )
-    throw new Error(
-      '仅支持本机 Ollama 根地址，例如 http://127.0.0.1:11434；不接受凭据或任意路径。',
-    );
-  return url.origin;
+  return localModelAddress(address);
 }
 
-async function readJSON(response: Response): Promise<any> {
-  if (!response.body)
-    throw new ProviderResponseError(
-      response.ok ? 'OLLAMA_EMPTY_RESPONSE' : `OLLAMA_HTTP_${response.status}`,
-      { httpStatus: response.status, responseText: '', truncated: false },
-    );
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let size = 0,
-    content = '';
-  try {
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      const remaining = 1_000_000 - size;
-      size += chunk.value.byteLength;
-      if (size > 1_000_000) {
-        content += decoder.decode(chunk.value.subarray(0, remaining));
-        throw new ProviderResponseError('OLLAMA_RESPONSE_LIMIT', {
-          httpStatus: response.status,
-          responseText: content,
-          truncated: true,
-        });
-      }
-      content += decoder.decode(chunk.value, { stream: true });
-    }
-    content += decoder.decode();
-    const failure = { httpStatus: response.status, responseText: content, truncated: false };
-    if (!response.ok)
-      throw new ProviderResponseError(
-        `OLLAMA_HTTP_${response.status}：${content.slice(0, 2000)}`,
-        failure,
-      );
-    try {
-      return JSON.parse(content);
-    } catch (error) {
-      throw new ProviderResponseError(
-        `OLLAMA_INVALID_JSON：${error instanceof Error ? error.message : 'JSON_PARSE_FAILED'}`,
-        failure,
-      );
-    }
-  } finally {
-    await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
+function cloudOllamaModel(model: string) {
+  return /(?:[:-]cloud)(?:$|:)/i.test(model);
 }
 
 export class OllamaProvider implements ModelProvider {
@@ -98,9 +48,9 @@ export class OllamaProvider implements ModelProvider {
   constructor(address: string, model: string, fetcher: typeof fetch = fetch, constrained = false) {
     this.baseURL = localOllamaURL(address);
     if (constrained) this.toolMode = 'constrained';
-    this.model = model.trim();
-    if (!this.model || this.model.length > 200 || /cloud/i.test(this.model))
-      throw new Error('请选择已安装的本地模型，不使用 cloud 模型。');
+    const id = localModelId(model);
+    if (!id || cloudOllamaModel(id)) throw new Error('请选择已安装的本地模型，不使用 cloud 模型。');
+    this.model = id;
     // Browser fetch requires its Window receiver; storing it as an instance
     // method would otherwise call it with this=provider (Illegal invocation).
     this.fetcher = fetcher.bind(globalThis);
@@ -111,64 +61,33 @@ export class OllamaProvider implements ModelProvider {
   }
 
   private async request(path: string, signal: AbortSignal, body?: unknown) {
-    const response = await this.fetcher(this.baseURL + path, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal,
-      credentials: 'omit',
-      redirect: 'error',
-      referrerPolicy: 'no-referrer',
-    });
-    return readJSON(response);
+    const response = await localRequest(this.baseURL, path, signal, this.fetcher, body);
+    return readLocalJSON(response, 'OLLAMA');
   }
 
-  static async models(address: string, signal: AbortSignal): Promise<string[]> {
-    const provider = new OllamaProvider(address, 'discovery');
+  static async models(address: string, signal: AbortSignal, fetcher: typeof fetch = fetch) {
+    const provider = new OllamaProvider(address, 'discovery', fetcher);
     const data = await provider.request('/api/tags', signal);
-    if (!Array.isArray(data.models)) throw new Error('OLLAMA_INVALID_MODELS');
-    return data.models
-      .slice(0, 100)
-      .flatMap((m: any) => (typeof m.name === 'string' && !/cloud/i.test(m.name) ? [m.name] : []));
+    if (!Array.isArray(data?.models)) throw new Error('OLLAMA_INVALID_MODELS');
+    const models = new Set<string>();
+    for (const item of data.models) {
+      const id = localModelId(item?.name) ?? localModelId(item?.model);
+      if (id && !cloudOllamaModel(id) && !item.remote_host && !item.remote_model) models.add(id);
+    }
+    return [...models].slice(0, 100);
   }
 
   async checkConfiguration(signal: AbortSignal) {
     const details = await this.request('/api/show', signal, { model: this.model });
-    if (details.remote_host || details.remote_model)
+    if (details?.remote_host || details?.remote_model)
       throw new Error('不允许由本地服务转发至云模型。');
-    if (!Array.isArray(details.capabilities) || !details.capabilities.includes('tools'))
+    if (!Array.isArray(details?.capabilities) || !details.capabilities.includes('tools'))
       throw new Error('模型未声明 tools 能力；请更新 Ollama 或选择支持结构化工具的本地模型。');
   }
 
-  async probe(signal: AbortSignal): Promise<{ usage: ModelReply['usage']; requests: number }> {
+  async probe(signal: AbortSignal) {
     await this.checkConfiguration(signal);
-    // Capability metadata alone is insufficient: verify a real structured call.
-    const reply = await this.complete({
-      signal,
-      messages: [
-        { role: 'user', content: '连接测试：请仅调用 connection_check，参数 echo 为 kinetic。' },
-      ],
-      tools: [
-        {
-          name: 'connection_check',
-          description: '验证结构化工具调用协议，不访问姿态数据。',
-          inputSchema: {
-            type: 'object',
-            properties: { echo: { type: 'string', enum: ['kinetic'] } },
-            required: ['echo'],
-            additionalProperties: false,
-          },
-          outputSchema: { type: 'boolean' },
-        },
-      ],
-    });
-    if (
-      reply.calls.length !== 1 ||
-      reply.calls[0].name !== 'connection_check' ||
-      JSON.stringify(reply.calls[0].arguments) !== '{"echo":"kinetic"}'
-    )
-      throw new Error('模型未通过真实结构化工具探测；未连接。');
-    return { usage: reply.usage, requests: 1 };
+    return probeLocalTools(this, signal);
   }
 
   private chatBody({ messages, tools }: ChatInput) {

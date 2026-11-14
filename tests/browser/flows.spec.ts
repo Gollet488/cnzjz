@@ -434,7 +434,13 @@ for (const fixture of [
     const rows = await fullCSV(page, info, `${fixture}.csv`);
     expect(rows.length).toBe(30);
     expect(rows[0].acquisition_mode).toBe(
-      fixture === 'format.mov' ? 'webcodecs' : 'webcodecs-transcoded',
+      fixture === 'format.mov'
+        ? 'webcodecs'
+        : fixture === 'format-hevc.mp4'
+          ? /^(hvc1|hev1)\./.test(rows[0].source_codec)
+            ? 'webcodecs'
+            : 'webcodecs-transcoded'
+          : 'webcodecs-transcoded',
     );
     expect(rows.at(-1)!.acquisition_status).toBe('completed');
     expect(
@@ -452,6 +458,50 @@ for (const fixture of [
     await checkAssets(/\/ffmpeg\/worker\.js$/, /\/ffmpeg\/ffmpeg-core\.wasm$/);
   });
 }
+
+test('video clip previews by source frame and exports only inclusive VFR selection', async ({
+  page,
+}, info) => {
+  await page.getByRole('button', { name: '上传视频', exact: true }).click();
+  await page
+    .locator('.pose-stage input[type=file]')
+    .setInputFiles(resolve('tests/fixtures/vfr.mp4'));
+  const clip = page.getByRole('group', { name: '视频片段' });
+  const start = clip.getByRole('spinbutton', { name: '起点（秒）' });
+  const end = clip.getByRole('spinbutton', { name: '终点（秒）' });
+  const scrubber = clip.getByRole('slider', { name: '源视频帧时间轴' });
+  await clip.getByRole('button', { name: '下一帧' }).click();
+  await expect(scrubber).toHaveValue('1');
+  await start.fill('0.199999');
+  await start.press('Tab');
+  await expect(start).toHaveValue('0.200000');
+  await scrubber.fill('16');
+  await clip.getByRole('button', { name: '设为终点' }).click();
+  await expect(end).toHaveValue('0.566667');
+  await clip.getByRole('combobox', { name: '预览倍速' }).selectOption('0.25');
+  const player = page.locator('.pose-stage video');
+  await clip.getByRole('button', { name: '播放片段' }).click();
+  await expect(player).toHaveJSProperty('playbackRate', 0.25);
+  await expect(clip.getByRole('button', { name: '暂停预览' })).toBeVisible();
+  await expect(clip.getByRole('button', { name: '播放片段' })).toBeVisible();
+  await expect(scrubber).toHaveValue('16');
+  await clip.getByRole('button', { name: '分析所选范围' }).click();
+  await expect(page.locator('.offline-progress')).toContainText('11 / 11 帧');
+  await expect(page.locator('.offline-progress')).toContainText('全部完成');
+  const rows = await fullCSV(page, info, 'vfr-clip.csv');
+  const oracle = JSON.parse(await readFile(resolve('tests/fixtures/vfr.json'), 'utf8'));
+  expect(rows.map((row) => Number(row.time_s))).toEqual(
+    oracle.ptsSeconds.slice(6, 17).map((time: number) => Math.round(time * 1e6) / 1e6),
+  );
+  expect(rows.every((row) => row.acquisition_mode === 'webcodecs-clip')).toBe(true);
+  expect(rows[0].source_expected_frames).toBe('11');
+
+  await page.locator('nav').getByRole('button', { name: '采集与分析' }).click();
+  await clip.getByRole('button', { name: '选择全片' }).click();
+  await clip.getByRole('button', { name: '分析所选范围' }).click();
+  await expect(page.locator('.offline-progress')).toContainText('30 / 30 帧');
+  await expect(page.locator('.offline-progress')).toContainText('全部完成');
+});
 
 test('video formats: comparison accepts two converted formats and plays both @pages', async ({
   page,
@@ -584,6 +634,53 @@ test('comparison lifecycle: settings pause/reset real preview and source replace
   await expect(panel).toContainText('约 10 Hz');
   await page.screenshot({ path: info.outputPath('comparison-reset.png'), fullPage: true });
   expect(errors).toEqual([]);
+});
+
+test('comparison exports paired media timestamps and keeps missing pose values empty', async ({
+  page,
+}, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
+  const panel = page.locator('.comparison-panel');
+  const inputs = panel.locator('input[type=file]');
+  await inputs.nth(0).setInputFiles(resolve('tests/fixtures/30fps.mp4'));
+  await inputs.nth(1).setInputFiles(resolve('tests/fixtures/60fps.mp4'));
+  await panel.getByRole('slider', { name: '待测视频对齐起点' }).fill('0.2');
+  await panel.getByRole('button', { name: '开始对比', exact: true }).click();
+  await expect(panel.getByRole('button', { name: '重新分析', exact: true })).toBeVisible();
+  const { bytes } = await downloadFile(
+    page,
+    info,
+    panel.getByRole('button', { name: '下载对比 CSV', exact: true }),
+    'kinetic-video-comparison.csv',
+  );
+  const rows = parseCSV(bytes, null);
+  expect(rows).toHaveLength(8);
+  const paired = rows.filter((row) => row.sample_status === 'paired');
+  expect(paired.length).toBeGreaterThanOrEqual(2);
+  expect(rows.every((row) => ['paired', 'missed'].includes(row.sample_status))).toBe(true);
+  expect(rows.every((row) => row.analysis_status === 'completed')).toBe(true);
+  for (const row of paired) {
+    expect(row.reference_time_basis).toBe('presented_frame');
+    expect(row.candidate_time_basis).toBe('presented_frame');
+    expect(Math.abs(Number(row.candidate_minus_reference_aligned_s))).toBeLessThanOrEqual(0.1);
+    expect(row.reference_pose_detected).toBe('false');
+    expect(row.candidate_pose_detected).toBe('false');
+    expect(row.raw_knee_left_reference_deg).toBe('');
+    expect(row.filtered_knee_left_delta_deg).toBe('');
+    expect(row.candidate_start_s).toBe('0.2');
+  }
+  const slider = panel.getByRole('slider', { name: '回看已采样画面' });
+  await slider.focus();
+  await slider.press('Home');
+  await expect(slider).toHaveValue('1');
+  await expect(panel.locator('.compare-playhead')).toContainText(
+    `参考 ${Number(paired[0].reference_time_s).toFixed(2)} s · 待测 ${Number(paired[0].candidate_time_s).toFixed(2)} s`,
+  );
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(390);
+  await page.screenshot({ path: info.outputPath('comparison-data-mobile.png'), fullPage: true });
 });
 
 for (const action of ['replace', 'unmount'] as const) {
@@ -1632,20 +1729,33 @@ test('camera keeps partially visible joints and resumes after loss and a Worker 
   await installColorCamera(page, true);
   await page.evaluate(() => {
     const qa = ((window as any).trackingQA = { mode: 'visible', redetections: 0, workers: 0 });
+    const joints: Record<number, [number, number]> = {
+      11: [0.44, 0.2],
+      12: [0.56, 0.2],
+      23: [0.44, 0.4],
+      24: [0.56, 0.4],
+      25: [0.5, 0.55],
+      27: [0.65, 0.75],
+    };
     const send = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (message, transfer) {
       if (message.type === 'init') qa.workers++;
       if (message.type === 'detect') {
-        qa.redetections += Number(message.redetect);
+        qa.redetections += Number(Boolean(message.redetect));
         message.fail = qa.mode === 'fail';
         message.points =
-          qa.mode === 'lost'
+          qa.mode === 'lost' || (qa.mode === 'recover' && !message.redetect)
             ? []
             : Array.from({ length: 33 }, (_, i) => ({
-                x: i === 27 ? 0.7 : 0.5,
-                y: i === 23 ? 0.3 : i === 27 ? 0.75 : 0.5,
+                x: joints[i]?.[0] ?? 0.5,
+                y: joints[i]?.[1] ?? 0.5,
                 z: 0,
-                visibility: [23, 25, 27].includes(i) ? 0.95 : 0,
+                visibility:
+                  qa.mode === 'partial' && !message.redetect && i === 27
+                    ? 0.4
+                    : joints[i]
+                      ? 0.95
+                      : 0,
               }));
       }
       return send.call(this, message, transfer);
@@ -1666,22 +1776,32 @@ test('camera keeps partially visible joints and resumes after loss and a Worker 
   };
   await page.getByRole('button', { name: '开始分析', exact: true }).click();
   await count(1);
-  await expect(counter).toContainText('当前帧可用 3 / 33');
+  await expect(counter).toContainText('当前帧可用 6 / 33');
   await step(2, 'lost');
   await expect(page.locator('.status-message').filter({ hasText: '仍在采集' })).toBeVisible();
   await step(3, 'visible');
   await step(4, 'fail');
   await expect.poll(() => page.evaluate(() => (window as any).trackingQA.workers)).toBe(2);
   await step(5, 'visible');
-  expect(await page.evaluate(() => (window as any).trackingQA.redetections)).toBe(1);
+  await step(6, 'recover');
+  expect(await page.evaluate(() => (window as any).trackingQA.redetections)).toBe(2);
+  // Jump the inference clock past the retry cooldown while preserving media time.
+  await page.evaluate(() => {
+    const now = performance.now.bind(performance);
+    performance.now = () => now() + 350;
+  });
+  await step(7, 'partial');
+  expect(await page.evaluate(() => (window as any).trackingQA.redetections)).toBe(3);
   await page.getByRole('button', { name: '暂停分析', exact: true }).click();
   const rows = await fullCSV(page, info, 'reacquired.csv');
-  expect(rows.map((r) => Number(r.time_s))).toEqual([0, 0.125, 0.25, 0.375, 0.5]);
+  expect(rows.map((r) => Number(r.time_s))).toEqual([0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75]);
   expect(rows.map((r) => Boolean(r.filtered_knee_left_deg))).toEqual([
     true,
     false,
     true,
     false,
+    true,
+    true,
     true,
   ]);
   expect(rows.every((r) => !r.filtered_knee_right_deg)).toBe(true);
@@ -1827,6 +1947,17 @@ test('correction camera cues settle on sample time and review uses the selected 
   await expect(status).toHaveText('夹角偏小');
   await page.getByRole('button', { name: '上传视频', exact: true }).click();
   await expect(status).toHaveText('等待采样');
+});
+
+test('success notifications leave navigation available while visible @pages', async ({ page }) => {
+  await page.getByRole('button', { name: '手动打点', exact: true }).click();
+  const message = page.getByRole('alert').filter({ hasText: '已添加' });
+  await expect(message).toBeVisible();
+  await expect(message).toHaveCSS('pointer-events', 'none');
+
+  const tab = page.locator('nav').getByRole('button', { name: '时序可视化' });
+  await tab.click();
+  await expect(tab).toHaveAttribute('aria-current', 'page');
 });
 
 test('clip, quoted marker, recalculate preserve snapshot and downloadable CSV @pages', async ({
@@ -2336,6 +2467,9 @@ test('Agent model setup, failure, restored preference and unavailable manual ana
   let installed = true;
   let requests = 0;
   let probes = 0;
+  await page.route(/^http:\/\/(?:localhost|\[::1\]):11434\/api\/tags$/, (route) =>
+    route.fulfill({ json: { models: [] } }),
+  );
   await page.route('http://127.0.0.1:11434/api/tags', (route) =>
     route.fulfill({
       json: {

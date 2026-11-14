@@ -45,7 +45,7 @@ export function emptyAngles(): Angles {
     spine: { midline: null },
   };
 }
-const reliable = (p: Landmark | undefined, threshold: number): boolean =>
+export const reliable = (p: Landmark | undefined, threshold: number): boolean =>
   !!p &&
   [p.x, p.y, p.z, p.visibility].every(Number.isFinite) &&
   p.visibility > 0 &&

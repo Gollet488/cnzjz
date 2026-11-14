@@ -33,7 +33,18 @@
 
 ## 本机配置
 
-本地 Ollama 默认使用 `http://127.0.0.1:11434`，模型来自 `ollama list` 对应的安装清单。在模型设置中可改用其他回环端口。若读取失败，运行 `ollama serve`，确认端口和浏览器本地网络权限，并在 Ollama 的 `OLLAMA_ORIGINS` 中允许实际页面来源。页面使用 Ollama 的 JSON Schema 结构化输出，并依次开放会话读取、任务声明、任务工具和证据提交。首次规格使用动作列表声明图表、报告和 CSV 等交付要求，仍经过本地任务和证据校验。[Ollama 结构化输出](https://docs.ollama.com/capabilities/structured-outputs)
+打开「AI Agent 分析」时会检测本机 API。启动服务或加载模型后，可在「模型设置」点击「刷新模型列表」。自动检测使用 `127.0.0.1`，并在读取失败时尝试 `localhost` 和 `[::1]`。检测只读取模型清单。点击「测试连接」会执行一次工具调用，确认该模型能用于 Agent 任务。
+
+| 本地部署 | 常用端口 | 使用条件 |
+| --- | --- | --- |
+| Ollama | `11434` | 已启动 Ollama，已安装声明 `tools` 能力的模型。使用原生 API 和 JSON Schema 结构化输出。[Ollama 文档](https://docs.ollama.com/capabilities/structured-outputs) |
+| LM Studio | `1234` | 在 Developer 中启动 API 服务，载入支持工具调用的模型或启用即时加载。[LM Studio 文档](https://lmstudio.ai/docs/developer/openai-compat/tools) |
+| llama.cpp | `8080` | 启动 `llama-server` 并使用支持工具调用的模型及聊天模板。[llama.cpp 服务文档](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#tool-call-support) |
+| vLLM | `8000` | 启动兼容 API 服务，为模型配置自动工具选择和对应的工具解析器。[vLLM 服务文档](https://docs.vllm.ai/en/latest/features/tool_calling/) |
+
+自定义端口、Docker 或 WSL 部署可将 API 映射到浏览器所在设备的回环端口。打开「模型设置」，选择「Ollama」或「本地兼容服务」，填入实际地址并点击「应用地址」。兼容地址可带 `/v1` 后缀。如果服务要求 Bearer 令牌，在「本地服务令牌」中填写并应用地址。令牌仅保留在当前页面。支持兼容聊天接口但未提供模型清单时，可手动填写模型 ID，选择后测试连接。
+
+通过 `pnpm dev` 或 `pnpm preview` 在本机运行时，模型清单若被浏览器拦截，可通过同源本机代理读取。兼容服务的工具请求在本机版优先使用代理，即使服务只对模型清单开放跨域，也可以发送任务。使用 GitHub Pages 或 HTTPS 自托管网页时，请允许浏览器访问本地网络，并在本地服务的 CORS 配置中允许网页的实际来源。Ollama 对应的环境变量为 `OLLAMA_ORIGINS`。[Ollama 本机配置](https://docs.ollama.com/faq)
 
 本机版可将 `.env.example` 复制为项目根目录的 `.env`，为长期使用的供应商填写 API Key 和账户可用的工具模型 ID。多个 ID 用逗号分隔，留空使用该供应商的首个预设。服务启动时 Node 读取配置，进程环境变量优先。编辑后重启 `pnpm dev` 或 `pnpm preview`，点击模型设置里的「刷新模型列表」。有临时 Key 时优先使用临时 Key，留空时使用所选模型已有的服务配置。公网版始终使用访客在页面填写的官方 Key。
 
@@ -50,6 +61,20 @@
 「可发送」表示配置齐备，「已连接」表示测试或任务已收到结构化工具调用。读取配置和模型清单时不会执行推理。「测试连接」会调用所选模型，云端可能计费。供应商明确返回短期限流或过载时，代理在等待后最多补试一次。视频、原始关键点、数值计算、证据校验、图表和导出留在本机。任务指令和有界反馈经当前站点代理发送至供应商官方 API，临时 Key 同样经过该代理。浏览器持久化模型选择和本机任务审计，临时 Key 只保留在页面内存。
 
 ## 本轮生产验收
+
+### 2026-11-14 Windows 实连补验
+
+在 Chrome `157.0.8103.51` 打开本机生产预览，从应用的模型选择和「测试连接」入口发送真实结构化探测。三项各发起一次成功探测并收到 HTTP 200。LM Studio 与 llama.cpp 通过本机同源代理返回 `connection_check`，参数为 `{"echo":"kinetic"}`。本轮核验范围为模型发现和连接探测。
+
+| 供应商 | 实测结果 |
+| --- | --- |
+| llama.cpp | Windows build `10642`，回环端口 `8080`，复用本机 Qwen 2.5 7B GGUF，启用 Jinja 工具模板后通过。 |
+| LM Studio | 官方无界面服务 `llmster 0.0.27+1`，回环端口 `1234`，同一 GGUF 在 `llama.cpp-win-x86_64-avx2@2.66.0`、2048 上下文下通过。此前选择 NVIDIA 运行时时探测超时。 |
+| DeepSeek | 既有密钥配置下，官方 API 的 `deepseek-flash` 通过。 |
+| vLLM | 本机没有 WSL Linux 发行版，WSL2 状态报告虚拟化未启用。Windows 社区构建已校验下载，所需 CUDA 版 PyTorch 下载反复中断，服务未启动。[官方平台要求](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/#requirements) |
+| OpenAI、Anthropic、智谱、Moonshot | 生产预览的供应商目录报告缺少各自的 API Key，未发送真实推理请求。 |
+
+本机证据位于 `.qa/windows-real-20261114/`，其中包含三个成功探测的 `*-probe.json`、LM Studio 超时记录及 `cloud-catalog.json`。
 
 浏览器脚本回归覆盖 Ollama 和 DeepSeek 一次发送、多轮修改、ROM 回放校验、图表、报告/CSV、切换后历史模型标签、缺配置指引、主动探测、连接失败保留输入、重复提交、取消、恢复选择和手动分析入口。脚本化 HTTP 仅验证协议和页面行为。
 

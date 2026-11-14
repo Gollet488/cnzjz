@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { readMP4 } from '../src/video/mp4.ts';
 import {
   analysisFrameIndices,
+  nearestVideoFrame,
+  planVideoClip,
   sourceTimeline,
   trackRotation,
   PresentationAudit,
@@ -16,12 +18,60 @@ import { createToolRegistry } from '../src/analysis/tools.ts';
 import { serializeCSV } from '../src/utils/export.ts';
 
 test('long files sample within the memory budget and retain both ends of the source', () => {
-  assert.deepEqual(analysisFrameIndices(4, 4), [1, 2, 3, 4]);
-  const samples = analysisFrameIndices(108001, 18000);
+  function timeline(count: number, time = (i: number) => i * 33_333) {
+    return Array.from({ length: count }, (_, i) => ({
+      offset: i,
+      size: 1,
+      cts: i,
+      dts: i,
+      duration: 1,
+      is_sync: i === 0,
+      included: true,
+      timestamp: time(i),
+      durationUs: time(i + 1) - time(i),
+    }));
+  }
+  assert.deepEqual([...analysisFrameIndices(timeline(4), 4)], [1, 2, 3, 4]);
+  const samples = analysisFrameIndices(timeline(108001), 18000);
   assert.equal(samples.length, 18000);
   assert.equal(samples[0], 1);
   assert.equal(samples.at(-1), 108001);
   assert.ok(samples.every((frame, i) => !i || frame - samples[i - 1] >= 6));
+  assert.equal(analysisFrameIndices(timeline(18001), 18000).length, 18000);
+  const vfr = timeline(1001, (i) => (i <= 800 ? i * 10_000 : 8e6 + (i - 800) * 100_000));
+  const sampled = [...analysisFrameIndices(vfr, 101)].map((index) => vfr[index - 1].timestamp);
+  assert.equal(sampled[0], 0);
+  assert.equal(sampled.at(-1), 28e6);
+  assert.ok(
+    sampled.every((time, i) => !i || (time > sampled[i - 1] && time - sampled[i - 1] <= 350_000)),
+  );
+});
+
+test('HEVC MP4 preserves its codec description and sample timestamps for native decode', async () => {
+  const bytes = await readFile(new URL('./fixtures/format-hevc.mp4', import.meta.url));
+  const source = await readMP4(new Blob([bytes]));
+  assert.match(source.config.codec, /^(hvc1|hev1)\./);
+  assert.equal(source.config.description[0], 1);
+  assert.equal(source.presentation.length, 30);
+  assert.equal(source.presentation.at(-1)!.timestamp, 966_667);
+});
+
+test('clip planning starts from keyframe preroll and retains presentation frames across GOPs', async () => {
+  const bytes = await readFile(new URL('./fixtures/vfr.mp4', import.meta.url));
+  const source = await readMP4(new Blob([bytes]));
+  const timestamps = Float64Array.from(source.presentation, (frame) => frame.timestamp);
+  const clip = {
+    start: nearestVideoFrame(timestamps, 199999),
+    end: nearestVideoFrame(timestamps, 580000),
+  };
+  assert.deepEqual(clip, { start: 6, end: 16 });
+  const plan = planVideoClip(source, clip);
+  const decoded = source.decode.slice(plan.decodeStart, plan.decodeEnd + 1);
+  assert.ok(decoded[0].is_sync);
+  assert.ok(plan.decodeEnd < source.decode.length - 1);
+  assert.deepEqual(plan.presentation, source.presentation.slice(6, 17));
+  assert.ok(plan.presentation.every((frame) => decoded.includes(frame)));
+  assert.throws(() => planVideoClip(source, { start: -1, end: 1 }), /片段/);
 });
 
 test('pose acceptance rejects collapsed and unreliable detections but keeps a visible torso', () => {
@@ -238,7 +288,7 @@ test('offline client holds one unacknowledged frame on pause, resumes once, clos
     const job = new OfflineVideoJob(new File([], 'test.mp4'), 18000, {
       frame(r) {
         times.push(r.time);
-        r.preview.close();
+        r.preview?.close();
       },
       metadata() {},
       state(s) {
@@ -252,13 +302,14 @@ test('offline client holds one unacknowledged frame on pause, resumes once, clos
     assert.ok(!worker.commands.some((v: any) => v.type === 'ack'));
     job.resume();
     assert.deepEqual(times, [0]);
+    worker.send({ type: 'frame', time: 0.5, index: 2, points: [] });
     job.pause();
     worker.send(frame(1));
     job.cancel();
     worker.send(frame(2));
     job.resume();
     assert.equal(closed, 3);
-    assert.deepEqual(times, [0]);
+    assert.deepEqual(times, [0, 0.5]);
     assert.equal(states.at(-1), 'cancelled');
     assert.equal(worker.terminated, true);
     worker.send({ type: 'done', truncated: false, count: 3 });
@@ -323,7 +374,7 @@ test('session frame rejection terminates decoding instead of acknowledging a dro
     const states: string[] = [];
     const job = new OfflineVideoJob(new File([], 'test.mp4'), 18000, {
       frame(value) {
-        value.preview.close();
+        value.preview?.close();
         return false;
       },
       metadata() {},

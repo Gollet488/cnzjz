@@ -6,7 +6,12 @@ import { sourceClock, sourceLabel, sourceTimeSpan } from '../analysis/sourceDisp
 import { OllamaProvider } from '../agent/provider.ts';
 import { cloudProviderIds, cloudProviders, modelNotes } from '../agent/modelCatalog.ts';
 import type { ProviderId } from '../agent/modelCatalog.ts';
-import { choiceKey, providerNames, useAgentModels } from '../agent/useAgentModels.ts';
+import {
+  choiceKey,
+  isLocalProvider,
+  providerNames,
+  useAgentModels,
+} from '../agent/useAgentModels.ts';
 import { CloudPageProvider, modelError } from '../agent/providers/cloudPage.ts';
 import type { ModelReply } from '../agent/provider.ts';
 import { AgentRuntime } from '../agent/runtime.ts';
@@ -34,8 +39,14 @@ const emit = defineEmits<{ pause: []; export: [handle: string]; invalidateView: 
 const {
   addressInput,
   addressError,
+  localToken,
+  localTokenValid,
   cloudError,
   localError,
+  localOptions,
+  localServices,
+  localServiceCount,
+  localModelCount,
   envFile,
   publicCloud,
   refreshing,
@@ -59,7 +70,6 @@ const {
   customModelValid,
   selectCustom,
   createProvider,
-  options,
   cloudOptions,
   select,
   openSettings,
@@ -70,10 +80,11 @@ const {
   cancelTest,
   dispose,
 } = useAgentModels();
-const localOptions = computed(() => options.value.filter((item) => item.provider === 'ollama'));
+const localSettings = computed(() => isLocalProvider(settingsProvider.value));
+const compatibleSettings = computed(() => settingsProvider.value === 'local-openai');
 const activeCloud = computed(() => {
   const provider = selected.value?.provider;
-  return provider && provider !== 'ollama' ? cloudProviders[provider] : undefined;
+  return provider && !isLocalProvider(provider) ? cloudProviders[provider] : undefined;
 });
 const running = ref(false);
 let submissionCheck: AbortController | undefined;
@@ -249,6 +260,7 @@ async function submit() {
   const item = selected.value;
   const task = goal.value;
   if (!item || !ready.value || !task.trim() || running.value || testing.value) return;
+  const local = isLocalProvider(item.provider) ? item.provider : false;
   const submission = {
     submittedAt: Date.now(),
     monotonicAt: performance.now(),
@@ -272,10 +284,7 @@ async function submit() {
     const run = await runtime.run(task, submission, provider);
     if (run.status === 'cancelled' || run.status === 'stale') return;
     if (run.requests?.some((request) => request.status === 'failed')) {
-      error.value =
-        run.status === 'timeout'
-          ? run.message
-          : modelError(run.message, item.provider === 'ollama');
+      error.value = run.status === 'timeout' ? run.message : modelError(run.message, local);
       recordResult(item, false, error.value);
     } else if (run.calls.length) {
       recordResult(item, true, '已在任务中收到结构化工具调用。');
@@ -285,13 +294,11 @@ async function submit() {
         error.value = `任务未完成。${reason} 请调整任务或更换模型后重试。`;
       }
     } else if (run.rounds) {
-      error.value = modelError('NO_TOOL', item.provider === 'ollama');
+      error.value = modelError('NO_TOOL', local);
       recordResult(item, false, error.value);
     }
   } catch (reason) {
-    error.value = controller.signal.aborted
-      ? '已取消分析。'
-      : modelError(reason, item.provider === 'ollama');
+    error.value = controller.signal.aborted ? '已取消分析。' : modelError(reason, local);
     if (!controller.signal.aborted) recordResult(item, false, error.value);
   } finally {
     if (provider instanceof CloudPageProvider) void provider.release();
@@ -485,10 +492,26 @@ onBeforeUnmount(() => {
                   :key="choiceKey(item)"
                   :value="choiceKey(item)"
                 >
-                  {{ item.model }} · Ollama
+                  {{ item.model }} · {{ providerNames[item.provider] }}
+                  <template v-if="item.provider === 'local-openai'"> · {{ item.address }}</template>
                 </option>
-                <option v-if="!localOptions.length" value="settings:ollama"
+                <option
+                  v-if="
+                    loaded &&
+                    !refreshing &&
+                    !localOptions.some((item) => item.provider === 'ollama')
+                  "
+                  value="settings:ollama"
                   >Ollama · 查看配置</option
+                >
+                <option
+                  v-if="
+                    loaded &&
+                    !refreshing &&
+                    !localOptions.some((item) => item.provider === 'local-openai')
+                  "
+                  value="settings:local-openai"
+                  >本地兼容服务 · 查看配置</option
                 >
               </optgroup>
               <optgroup
@@ -515,7 +538,7 @@ onBeforeUnmount(() => {
         </div>
         <details class="model-guide">
           <summary>首次连接？查看连接指南</summary>
-          <ol v-if="selected?.provider !== 'ollama'">
+          <ol v-if="activeCloud">
             <li v-if="cloudError">{{ cloudError }}</li>
             <li
               >在上方选择云端模型，从
@@ -534,15 +557,12 @@ onBeforeUnmount(() => {
             >
           </ol>
           <ol v-else>
-            <li>启动本机 Ollama，并用 <code>ollama list</code> 确认已安装支持工具的模型。</li>
-            <li
-              >在「模型设置」确认本机地址（默认
-              <code>http://127.0.0.1:11434</code>），刷新列表后选中模型。</li
-            >
+            <li>启动 Ollama、LM Studio、llama.cpp 或 vLLM 的本地 API 服务。</li>
+            <li>打开「模型设置」刷新模型列表。使用自定义端口时，先填写并应用本机地址。</li>
             <li>点击「测试当前模型连接」。第一次载入模型可能需要等待片刻。</li>
           </ol>
         </details>
-        <template v-if="selected && selected.provider !== 'ollama'">
+        <template v-if="selected && activeCloud">
           <p v-if="modelNotes[selected.model]">{{ modelNotes[selected.model] }}</p>
           <div class="agent-key">
             <FloatingField
@@ -606,14 +626,17 @@ onBeforeUnmount(() => {
       <p v-if="choice && !selected && loaded && !refreshing" class="agent-error" role="status">
         上次选择的模型当前不可用，请刷新模型列表或重新选择。
       </p>
-      <p v-else-if="!selected && !refreshing && loaded && localError" class="connection-note">{{
-        localError
-      }}</p>
-      <p
-        v-else-if="!selected && !refreshing && loaded && !localOptions.length"
-        class="connection-note"
-      >
-        Ollama 暂无可用模型。运行 <code>ollama list</code> 检查安装，然后在模型设置刷新列表。
+      <p v-if="!activeCloud" class="connection-note" role="status">
+        <template v-if="refreshing">正在检测本地模型…</template>
+        <template v-else-if="localModelCount"
+          >从 {{ localServiceCount }} 个本地服务发现 {{ localModelCount }} 个模型。</template
+        >
+        <template v-else-if="loaded"
+          >{{
+            localServiceCount ? '已连接本地服务，模型列表为空。' : '暂未发现本地模型服务。'
+          }}
+          可在模型设置中指定地址并重新检测。</template
+        >
       </p>
       <p v-if="error" class="agent-error" role="alert">{{ error }}</p>
       <el-button v-if="!selected || error" text @click="emit('manual')">前往采集与分析</el-button>
@@ -644,10 +667,10 @@ onBeforeUnmount(() => {
               <option v-for="(name, id) in providerNames" :key="id" :value="id">{{ name }}</option>
             </select>
           </label>
-          <template v-if="settingsProvider === 'ollama'">
+          <template v-if="localSettings">
             <FloatingField
               v-slot="{ control }"
-              label="本地 Ollama 地址"
+              :label="compatibleSettings ? '本地兼容服务地址' : '本地 Ollama 地址'"
               :error="addressError"
               :validation-attempt="addressAttempt"
             >
@@ -658,13 +681,30 @@ onBeforeUnmount(() => {
                 @keydown.enter.prevent="validateAddress"
               />
             </FloatingField>
-            <el-button @click="validateAddress">应用地址</el-button>
+            <FloatingField
+              v-if="compatibleSettings"
+              v-slot="{ control }"
+              label="本地服务令牌（可选）"
+              :error="localTokenValid ? '' : '请输入有效的本地服务令牌。'"
+            >
+              <input
+                v-bind="control"
+                v-model="localToken"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                @keydown.enter.prevent="validateAddress"
+              />
+            </FloatingField>
+            <el-button :disabled="compatibleSettings && !localTokenValid" @click="validateAddress"
+              >应用地址</el-button
+            >
           </template>
-          <template v-else>
+          <template v-if="settingsProvider !== 'ollama'">
             <FloatingField
               v-slot="{ control }"
-              label="自定义模型 ID"
-              :error="customModel.trim() && !customModelValid ? '请输入有效的官方模型 ID。' : ''"
+              :label="compatibleSettings ? '手动填写本地模型 ID' : '自定义模型 ID'"
+              :error="customModel.trim() && !customModelValid ? '请输入有效的模型 ID。' : ''"
             >
               <input
                 v-bind="control"
@@ -673,23 +713,43 @@ onBeforeUnmount(() => {
                 @keydown.enter.prevent="selectCustom"
               />
             </FloatingField>
-            <el-button :disabled="!customModelValid" @click="selectCustom">选择此模型</el-button>
+            <el-button
+              :disabled="!customModelValid || (compatibleSettings && !localTokenValid)"
+              @click="selectCustom"
+              >选择此模型</el-button
+            >
           </template>
           <label v-if="settingsOptions.length"
             >模型 ID
             <select v-model="testModel" aria-label="设置中的模型 ID">
               <option value="">{{ target?.model }}（当前测试目标）</option>
-              <option v-for="item in settingsOptions" :key="item.model" :value="item.model">{{
-                item.model
-              }}</option>
+              <option
+                v-for="item in settingsOptions"
+                :key="choiceKey(item)"
+                :value="choiceKey(item)"
+                >{{ item.address ? `${item.model} · ${item.address}` : item.model }}</option
+              >
             </select>
           </label>
         </div>
-        <p v-if="settingsProvider === 'ollama' && localError">{{ localError }}</p>
-        <p v-else-if="settingsProvider === 'ollama' && loaded && !localOptions.length">
-          未找到已安装的本地模型。运行 <code>ollama list</code> 检查，安装支持 tools 的模型后刷新。
-        </p>
-        <template v-if="settingsProvider !== 'ollama'">
+        <template v-if="localSettings">
+          <p v-for="service in localServices" :key="service.address"
+            ><code>{{ service.address }}</code> · {{ service.models.length }} 个模型</p
+          >
+          <p v-if="!refreshing && localError" role="status">{{ localError }}</p>
+          <p
+            v-else-if="
+              !refreshing && settingsProvider === 'ollama' && loaded && !settingsOptions.length
+            "
+          >
+            Ollama 模型列表为空。运行 <code>ollama list</code> 检查已安装的模型后刷新。
+          </p>
+          <p v-if="compatibleSettings"
+            >支持 LM Studio、llama.cpp、vLLM 等服务。模型列表不可用时，可手动填写模型
+            ID。令牌在页面刷新后清除。</p
+          >
+        </template>
+        <template v-else-if="settingsProvider !== 'ollama' && settingsProvider !== 'local-openai'">
           <p>
             预设为已适配接口的官方模型 ID，实际可用版本取决于 API Key 所属账户。
             也可填写支持工具调用的官方模型 ID 或快照 ID，再测试连接。

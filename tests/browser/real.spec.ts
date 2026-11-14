@@ -9,6 +9,7 @@ import { ROM_INTENT_PROMPT } from '../../src/agent/romIntent.ts';
 import { resolveCitation } from '../../src/agent/runtime.ts';
 import {
   fullCSV,
+  pauseDemoAfterSampling,
   downloadFile,
   verifyAudit,
   parseCSV,
@@ -50,8 +51,7 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
   );
   await page.goto('/');
   summary.userAgent = await page.evaluate(() => navigator.userAgent);
-  await expect(page.locator('.transport-time')).toContainText('00:21', { timeout: 25_000 });
-  await page.getByRole('button', { name: '暂停分析', exact: true }).click();
+  await pauseDemoAfterSampling(page);
   const rows = await fullCSV(page, info, 'real-session.csv');
   summary.reference = {
     sessionId: rows[0].session_id,

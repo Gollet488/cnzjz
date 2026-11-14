@@ -4,16 +4,20 @@ self.exports = {};
 const assets = new URL('./mediapipe/', self.location.href).href;
 importScripts(`${assets}vision_bundle.js`);
 let engine;
-let runningMode = 'VIDEO';
+let detector;
+let vision;
+const models = {
+  baseOptions: { modelAssetPath: `${assets}pose_landmarker_lite.task`, delegate: 'CPU' },
+  numPoses: 1,
+};
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === 'init') {
-      const vision = await self.exports.FilesetResolver.forVisionTasks(`${assets}wasm`);
+      vision = await self.exports.FilesetResolver.forVisionTasks(`${assets}wasm`);
       engine = await self.exports.PoseLandmarker.createFromOptions(vision, {
+        ...models,
         canvas: new OffscreenCanvas(1, 1),
-        baseOptions: { modelAssetPath: `${assets}pose_landmarker_lite.task`, delegate: 'CPU' },
         runningMode: 'VIDEO',
-        numPoses: 1,
         minPoseDetectionConfidence: 0.5,
         minPosePresenceConfidence: 0.5,
         minTrackingConfidence: 0.5,
@@ -21,19 +25,44 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ type: 'ready' });
     } else if (data.type === 'detect') {
       try {
-        const mode = data.redetect ? 'IMAGE' : 'VIDEO';
-        if (mode !== runningMode) {
-          await engine.setOptions({ runningMode: mode });
-          runningMode = mode;
+        let image = data.bitmap;
+        const crop = data.crop;
+        if (data.redetect) {
+          // Keep the tracked ROI and temporal filters in the VIDEO graph.
+          detector ??= await self.exports.PoseLandmarker.createFromOptions(vision, {
+            ...models,
+            canvas: new OffscreenCanvas(1, 1),
+            runningMode: 'IMAGE',
+            minPoseDetectionConfidence: 0.35,
+            minPosePresenceConfidence: 0.4,
+          });
+          if (crop) {
+            const { width, height } = data.bitmap;
+            image = new OffscreenCanvas(
+              Math.max(1, Math.round(crop.width * width)),
+              Math.max(1, Math.round(crop.height * height)),
+            );
+            image.getContext('2d').drawImage(
+              data.bitmap,
+              crop.x * width,
+              crop.y * height,
+              crop.width * width,
+              crop.height * height,
+              0,
+              0,
+              image.width,
+              image.height,
+            );
+          }
         }
         const result = data.redetect
-          ? engine.detect(data.bitmap)
-          : engine.detectForVideo(data.bitmap, data.timestamp);
+          ? detector.detect(image)
+          : engine.detectForVideo(image, data.timestamp);
         const points =
           result.landmarks[0]?.map((p) => ({
-            x: p.x,
-            y: p.y,
-            z: p.z,
+            x: crop ? crop.x + p.x * crop.width : p.x,
+            y: crop ? crop.y + p.y * crop.height : p.y,
+            z: crop ? p.z * crop.width : p.z,
             visibility: p.visibility ?? 0,
           })) ?? [];
         result.close();

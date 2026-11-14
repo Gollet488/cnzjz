@@ -8,8 +8,21 @@ import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { evaluationFingerprints } from '../../scripts/evaluate-agent.mjs';
 import { resolveCitation } from '../../src/agent/runtime.ts';
-import { MODEL_INSTRUCTION_VERSION, MODEL_SYSTEM_PROMPT } from '../../src/agent/modelProtocol.ts';
-import { fullCSV, downloadFile, verifyAudit, replayCSV, numericEqual } from './files.ts';
+import {
+  MODEL_INSTRUCTION_VERSION,
+  MODEL_PROTOCOL_VERSION,
+  MODEL_SYSTEM_PROMPT,
+} from '../../src/agent/modelProtocol.ts';
+import { ROM_INTENT_PROMPT } from '../../src/agent/romIntent.ts';
+import { AGENT_PROTOCOL_VERSION } from '../../src/agent/controlProtocol.ts';
+import {
+  fullCSV,
+  pauseDemoAfterSampling,
+  downloadFile,
+  verifyAudit,
+  replayCSV,
+  numericEqual,
+} from './files.ts';
 
 const goals = {
   compare: '比较 filtered 左右膝 0–5 秒与 15–20 秒的 ROM，并展示覆盖两段的图表',
@@ -102,8 +115,7 @@ test('REAL DeepSeek page: independent compare/quality then fixed configuration 3
       );
       await page.goto('/');
       record.browser = await page.evaluate(() => navigator.userAgent);
-      await expect(page.locator('.transport-time')).toContainText('00:21', { timeout: 25000 });
-      await page.getByRole('button', { name: '暂停分析', exact: true }).click();
+      await pauseDemoAfterSampling(page);
       const rows = await fullCSV(page, info, `${label}-material.csv`);
       const session = replayCSV(rows);
       record.material = {
@@ -135,10 +147,11 @@ test('REAL DeepSeek page: independent compare/quality then fixed configuration 3
         .selectOption(JSON.stringify(['deepseek', 'deepseek-flash', '']));
       expect(record.probes).toBe(0);
 
-      await expect(page.locator('.connection-note')).toContainText('DeepSeek 官方 API');
       await page.getByRole('textbox', { name: '分析目标或后续修改' }).fill(goals[kind]);
+      const send = page.getByRole('button', { name: '发送', exact: true });
+      await expect(send).toBeEnabled();
       businessStarted = performance.now();
-      await page.getByRole('button', { name: '发送', exact: true }).click();
+      await send.click();
       const panel = page.locator('.run-panel').first();
       if (kind === 'compare') await reviewExpectedFreeGoal(page, 0);
       await expect(panel.locator('.run-status')).not.toHaveText('执行中', { timeout: 125000 });
@@ -173,13 +186,21 @@ test('REAL DeepSeek page: independent compare/quality then fixed configuration 3
       expect(run.elapsedMs).toBeLessThanOrEqual(120000);
       expect(run.requests.length).toBe(record.businessRequests);
       expect(run.status).toBe('completed');
-      expect(run.protocolVersion).toBe('2.0.0');
-      expect(run.modelProtocolVersion).toBe('3.12.0');
-      expect(MODEL_INSTRUCTION_VERSION).toBe('core-submission-evidence');
+      expect(run.protocolVersion).toBe(AGENT_PROTOCOL_VERSION);
+      expect(run.modelProtocolVersion).toBe(MODEL_PROTOCOL_VERSION);
+      const reviewedLocally = run.romReview?.parameterSource === 'local';
       expect(audit.requests[0].messages[0]).toEqual({
         role: 'system',
-        content: MODEL_SYSTEM_PROMPT,
+        content: reviewedLocally ? ROM_INTENT_PROMPT : MODEL_SYSTEM_PROMPT,
       });
+      if (reviewedLocally) {
+        expect(kind).toBe('compare');
+        expect(audit.requests).toHaveLength(1);
+        expect(audit.requests[0].reply.calls).toEqual([
+          { name: 'review_rom_intent', arguments: { intent: 'compare' } },
+        ]);
+        expect(run.romReview?.confirmation).toBeDefined();
+      }
       expect(run.timing.application).toBe('ready');
       expect(run.timing.audit).toBe('saved');
       const spec = run.task.spec;

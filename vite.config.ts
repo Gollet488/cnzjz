@@ -2,8 +2,9 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { demoHealth } from './scripts/demo-health.mjs';
 import { deepSeekProxy } from './scripts/deepseek-proxy.mjs';
+import { localModelRelay } from './scripts/local-model-relay.mjs';
 export default defineConfig({
-  plugins: [vue(), demoHealth(), deepSeekProxy()],
+  plugins: [vue(), demoHealth(), deepSeekProxy(), localModelRelay()],
   server: {
     host: '127.0.0.1',
     watch: { ignored: ['**/.qa/**', '**/.delivery/**', '**/test-results/**', '**/.pnpm-store/**'] },
@@ -29,7 +30,8 @@ export default defineConfig({
         manualChunks(id) {
           const module = id.replaceAll('\\', '/');
           if (module.includes('/element-plus/')) return 'ui';
-          if (module.includes('/echarts/') || module.includes('/zrender/')) return 'charts';
+          if (module.includes('/echarts/')) return 'charts';
+          if (module.includes('/zrender/')) return 'chart-renderer';
           if (module.includes('/@mediapipe/tasks-vision/')) return 'vision';
         },
       },

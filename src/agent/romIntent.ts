@@ -17,7 +17,7 @@ type Windows = Pick<FreeRomInput, 'first' | 'second'>;
 type RomIntent =
   | { kind: 'compare'; selection: Selection; windows: Windows; chart?: Chart }
   | { kind: 'revise'; side?: Selection['side']; windows: Partial<Windows> }
-  | { kind: 'deliver'; exportRange: RomInterval; restated?: Selection & Windows };
+  | { kind: 'deliver'; exportRange: RomInterval; restated?: Selection & Windows; chart?: Chart };
 
 const decimal = String.raw`\d+(?:\.\d+)?`;
 const absolute = String.raw`(?:绝对\s*)?(?:第\s*)?${decimal}\s*[-–—~～至到]\s*(?:第\s*)?${decimal}\s*秒`;
@@ -45,6 +45,14 @@ const deliver = new RegExp(
 );
 const deliverInProse = new RegExp(
   String.raw`^沿用(?:刚才的|上一轮的)(?:对照|比较)和图表\s*[,，]\s*准备(?:一份)?报告和\s*(?<csv>${absolute})\s*(?:的\s*)?CSV[。.]?$`,
+  'i',
+);
+const deliverWithChart = new RegExp(
+  String.raw`^准备当前比较的${selection}\s*(?<basis>filtered|raw)\s*报告\s*[,，]\s*包含前段和已修改的第二段\s*[,，]\s*并准备\s*(?<csv>${absolute})\s*CSV\s*[,，]\s*展示覆盖两段\s*(?<chart>${absolute})\s*的\s*\k<side>\k<joint>\s*\k<basis>\s*图表[。.]?$`,
+  'i',
+);
+const deliverInTwoSentences = new RegExp(
+  String.raw`^沿用(?:刚才|上一轮)的?(?:对照|比较)和图表[。.]\s*准备报告\s*[,，]\s*并准备\s*(?<csv>${absolute})\s*CSV[。.]?$`,
   'i',
 );
 const joints = {
@@ -109,7 +117,21 @@ export function parseRomIntent(goal: string, previous?: FreeRomInput): RomIntent
         : {},
     };
   }
-  const delivery = (deliver.exec(text) ?? deliverInProse.exec(text))?.groups;
+  const requestedChart = deliverWithChart.exec(text)?.groups;
+  if (requestedChart) {
+    const { joint, side, basis } = readSelection(requestedChart);
+    if (joint !== previous.joint || side !== previous.side || basis !== previous.basis) return;
+    return {
+      kind: 'deliver',
+      exportRange: readRange(requestedChart.csv),
+      chart: readRange(requestedChart.chart),
+    };
+  }
+  const delivery = (
+    deliver.exec(text) ??
+    deliverInProse.exec(text) ??
+    deliverInTwoSentences.exec(text)
+  )?.groups;
   if (delivery)
     return {
       kind: 'deliver',
@@ -161,6 +183,11 @@ export function bindRomIntent(
       input.report = true;
       input.csv = true;
       input.exportRange = intent.exportRange;
+      if (intent.chart) {
+        input.showChart = true;
+        input.linkChart = true;
+        input.chart = intent.chart;
+      }
     }
   }
   const ranges = resolveFreeRom(input, info, frames);
@@ -239,6 +266,7 @@ export function bindRomIntent(
       }
       change('deliveries.report', true);
       change('deliveries.export', csv);
+      if (intent.chart && !same(view, prior.deliveries.view)) change('deliveries.view', view);
     }
     proposed = applyTaskPatch({ changes }, goal, previous!.task);
   }

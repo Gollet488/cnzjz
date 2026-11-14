@@ -2,7 +2,7 @@ import type { PoseFrame, Marker } from '../types.ts';
 import type { SessionInfo } from '../analysis/session.ts';
 import { angleValue, channels } from './poseMath.ts';
 import { JOINTS, POINT_NAMES } from '../config.ts';
-function cells(values: readonly unknown[]) {
+export function csvCells(values: readonly unknown[]) {
   // Quote the joined row once, instead of allocating 354 individually wrapped
   // strings. Escaping, empty cells and String(number)'s precision are unchanged.
   return '"' + values.map((value) => String(value ?? '').replace(/"/g, '""')).join('","') + '"';
@@ -127,7 +127,7 @@ export function* csvChunks(
     .sort((a, b) => a.time - b.time || a.index - b.index);
   let cursor = 0;
   const encoder = new TextEncoder();
-  yield { data: encoder.encode('\uFEFF' + cells(csvHeader())), rows: 0 };
+  yield { data: encoder.encode('\uFEFF' + csvCells(csvHeader())), rows: 0 };
   for (let start = 0; start < frames.length; start += CSV_CHUNK_ROWS) {
     const end = Math.min(start + CSV_CHUNK_ROWS, frames.length);
     let text = '';
@@ -144,7 +144,7 @@ export function* csvChunks(
         labels.push(sorted[cursor++]);
       // Preserve original insertion order for labels that share a frame bucket.
       labels.sort((a, b) => a.index - b.index);
-      text += '\r\n' + cells(csvRow(f, labels.map((m) => m.label).join(' / '), session));
+      text += '\r\n' + csvCells(csvRow(f, labels.map((m) => m.label).join(' / '), session));
     }
     yield { data: encoder.encode(text), rows: end };
   }

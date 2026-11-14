@@ -6,7 +6,7 @@ import { SampleContinuity } from './sampleTiming.ts';
 export { METRIC_VERSION };
 export type SessionReference = { sessionId: string; revision: number };
 export interface Acquisition {
-  mode: 'webcodecs' | 'webcodecs-transcoded' | 'webcodecs-sampled' | 'webcodecs-transcoded-sampled';
+  mode: `webcodecs${'' | '-transcoded'}${'' | '-clip'}${'' | '-sampled'}`;
   status:
     | 'preparing'
     | 'running'

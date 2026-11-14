@@ -1,3 +1,5 @@
+import type { LocalProviderId } from './providers/localModel.ts';
+
 export const cloudProviders = {
   deepseek: {
     name: 'DeepSeek',
@@ -49,7 +51,7 @@ export const modelNotes: Readonly<Partial<Record<string, string>>> = {
 };
 
 export type CloudProviderId = keyof typeof cloudProviders;
-export type ProviderId = 'ollama' | CloudProviderId;
+export type ProviderId = LocalProviderId | CloudProviderId;
 export const cloudProviderIds = Object.keys(cloudProviders) as CloudProviderId[];
 export const cloudModelId = /^[a-z0-9][a-z0-9._:/-]{0,199}$/i;
 export const temporaryApiKeyFormat = /^[\x21\x23-\x5b\x5d-\x7e]{1,4096}$/;

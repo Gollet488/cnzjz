@@ -35,6 +35,10 @@ const acquisitionSchema = nullable(
       'webcodecs-transcoded',
       'webcodecs-sampled',
       'webcodecs-transcoded-sampled',
+      'webcodecs-clip',
+      'webcodecs-clip-sampled',
+      'webcodecs-transcoded-clip',
+      'webcodecs-transcoded-clip-sampled',
     ),
     status: enumeration(
       'preparing',
@@ -373,7 +377,10 @@ function evidence(session: AnalysisSession, interval: Interval, basis: Basis, fr
           ]
         : []),
       ...(info.acquisition?.mode.endsWith('-sampled')
-        ? ['长视频均匀抽取呈现帧进行姿态推理，帧间快速动作可能未被采样。']
+        ? ['分析区间内均匀抽取呈现帧进行姿态推理，帧间快速动作可能未被采样。']
+        : []),
+      ...(info.acquisition?.mode.includes('-clip')
+        ? ['分析覆盖所选视频片段，预期帧数以该片段为准，时间使用视频时间轴。']
         : []),
       ...(info.acquisition && !['completed', 'sampled'].includes(info.acquisition.status)
         ? [`离线视频状态为 ${info.acquisition.status}；当前数据是已分析前缀，不能代表完整源视频。`]

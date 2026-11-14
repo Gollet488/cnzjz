@@ -507,13 +507,7 @@ function offlineStatus(state: OfflineState, metadata: OfflineMetadata | null) {
   offlineSampleTotal.value = metadata?.sampleTotal ?? null;
   const sampled = metadata && metadata.sampleTotal < metadata.total;
   session.setAcquisition({
-    mode: metadata?.transcoded
-      ? sampled
-        ? 'webcodecs-transcoded-sampled'
-        : 'webcodecs-transcoded'
-      : sampled
-        ? 'webcodecs-sampled'
-        : 'webcodecs',
+    mode: `webcodecs${metadata?.transcoded ? '-transcoded' : ''}${metadata?.clipped ? '-clip' : ''}${sampled ? '-sampled' : ''}`,
     status: state,
     expectedFrames: metadata?.total ?? null,
     processedFrames: session.frames.length,
@@ -524,6 +518,7 @@ function offlineStatus(state: OfflineState, metadata: OfflineMetadata | null) {
   publishSession();
 }
 async function redecode() {
+  if (busy.value) return;
   reset(false);
   await nextTick();
   playing.value = true;
@@ -902,6 +897,7 @@ defineExpose({ analysisTools, sessionInfo });
                 ref="stage"
                 :source="source"
                 :playing="playing"
+                :active="page === 'workspace'"
                 :settings="settings"
                 :selected-frame="latest"
                 :source-aspect="sessionInfo.parameters.aspect"
@@ -913,6 +909,7 @@ defineExpose({ analysisTools, sessionInfo });
                 @ended="playing = false"
                 @busy="busy = $event"
                 @offline="offlineStatus"
+                @analyze-clip="redecode"
               />
               <div class="capture-legend"
                 ><span><i class="legend-dot mint" />人体骨骼</span
@@ -946,11 +943,16 @@ defineExpose({ analysisTools, sessionInfo });
                 /><div class="transport-main"
                   ><IconButton label="重置会话" @click="reset()"><RotateCcw /></IconButton
                   ><button class="text-button" @click="recalculate">重算指标</button
-                  ><button v-if="source === 'file'" class="text-button" @click="redecode">{{
-                    sessionInfo.acquisition?.mode.endsWith('-sampled')
-                      ? '重新抽样分析'
-                      : '重新逐帧分析'
-                  }}</button
+                  ><button
+                    v-if="source === 'file'"
+                    class="text-button"
+                    :disabled="busy"
+                    @click="redecode"
+                    >{{
+                      sessionInfo.acquisition?.mode.endsWith('-sampled')
+                        ? '重新抽样分析'
+                        : '重新逐帧分析'
+                    }}</button
                   ><span class="transport-divider" /><button class="text-button" @click="mark"
                     ><Flag :size="14" />手动打点</button
                   ><button
