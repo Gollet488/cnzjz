@@ -14,6 +14,7 @@ import type { AgentRun } from '../agent/runtime.ts';
 import AgentEvidence from './AgentEvidence.vue';
 import AgentArtifact from './AgentArtifact.vue';
 import AgentTaskSpec from './AgentTaskSpec.vue';
+import FloatingField from './FloatingField.vue';
 import RomTaskCard from './RomTaskCard.vue';
 import { executeRomCard } from '../agent/romTaskCard.ts';
 import type { FreeRomConfirmation, FreeRomReview } from '../agent/freeRomReview.ts';
@@ -32,9 +33,11 @@ const props = defineProps<{
 const emit = defineEmits<{ pause: []; export: [handle: string]; invalidateView: []; manual: [] }>();
 const {
   addressInput,
+  addressError,
   cloudError,
   localError,
   envFile,
+  publicCloud,
   refreshing,
   loaded,
   settings,
@@ -99,6 +102,18 @@ function testSelected() {
 }
 const exampleGoal = '比较已采样数据前后各 5 秒的左右膝 filtered ROM，并展示覆盖两段的图表';
 const goal = ref(exampleGoal);
+const goalEdited = ref(false);
+const addressAttempt = ref(0);
+const keyError = computed(() => {
+  const key = temporaryKey.value.trim();
+  return key && (!keyValid.value || key === selected.value?.model)
+    ? '请输入有效的官方 API Key。'
+    : '';
+});
+function validateAddress() {
+  applyAddress();
+  addressAttempt.value++;
+}
 const runs = shallowRef<AgentRun[]>([]);
 const responseMetadata = shallowRef<Record<string, NonNullable<ModelReply['response']>[]>>({});
 const error = ref('');
@@ -434,9 +449,22 @@ onBeforeUnmount(() => {
           >准备 CSV</button
         ></div
       >
-      <form @submit.prevent="submit"
-        ><label for="agent-goal">分析目标或后续修改</label
-        ><textarea id="agent-goal" v-model="goal" :disabled="running" maxlength="2000" rows="3" />
+      <form @submit.prevent="submit">
+        <FloatingField
+          v-slot="{ control }"
+          id="agent-goal"
+          label="分析目标或后续修改"
+          :error="goalEdited && !goal.trim() ? '请输入分析目标。' : undefined"
+        >
+          <textarea
+            v-bind="control"
+            v-model="goal"
+            :disabled="running"
+            maxlength="2000"
+            rows="3"
+            @input="goalEdited = true"
+          />
+        </FloatingField>
         <div class="goal-actions">
           <label class="agent-model-picker"
             >模型
@@ -488,11 +516,7 @@ onBeforeUnmount(() => {
         <details class="model-guide">
           <summary>首次连接？查看连接指南</summary>
           <ol v-if="selected?.provider !== 'ollama'">
-            <li
-              >在项目目录运行
-              <code>pnpm dev</code
-              >，用终端显示的本机地址打开页面。静态网页版可以采集和分析，云端模型需要本机服务。</li
-            >
+            <li v-if="cloudError">{{ cloudError }}</li>
             <li
               >在上方选择云端模型，从
               <a
@@ -521,25 +545,33 @@ onBeforeUnmount(() => {
         <template v-if="selected && selected.provider !== 'ollama'">
           <p v-if="modelNotes[selected.model]">{{ modelNotes[selected.model] }}</p>
           <div class="agent-key">
-            <label>
-              {{ providerNames[selected.provider] }} 官方 API Key
+            <FloatingField
+              v-slot="{ control }"
+              :label="`${providerNames[selected.provider]} 官方 API Key`"
+              :error="keyError"
+              described-by="agent-key-note"
+            >
               <input
+                v-bind="control"
                 v-model="temporaryKey"
                 aria-label="临时 API Key"
-                aria-describedby="agent-key-note"
                 type="password"
                 autocomplete="off"
                 spellcheck="false"
-                :placeholder="selectedConfigured ? '可选，优先使用临时 Key' : '粘贴官方 API Key'"
                 :disabled="running || testing || !!cloudError"
               />
-            </label>
+            </FloatingField>
             <el-button :disabled="!temporaryKey" @click="clearTemporaryKey">清除 Key</el-button>
           </div>
           <p id="agent-key-note" class="agent-key-note">
-            仅本页临时使用，刷新后清除。{{
+            Key 通过{{
+              publicCloud ? '本站 HTTPS' : '本机'
+            }}代理发送至所选供应商，刷新页面即清除。{{
               selectedConfigured ? '留空时使用已配置的服务密钥。' : ''
             }}
+          </p>
+          <p class="agent-key-note">
+            任务指令和必要的指标摘要会发送给供应商。原始视频、画面和关键点在浏览器内处理。测试连接可能计费。
           </p>
           <p v-if="cloudError" class="agent-error" role="status">{{ cloudError }}</p>
           <p
@@ -552,12 +584,6 @@ onBeforeUnmount(() => {
           >
             官方端点配置无效。请在「模型设置 → 服务配置」查看需要修正的变量。
           </p>
-          <p
-            v-else-if="temporaryKey.trim() && (!keyValid || temporaryKey.trim() === selected.model)"
-            class="agent-error"
-            role="status"
-            >请输入有效的官方 API Key。</p
-          >
         </template>
         <div class="goal-actions">
           <el-button
@@ -619,25 +645,34 @@ onBeforeUnmount(() => {
             </select>
           </label>
           <template v-if="settingsProvider === 'ollama'">
-            <label
-              >本地 Ollama 地址<input
+            <FloatingField
+              v-slot="{ control }"
+              label="本地 Ollama 地址"
+              :error="addressError"
+              :validation-attempt="addressAttempt"
+            >
+              <input
+                v-bind="control"
                 v-model="addressInput"
-                aria-label="本地 Ollama 地址"
                 type="url"
-                @keydown.enter.prevent="applyAddress"
-            /></label>
-            <el-button @click="applyAddress">应用地址</el-button>
+                @keydown.enter.prevent="validateAddress"
+              />
+            </FloatingField>
+            <el-button @click="validateAddress">应用地址</el-button>
           </template>
           <template v-else>
-            <label>
-              自定义模型 ID
+            <FloatingField
+              v-slot="{ control }"
+              label="自定义模型 ID"
+              :error="customModel.trim() && !customModelValid ? '请输入有效的官方模型 ID。' : ''"
+            >
               <input
+                v-bind="control"
                 v-model="customModel"
                 maxlength="200"
-                placeholder="输入官方模型 ID"
                 @keydown.enter.prevent="selectCustom"
               />
-            </label>
+            </FloatingField>
             <el-button :disabled="!customModelValid" @click="selectCustom">选择此模型</el-button>
           </template>
           <label v-if="settingsOptions.length"
@@ -669,7 +704,7 @@ onBeforeUnmount(() => {
             >官方地址 <code>{{ settingsConfig.endpoint }}</code></p
           >
           <p v-if="cloudError">{{ cloudError }}</p>
-          <details>
+          <details v-if="!publicCloud">
             <summary>服务配置（可选）</summary>
             <p v-if="settingsConfig?.missing.length"
               >请检查 <code>{{ settingsConfig.missing.join('、') }}</code
@@ -924,21 +959,21 @@ details {
 .connection-status,
 .run-status {
   padding: 5px 10px;
-  background: #f6eee0;
+  background: var(--warning-soft);
   border-radius: 5px;
   font-size: 12px;
-  color: #8b6826;
+  color: var(--warning);
 }
 .connected,
 .completed {
   color: var(--success);
-  background: #eaf6f0;
+  background: var(--success-soft);
 }
 .connection-form {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  align-items: end;
+  align-items: start;
   margin: 20px 0 12px;
 }
 label {
@@ -946,13 +981,15 @@ label {
   font-size: 12px;
   color: var(--text);
 }
-.connection-form label {
-  flex: 1;
-  min-width: 210px;
+.connection-form > :is(label, .floating-field) {
+  flex: 1 1 210px;
+  min-width: 0;
 }
-input,
-select,
-textarea {
+.connection-form > :deep(.el-button),
+.agent-key > :deep(.el-button) {
+  margin: 5px 0 0;
+}
+select {
   display: block;
   width: 100%;
   border: 1px solid var(--line-strong);
@@ -963,9 +1000,6 @@ textarea {
   color: var(--ink);
   font-family: inherit;
   font-size: 13px;
-}
-textarea {
-  resize: vertical;
 }
 .connection-note {
   color: var(--accent);
@@ -1009,11 +1043,11 @@ summary {
 .agent-key {
   display: flex;
   flex-wrap: wrap;
-  align-items: end;
+  align-items: start;
   gap: 8px;
   margin-top: 14px;
 }
-.agent-key label {
+.agent-key .floating-field {
   flex: 1 1 220px;
   min-width: 0;
 }
@@ -1046,7 +1080,7 @@ summary {
   margin-left: 0;
 }
 .agent-error {
-  color: #b34c40;
+  color: var(--field-danger);
   margin-top: 14px;
 }
 .agent-empty {
@@ -1094,10 +1128,10 @@ pre {
   padding: 12px;
 }
 .stale-run {
-  border-color: #d6b878;
+  border-color: var(--warning-line);
 }
 .stale-run .run-message {
-  color: #7c715a;
+  color: var(--warning);
 }
 @media (max-width: 700px) {
   .goal-panel,

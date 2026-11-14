@@ -4,13 +4,13 @@
 
 ## 快速连接
 
-1. **打开本机版。** 在项目目录运行 `pnpm dev`，打开终端显示的本机地址。GitHub Pages 等静态站点可本地采集和分析，也可以连接允许当前来源的 Ollama；云端 API 需要本机版随附的 Node 代理。
+1. **打开已配置云端 Agent 的站点。** 使用自托管 HTTPS 地址，或在项目目录运行 `pnpm dev` 并打开终端显示的本机地址。GitHub Pages 支持基础姿态分析和允许该页面来源的本机 Ollama。[公网自托管步骤](delivery.md#公网部署云端-agent)
 2. **选择模型并填 Key。** 在「AI Agent 分析」选择对应供应商的模型，从「首次连接？查看连接指南」里的官方控制台创建 API Key，确认余额、API 配额和模型权限，粘贴到页面上的 Key 输入框。需要自定义模型时，在「模型设置」选择供应商，输入官方模型 ID，再点「选择此模型」。
 3. **测试并发送。** 点击「测试当前模型连接」，或在「模型设置」点击「测试连接」。看到「已连接」表示模型成功返回了结构化工具调用。随后可发送分析目标。临时 Key 可用于连续追问；点击「清除 Key」、切换供应商或刷新页面会清除。清除正在使用的 Key 会取消对应请求。
 
 | 遇到的问题 | 怎么处理 |
 | --- | --- |
-| 无法访问本机模型代理 | 从 `pnpm dev` 的终端输出打开地址，再刷新模型列表。 |
+| 无法访问模型服务 | 打开已部署 Agent 接口的 HTTPS 地址，或从 `pnpm dev` 的终端输出打开本机版，再刷新模型列表。 |
 | Key 或账户权限错误（401/403） | 检查 Key 与供应商、账户权限和地区是否匹配。 |
 | 找不到模型（404） | 在供应商控制台核对模型 ID 与权限。 |
 | 余额不足（402）或限流（429） | 检查供应商 API 余额、调用额度；限流时稍后再试。 |
@@ -35,7 +35,7 @@
 
 本地 Ollama 默认使用 `http://127.0.0.1:11434`，模型来自 `ollama list` 对应的安装清单。在模型设置中可改用其他回环端口。若读取失败，运行 `ollama serve`，确认端口和浏览器本地网络权限，并在 Ollama 的 `OLLAMA_ORIGINS` 中允许实际页面来源。页面使用 Ollama 的 JSON Schema 结构化输出，并依次开放会话读取、任务声明、任务工具和证据提交。首次规格使用动作列表声明图表、报告和 CSV 等交付要求，仍经过本地任务和证据校验。[Ollama 结构化输出](https://docs.ollama.com/capabilities/structured-outputs)
 
-也可将 `.env.example` 复制为项目根目录的 `.env`，为长期使用的供应商填写 API Key 和账户可用的工具模型 ID。多个 ID 用逗号分隔，留空使用该供应商的首个预设。服务启动时 Node 读取配置，进程环境变量优先。编辑后重启 `pnpm dev` 或 `pnpm preview`，点击模型设置里的「刷新模型列表」。有临时 Key 时优先使用临时 Key，留空时使用所选模型已有的服务配置。
+本机版可将 `.env.example` 复制为项目根目录的 `.env`，为长期使用的供应商填写 API Key 和账户可用的工具模型 ID。多个 ID 用逗号分隔，留空使用该供应商的首个预设。服务启动时 Node 读取配置，进程环境变量优先。编辑后重启 `pnpm dev` 或 `pnpm preview`，点击模型设置里的「刷新模型列表」。有临时 Key 时优先使用临时 Key，留空时使用所选模型已有的服务配置。公网版始终使用访客在页面填写的官方 Key。
 
 | 供应商 | 密钥和模型列表 | 默认官方接口 |
 | --- | --- | --- |
@@ -47,7 +47,7 @@
 
 `*_ENDPOINT` 仅接受对应供应商的官方端点。国际版智谱和 Moonshot 分别可设 `ZHIPU_ENDPOINT=https://api.z.ai/api/paas/v4/chat/completions` 和 `MOONSHOT_ENDPOINT=https://api.moonshot.ai/v1/chat/completions`。Claude 使用工具块，OpenAI 使用 `store: false`。OpenAI 加密推理上下文与 GLM 5.3、Kimi K3 系列的思考上下文由本机 Node 代理在同一任务内回传给对应供应商，任务结束后释放。DeepSeek、GLM 5.2 和 Kimi K2.6 使用非思考工具调用。[OpenAI Responses](https://developers.openai.com/api/docs/guides/reasoning) · [Claude](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls) · [DeepSeek](https://api-docs.deepseek.com/guides/tool_calls/) · [Z.AI](https://docs.z.ai/api-reference/llm/chat-completion) · [Kimi](https://platform.kimi.ai/docs/guide/use-thinking-models)
 
-「可发送」表示配置齐备；「已连接」表示测试或任务已收到结构化工具调用。读取配置和模型清单时不会执行推理。「测试连接」会调用所选模型，云端可能计费。供应商明确返回短期限流或过载时，本机版在等待后最多补试一次；认证失败、长时间限流或未确认的网络中断由用户决定何时重试。视频、原始关键点、数值计算、证据校验、图表和导出留在本机。云端只收到任务指令和有界反馈。应用只持久化模型选择等非敏感偏好，临时 Key 随请求经本机代理发往对应的官方端点。现有任务审计继续保存在本机浏览器。
+「可发送」表示配置齐备，「已连接」表示测试或任务已收到结构化工具调用。读取配置和模型清单时不会执行推理。「测试连接」会调用所选模型，云端可能计费。供应商明确返回短期限流或过载时，代理在等待后最多补试一次。视频、原始关键点、数值计算、证据校验、图表和导出留在本机。任务指令和有界反馈经当前站点代理发送至供应商官方 API，临时 Key 同样经过该代理。浏览器持久化模型选择和本机任务审计，临时 Key 只保留在页面内存。
 
 ## 本轮生产验收
 

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer, request } from 'node:http';
 import { once } from 'node:events';
 import { createDeepSeekMiddleware, PROXY_BODY_LIMIT } from '../scripts/deepseek-proxy.mjs';
+import { publicCloudConfiguration } from '../scripts/cloud-model-config.mjs';
 import { DeepSeekProvider } from '../src/agent/providers/deepseek.ts';
 import { createServer as createViteServer, preview } from 'vite';
 
@@ -46,6 +47,105 @@ async function post(origin: string, body: any = valid, extra: any = {}) {
     ...extra,
   });
 }
+
+test('public HTTPS proxy requires the configured origin and a visitor key for provider calls', async (t) => {
+  const publicOrigin = 'https://pose.example.com';
+  const key = 'visitor-example-key';
+  const upstream = t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, 'https://api.openai.com/v1/responses');
+    assert.equal(new Headers(options.headers).get('authorization'), `Bearer ${key}`);
+    assert(!JSON.stringify(options.body).includes(key));
+    return Response.json({
+      id: 'connection-probe',
+      model: 'gpt-test',
+      status: 'completed',
+      output: [
+        {
+          type: 'function_call',
+          name: 'connection_check',
+          call_id: 'call_1',
+          arguments: '{"echo":"kinetic"}',
+        },
+      ],
+    });
+  });
+  const cloud = publicCloudConfiguration({
+    OPENAI_API_KEY: 'admin-key',
+    OPENAI_MODELS: 'gpt-test',
+  });
+  assert.equal(cloud.create('openai', 'gpt-test'), undefined);
+  const f = await fixture({ cloud, publicOrigin });
+  const send = (path: string, body: object, headers: Record<string, string> = {}) =>
+    new Promise<{ status: number; noStore: boolean; data: any }>((resolve, reject) => {
+      const req = request(f.origin + path, {
+        method: 'POST',
+        headers: {
+          Host: 'pose.example.com',
+          Origin: publicOrigin,
+          'Content-Type': 'application/json',
+          'X-Forwarded-Proto': 'https',
+          'X-Real-IP': '192.0.2.10',
+          ...headers,
+        },
+      });
+      req.on('error', reject);
+      req.on('response', async (res) => {
+        try {
+          const chunks = [];
+          for await (const chunk of res) chunks.push(chunk);
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolve({
+            status: res.statusCode!,
+            noStore: res.headers['cache-control'] === 'no-store',
+            data: text ? JSON.parse(text) : undefined,
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+      req.end(JSON.stringify(body));
+    });
+  const model = { provider: 'openai', model: 'gpt-test' };
+  const probe = { ...model, apiKey: key };
+  try {
+    for (const headers of [
+      { Host: 'other.example.com' },
+      { Origin: 'https://other.example.com' },
+      { 'X-Forwarded-Proto': 'http' },
+      { 'X-Real-IP': '192.0.2.10, 192.0.2.11' },
+      { 'Sec-Fetch-Site': 'cross-site' },
+    ]) {
+      assert.equal((await send('/__models/probe', probe, headers)).status, 403);
+    }
+    assert.equal((await send('/__deepseek/probe', {})).status, 404);
+    const catalog = await send('/__models/catalog', {});
+    assert.equal(catalog.status, 200);
+    assert(catalog.noStore);
+    const { data } = catalog;
+    assert.equal(data.public, true);
+    assert.equal(data.envFile, undefined);
+    assert(data.providers.every((entry) => !entry.models.length && !entry.missing.length));
+    const withoutKey = await send('/__models/probe', model);
+    assert.equal(withoutKey.status, 400);
+    assert.equal(withoutKey.data.error, 'CLOUD_KEY_REQUIRED');
+    assert.equal(
+      (await send('/__models/probe', { ...probe, endpoint: 'https://other.example.com' })).status,
+      400,
+    );
+    assert.equal(upstream.mock.callCount(), 0);
+    const connected = await send('/__models/probe', probe);
+    assert.equal(connected.status, 200);
+    assert.equal(connected.data.response.model, 'gpt-test');
+    assert.equal(upstream.mock.callCount(), 1);
+
+    for (let i = 0; i < 86; i++) assert.equal((await send('/__models/catalog', {})).status, 200);
+    assert.equal((await send('/__models/probe', probe)).status, 429);
+    assert.equal((await send('/__models/catalog', {}, { 'X-Real-IP': '192.0.2.11' })).status, 200);
+    assert.equal(upstream.mock.callCount(), 1);
+  } finally {
+    await f.close();
+  }
+});
 
 test('proxy enforces exact Host/Origin, same-origin metadata, POST/JSON and fixed route before provider IO', async () => {
   let calls = 0;

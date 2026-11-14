@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, watch, computed } from 'vue';
+import { onMounted, onBeforeUnmount, ref, shallowRef, watch, computed } from 'vue';
 import type { ECharts, EChartsCoreOption } from 'echarts/core';
 import type { PoseFrame, Joint, Marker } from '../types';
 import type { ChartView } from '../analysis/tools';
-import { JOINTS, COLORS } from '../config';
+import { JOINTS } from '../config';
+import { theme } from '../theme';
 import { DEMO_SIZE } from '../utils/dimensions';
 import { angleValue, channels } from '../utils/poseMath';
-import { intervalFrames, timeBound } from '../analysis/frameIndex';
+import { intervalFrames, nearestFrameIndex, timeBound } from '../analysis/frameIndex';
 import {
   paddedExtent,
   trajectoryBounds,
@@ -17,6 +18,7 @@ import {
   seriesInterval,
 } from '../utils/visualization';
 import MarkerTimeline from './MarkerTimeline.vue';
+import RollingNumber from './RollingNumber.vue';
 const props = withDefaults(
   defineProps<{
     frames: PoseFrame[];
@@ -32,6 +34,7 @@ const props = withDefaults(
     pointIndex?: number;
     pointBasis?: 'raw' | 'filtered';
     active?: boolean;
+    cursorTime?: number;
   }>(),
   { active: true },
 );
@@ -48,6 +51,31 @@ const domain = computed<[number, number]>(() => {
   return [props.frames[0]?.time ?? 0, props.frames.at(-1)?.time ?? 0];
 });
 const selection = computed(() => props.view?.interval ?? props.interval);
+const temporalGrid = { left: 52, right: 24, top: 24, bottom: 42 };
+const cursor = shallowRef<{
+  index: number;
+  time: number;
+  x: number;
+  values: { name: string; color: string; text: string; y: number | null }[];
+}>();
+const cursorBounds = shallowRef<[number, number]>([0, 0]);
+const keyboardCursor = ref(false);
+const chartLabel = computed(() => {
+  switch (props.kind) {
+    case 'center':
+      return '重心起伏时序图';
+    case 'heatmap':
+      return '七类关节角速度热力图';
+    case 'trajectory':
+      return '重心轨迹图';
+    case 'point':
+      return '关键点 X/Y 时序图';
+    default:
+      return '关节角度时序图';
+  }
+});
+let pointerX: number | undefined;
+const dragPointer = ref<number>();
 let chart: ECharts | undefined,
   observer: ResizeObserver,
   lastRender = 0;
@@ -58,7 +86,13 @@ let trailing: ReturnType<typeof setTimeout> | undefined;
 let immediatePending = false;
 let sourceKey = '';
 let sourceFrames: PoseFrame[] | undefined;
-let sourceSeries: { name: string; color: string; data: [number, number | null][] }[] = [];
+type TemporalSeries = {
+  name: string;
+  color: 'left' | 'right' | 'center';
+  data: [number, number | null][];
+};
+let sourceSeries: TemporalSeries[] = [];
+let plotSeries: TemporalSeries[] = [];
 let dirty = true;
 let chartKind: string | undefined;
 function applyOption(option: EChartsCoreOption) {
@@ -81,15 +115,42 @@ async function waitUntilRendered() {
   chart.getZr().flush();
 }
 defineExpose({ waitUntilRendered });
-const chartAccent = '#23626a';
-const chartMuted = '#50696b';
-const chartTrack = '#eff6f4';
-const axis = {
-  axisLine: { show: false },
-  axisTick: { show: false },
-  axisLabel: { color: chartMuted, fontSize: 10 },
-  splitLine: { lineStyle: { color: '#d8e6e3', type: 'dashed' as const } },
-};
+// ECharts paints to canvas and needs resolved CSS values.
+const palette = computed(() => {
+  void theme.value;
+  const style = getComputedStyle(document.documentElement);
+  const color = (token: string) => style.getPropertyValue(token).trim();
+  const chartMuted = color('--muted');
+  const chartSurface = color('--surface');
+  const line = color('--line');
+  return {
+    chartMuted,
+    chartSurface,
+    chartAccent: color('--chart-center'),
+    chartTrack: color('--surface-muted'),
+    chartHandle: color('--accent-mid'),
+    chartFill: color('--chart-fill'),
+    chartSelection: color('--chart-selection'),
+    heatColors: [color('--chart-heat-low'), color('--chart-heat-mid'), color('--chart-heat-high')],
+    series: {
+      left: color('--chart-left'),
+      right: color('--chart-right'),
+      center: color('--chart-center'),
+    },
+    tooltip: {
+      backgroundColor: chartSurface,
+      borderColor: line,
+      textStyle: { color: color('--ink') },
+    },
+    axis: {
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: chartMuted, fontSize: 10 },
+      nameTextStyle: { color: chartMuted },
+      splitLine: { lineStyle: { color: line, type: 'dashed' as const } },
+    },
+  };
+});
 function locate(time: number) {
   const selected = selection.value;
   if (selected && (time < selected[0] || time > selected[1])) emit('range', ...domain.value);
@@ -99,12 +160,129 @@ function locate(time: number) {
 // lexical environment so they cannot pin its complete source/visible session.
 const sourceTimeLabel = (value: number) => value.toFixed(2) + ' s';
 const coordinateLabel = (value: number) => value.toFixed(3);
-function temporalFormatters(coordinates: boolean) {
-  return {
-    value: (v: unknown) =>
-      v === null ? '不可用' : Number(v).toFixed(coordinates ? 4 : 1) + (coordinates ? '' : '°'),
-    axis: (v: number) => (coordinates ? v.toFixed(3) : v + '°'),
-  };
+const angleLabel = (value: number) => value + '°';
+function showCursor(index: number) {
+  if (!chart || sourceFrames !== props.frames || !props.frames[index]) {
+    cursor.value = undefined;
+    return;
+  }
+  const time = props.frames[index].time;
+  const x = chart.convertToPixel({ xAxisIndex: 0 }, time);
+  if (!Number.isFinite(x)) {
+    cursor.value = undefined;
+    return;
+  }
+  const coordinates = props.kind === 'center' || props.kind === 'point';
+  const height = chart.getHeight() - temporalGrid.bottom;
+  const values = sourceSeries.map(({ name, color, data }) => {
+    const value = data[index]?.[1];
+    const valid = value != null && Number.isFinite(value);
+    const y = valid ? chart!.convertToPixel({ yAxisIndex: 0 }, value) : NaN;
+    return {
+      name,
+      color: palette.value.series[color],
+      text: valid ? value.toFixed(coordinates ? 4 : 1) + (coordinates ? '' : '°') : '—',
+      y: y >= temporalGrid.top && y <= height ? y : null,
+    };
+  });
+  cursor.value = { index, time, x, values };
+}
+function refreshCursor(force = false) {
+  const [start, end] = cursorBounds.value;
+  if (!chart || !props.active || !temporal.value || start >= end) {
+    cursor.value = undefined;
+    return;
+  }
+  if (pointerX !== undefined) {
+    const x = Math.max(
+      temporalGrid.left,
+      Math.min(pointerX, chart.getWidth() - temporalGrid.right),
+    );
+    const time = chart.convertFromPixel({ xAxisIndex: 0 }, x);
+    const index = Number.isFinite(time) ? nearestFrameIndex(props.frames, time, start, end) : -1;
+    if (force || cursor.value?.index !== index) showCursor(index);
+    return;
+  }
+  if (keyboardCursor.value && cursor.value) {
+    showCursor(Math.max(start, Math.min(end - 1, cursor.value.index)));
+    return;
+  }
+  const time = props.cursorTime;
+  const index =
+    time !== undefined && time >= props.frames[start]?.time && time <= props.frames[end - 1]?.time
+      ? nearestFrameIndex(props.frames, time, start, end)
+      : -1;
+  if (force || cursor.value?.index !== index) showCursor(index);
+}
+function readPointer(event: PointerEvent, clamp: boolean) {
+  if (!chart || !element.value || !temporal.value) return false;
+  const rect = element.value.getBoundingClientRect();
+  const point = [event.clientX - rect.left, event.clientY - rect.top];
+  if (!clamp && !chart.containPixel({ gridIndex: 0 }, point)) return false;
+  pointerX = point[0];
+  refreshCursor();
+  return true;
+}
+function clearPointer() {
+  if (pointerX === undefined) return;
+  pointerX = undefined;
+  refreshCursor();
+}
+function movePointer(event: PointerEvent) {
+  if (dragPointer.value === event.pointerId) readPointer(event, true);
+  else if (event.pointerType !== 'touch' && !readPointer(event, false)) clearPointer();
+}
+function beginScrub(event: PointerEvent) {
+  if (
+    !event.isPrimary ||
+    event.button !== 0 ||
+    event.shiftKey ||
+    cursorBounds.value[0] >= cursorBounds.value[1] ||
+    !readPointer(event, false)
+  )
+    return;
+  dragPointer.value = event.pointerId;
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+}
+function endScrub(event: PointerEvent) {
+  if (dragPointer.value !== event.pointerId) return;
+  dragPointer.value = undefined;
+  if (event.type === 'pointerup') {
+    readPointer(event, true);
+    if (cursor.value) locate(cursor.value.time);
+  }
+  if (event.pointerType === 'touch' || event.type !== 'pointerup') clearPointer();
+}
+function focusCursor() {
+  clearPointer();
+  keyboardCursor.value = true;
+  if (!cursor.value && cursorBounds.value[0] < cursorBounds.value[1])
+    showCursor(cursorBounds.value[0]);
+}
+function blurCursor() {
+  keyboardCursor.value = false;
+  refreshCursor();
+}
+function moveKeyboardCursor(event: KeyboardEvent) {
+  const [start, end] = cursorBounds.value;
+  if (start >= end) return;
+  const index = cursor.value?.index ?? start;
+  const next = {
+    Home: start,
+    End: end - 1,
+    ArrowLeft: Math.max(start, index - 1),
+    ArrowRight: Math.min(end - 1, index + 1),
+    ArrowDown: Math.max(start, index - 1),
+    ArrowUp: Math.min(end - 1, index + 1),
+  }[event.key];
+  if (next !== undefined) {
+    event.preventDefault();
+    pointerX = undefined;
+    showCursor(next);
+  } else if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    if (cursor.value) locate(cursor.value.time);
+  }
 }
 function trajectoryTooltip(p: unknown) {
   const v = (p as { value: number[] }).value;
@@ -122,10 +300,24 @@ function heatmapFormatters(heat: ReturnType<typeof velocityHeatmap>) {
 }
 function draw() {
   if (!chart) return;
+  const {
+    chartAccent,
+    chartMuted,
+    chartSurface,
+    chartTrack,
+    chartHandle,
+    chartFill,
+    chartSelection,
+    heatColors,
+    series,
+    tooltip,
+    axis,
+  } = palette.value;
   const frames = props.frames;
   const selected = selection.value;
-  const grid = { left: 52, right: 24, top: 24, bottom: temporal.value ? 42 : 30 };
+  const grid = temporal.value ? temporalGrid : { ...temporalGrid, top: 24, bottom: 30 };
   note.value = '';
+  if (!temporal.value) cursorBounds.value = [0, 0];
   if (props.kind === 'heatmap') {
     const visible = selected ? intervalFrames(frames, selected) : frames;
     empty.value = !visible.length;
@@ -148,6 +340,7 @@ function draw() {
       animation: false,
       grid: { left: 58, right: 18, top: 10, bottom: 62 },
       tooltip: {
+        ...tooltip,
         formatter: format.tooltip,
       },
       xAxis: {
@@ -184,7 +377,7 @@ function draw() {
           precision: 1,
           text: [`${heat.cap.toFixed(1)} °/s`, '0'],
           textStyle: { color: chartMuted, fontSize: 10 },
-          inRange: { color: ['#e8f4ed', '#bce4cb', '#7ac79c', '#e3bd76', '#e89461'] },
+          inRange: { color: heatColors },
         },
         {
           type: 'continuous',
@@ -201,13 +394,13 @@ function draw() {
           id: 'missing-velocity',
           type: 'heatmap',
           data: cellData(true),
-          itemStyle: { color: chartTrack, borderColor: '#fff', borderWidth: 1 },
+          itemStyle: { color: chartTrack, borderColor: chartSurface, borderWidth: 1 },
         },
         {
           id: 'valid-velocity',
           type: 'heatmap',
           data: cellData(false),
-          itemStyle: { borderColor: '#fff', borderWidth: 1 },
+          itemStyle: { borderColor: chartSurface, borderWidth: 1 },
           progressive: 0,
         },
       ],
@@ -239,6 +432,7 @@ function draw() {
       animation: false,
       grid,
       tooltip: {
+        ...tooltip,
         trigger: 'item',
         formatter: trajectoryTooltip,
       },
@@ -296,14 +490,14 @@ function draw() {
       ? [
           {
             name: '重心 Y',
-            color: chartAccent,
+            color: 'center',
             data: frames.map((f) => [f.time, f.center?.y ?? null]),
           },
         ]
       : point
-        ? (['x', 'y'] as const).map((coordinate, i) => ({
+        ? (['x', 'y'] as const).map<TemporalSeries>((coordinate, i) => ({
             name: coordinate.toUpperCase(),
-            color: i ? COLORS.right : COLORS.left,
+            color: i ? 'right' : 'left',
             data: pointSeries(
               frames,
               props.pointIndex ?? 15,
@@ -314,39 +508,38 @@ function draw() {
           }))
         : channels(props.joint)
             .filter((side) => !props.view || props.view.channels.includes(side))
-            .map((side) => ({
+            .map<TemporalSeries>((side) => ({
               name: { left: '左侧', right: '右侧', midline: '中线' }[side],
-              color: side === 'right' ? COLORS.right : COLORS.left,
+              color: side === 'right' ? 'right' : 'left',
               data: frames.map<[number, number | null]>((f) => [
                 f.time,
                 angleValue(props.view?.basis === 'raw' ? f.rawAngles : f.angles, props.joint, side),
               ]),
             }));
     const breaks = frames.flatMap((f, i) => (i > 0 && f.samplingGapLimit !== null ? [i] : []));
-    if (breaks.length) {
-      sourceSeries = sourceSeries.map((s) => {
-        const data: typeof s.data = [];
-        let next = 0;
-        for (const [i, point] of s.data.entries()) {
-          // The null point is display only; actual frame times remain unchanged.
-          if (breaks[next] === i) {
-            data.push([(s.data[i - 1][0] + point[0]) / 2, null]);
-            next++;
+    plotSeries = breaks.length
+      ? sourceSeries.map((s) => {
+          const data: typeof s.data = [];
+          let next = 0;
+          for (const [i, point] of s.data.entries()) {
+            // The null point is display only; actual frame times remain unchanged.
+            if (breaks[next] === i) {
+              data.push([(s.data[i - 1][0] + point[0]) / 2, null]);
+              next++;
+            }
+            data.push(point);
           }
-          data.push(point);
-        }
-        return { ...s, data };
-      });
-    }
+          return { ...s, data };
+        })
+      : sourceSeries;
   }
-  const series = sourceSeries;
   note.value = point
     ? `${props.pointBasis ?? 'filtered'} · X 向右、Y 向下 · 归一化坐标；低于置信阈值的点留空。`
     : center
       ? 'filtered · Y 向下 · 归一化坐标；缺失处断开。'
       : '';
   let aggregated = false;
-  const display = series.map((s) => {
+  const display = plotSeries.map((s) => {
     const source = selected ? seriesInterval(s.data, selected) : s.data;
     const data = peakDisplaySeries(source, chart!.getWidth() - grid.left - grid.right);
     aggregated ||= data.length < source.length;
@@ -363,17 +556,14 @@ function draw() {
       ' 显示按时间桶保留首末点和最小/最大值，缺失处断开；查询、CSV 和证据使用全量数据。';
   const first = domain.value[0],
     last = domain.value[1];
-  const visibleCount = selected
-    ? timeBound(frames, selected[1], true) - timeBound(frames, selected[0])
-    : frames.length;
-  const format = temporalFormatters(center || point);
+  const start = selected ? timeBound(frames, selected[0]) : 0;
+  const end = selected ? timeBound(frames, selected[1], true) : frames.length;
+  if (cursorBounds.value[0] !== start || cursorBounds.value[1] !== end)
+    cursorBounds.value = [start, end];
   applyOption({
     animation: false,
     grid,
-    tooltip: {
-      trigger: 'axis',
-      valueFormatter: format.value,
-    },
+    tooltip: { show: false },
     xAxis: {
       ...axis,
       type: 'value',
@@ -390,13 +580,14 @@ function draw() {
       max: center || point ? extent[1] : 180,
       axisLabel: {
         ...axis.axisLabel,
-        formatter: format.axis,
+        formatter: center || point ? coordinateLabel : angleLabel,
       },
     },
     dataZoom: [
       {
         type: 'inside',
         filterMode: 'none',
+        moveOnMouseMove: 'shift',
         startValue: selected?.[0] ?? first,
         endValue: selected?.[1] ?? last,
       },
@@ -412,9 +603,9 @@ function draw() {
         right: grid.right,
         borderColor: 'transparent',
         backgroundColor: chartTrack,
-        fillerColor: 'rgba(111,180,188,.28)',
-        handleStyle: { color: '#43848b', borderWidth: 0 },
-        moveHandleStyle: { color: '#43848b' },
+        fillerColor: chartSelection,
+        handleStyle: { color: chartHandle, borderWidth: 0 },
+        moveHandleStyle: { color: chartHandle },
         emphasis: { handleStyle: { color: chartAccent }, moveHandleStyle: { color: chartAccent } },
         showDetail: false,
         brushSelect: true,
@@ -427,17 +618,17 @@ function draw() {
       data: s.data,
       symbol: 'circle',
       symbolSize: 5,
-      showSymbol: visibleCount === 1,
+      showSymbol: end - start === 1,
       connectNulls: false,
-      lineStyle: { width: 2, color: s.color },
-      itemStyle: { color: s.color },
-      areaStyle: center ? { color: 'rgba(111,180,188,.16)' } : undefined,
+      lineStyle: { width: 2, color: series[s.color] },
+      itemStyle: { color: series[s.color] },
+      areaStyle: center ? { color: chartFill } : undefined,
       markLine:
         i === 0
           ? {
               symbol: 'none',
               label: { show: false },
-              lineStyle: { color: '#68898b', type: 'dashed' },
+              lineStyle: { color: chartMuted, type: 'dashed' },
               data: props.markers
                 .filter((m) => m.time >= first && m.time <= last)
                 .map((m) => ({ name: m.label, xAxis: m.time })),
@@ -514,6 +705,7 @@ function scheduleDraw(interactive = false) {
     try {
       if (props.active) {
         draw();
+        refreshCursor(true);
         dirty = false;
         pending.value = false;
       }
@@ -547,7 +739,12 @@ onMounted(() => {
 watch(
   () => props.active,
   (active) => {
-    if (!active) return;
+    if (!active) {
+      pointerX = dragPointer.value = undefined;
+      keyboardCursor.value = false;
+      cursor.value = undefined;
+      return;
+    }
     if (dirty || !chart) {
       initializeChart();
       scheduleDraw(true);
@@ -555,6 +752,7 @@ watch(
       // Page reveal can happen between ResizeObserver deliveries with unchanged
       // dimensions. Explicitly present the retained canvas in that case too.
       setTimeout(presentChart, 0);
+      refreshCursor(true);
     }
   },
   { flush: 'post' },
@@ -567,13 +765,21 @@ watch(
       // Drop the old session immediately; an inactive chart may never draw again.
       sourceFrames = undefined;
       sourceSeries = [];
+      plotSeries = [];
       sourceKey = '';
+      cursor.value = undefined;
+      cursorBounds.value = [0, 0];
     }
     scheduleDraw(current[0] !== previous[0]);
   },
 );
 watch(
+  () => props.cursorTime,
+  () => refreshCursor(),
+);
+watch(
   [
+    theme,
     () => ((props.kind ?? 'angle') === 'angle' ? props.joint : null),
     () => props.markers.map((m) => m.label + ':' + m.time).join('|'),
     () => props.kind,
@@ -600,21 +806,77 @@ onBeforeUnmount(() => {
   <div class="time-chart" :data-kind="kind ?? 'angle'">
     <div class="chart-surface">
       <div
-        ref="element"
         class="echart"
-        :class="{ 'chart-expanded': expanded, 'heatmap-chart': kind === 'heatmap' }"
+        :class="{
+          'chart-expanded': expanded,
+          'heatmap-chart': kind === 'heatmap',
+          'temporal-plot': temporal,
+          'is-scrubbing': dragPointer !== undefined && cursor,
+        }"
         role="img"
-        :aria-label="
-          kind === 'center'
-            ? '重心起伏时序图'
-            : kind === 'heatmap'
-              ? '七类关节角速度热力图'
-              : kind === 'trajectory'
-                ? '重心轨迹图'
-                : kind === 'point'
-                  ? '关键点 X/Y 时序图'
-                  : '关节角度时序图'
+        :aria-label="chartLabel"
+        @pointermove="movePointer"
+        @pointerleave="clearPointer"
+        @pointerdown="beginScrub"
+        @pointerup="endScrub"
+        @pointercancel="endScrub"
+        @lostpointercapture="endScrub"
+      >
+        <div ref="element" class="chart-engine" />
+        <template v-if="temporal && cursor">
+          <div
+            class="chart-cursor"
+            :style="{ transform: `translateX(${cursor.x}px)` }"
+            aria-hidden="true"
+          >
+            <template v-for="value in cursor.values" :key="value.name">
+              <span
+                v-if="value.y !== null"
+                class="chart-cursor-dot"
+                :style="{
+                  '--dot': value.color,
+                  transform: `translate(-50%, ${value.y - temporalGrid.top}px) translateY(-50%)`,
+                }"
+              />
+            </template>
+          </div>
+          <div class="chart-readout">
+            <div class="chart-reading">
+              <span>时间</span
+              ><strong><RollingNumber :value="sourceTimeLabel(cursor.time)" /></strong>
+            </div>
+            <div v-for="value in cursor.values" :key="value.name" class="chart-reading">
+              <span><i :style="{ background: value.color }" />{{ value.name }}</span>
+              <strong><RollingNumber :value="value.text" /></strong>
+            </div>
+          </div>
+        </template>
+        <span v-else-if="temporal && cursorBounds[0] < cursorBounds[1]" class="chart-readout-hint"
+          >横拖查看采样值，松开定位</span
+        >
+      </div>
+      <div
+        v-if="temporal && active && cursorBounds[0] < cursorBounds[1]"
+        class="chart-keyboard"
+        tabindex="0"
+        role="slider"
+        :aria-label="`${chartLabel}游标，方向键选择采样点，回车定位`"
+        :aria-valuemin="frames[cursorBounds[0]]?.time"
+        :aria-valuemax="frames[cursorBounds[1] - 1]?.time"
+        :aria-valuenow="cursor?.time ?? frames[cursorBounds[0]]?.time"
+        :aria-valuetext="
+          cursor
+            ? [
+                sourceTimeLabel(cursor.time),
+                ...cursor.values.map(
+                  (value) => `${value.name} ${value.text === '—' ? '缺失' : value.text}`,
+                ),
+              ].join('，')
+            : undefined
         "
+        @focus="focusCursor"
+        @blur="blurCursor"
+        @keydown="moveKeyboardCursor"
       />
       <span v-if="loadError" class="chart-empty" role="alert">图表加载失败，请刷新页面重试。</span>
       <span v-else-if="pending" class="chart-loading">正在加载图表…</span>
@@ -629,6 +891,106 @@ onBeforeUnmount(() => {
 <style scoped>
 .chart-surface {
   position: relative;
+}
+.echart {
+  position: relative;
+}
+.chart-engine {
+  position: absolute;
+  inset: var(--readout-height, 0px) 0 0;
+}
+.temporal-plot {
+  --readout-height: 42px;
+  box-sizing: content-box;
+  padding-top: var(--readout-height);
+  touch-action: pan-y pinch-zoom;
+}
+.temporal-plot .chart-engine {
+  cursor: crosshair;
+}
+.temporal-plot.is-scrubbing .chart-engine {
+  cursor: grabbing;
+  user-select: none;
+}
+.chart-keyboard {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  pointer-events: none;
+}
+.chart-keyboard:focus-visible {
+  outline: 2px solid var(--accent-mid);
+  outline-offset: -3px;
+}
+.chart-cursor {
+  position: absolute;
+  left: 0;
+  pointer-events: none;
+  transition: transform 105ms cubic-bezier(0.2, 0.68, 0.32, 1);
+  top: calc(var(--readout-height) + 24px);
+  bottom: 42px;
+  width: 1px;
+  background: var(--accent-mid);
+}
+.chart-cursor-dot {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--dot);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dot), transparent 65%);
+  transition: transform 105ms cubic-bezier(0.2, 0.68, 0.32, 1);
+}
+.chart-readout {
+  position: absolute;
+  top: 0;
+  left: 18px;
+  display: flex;
+  gap: 12px;
+  width: min(276px, calc(100% - 36px));
+  height: 37px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--accent-dark);
+  box-shadow: 0 3px 8px var(--shadow-soft);
+}
+.chart-readout-hint {
+  position: absolute;
+  top: 10px;
+  left: 19px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.chart-reading {
+  display: grid;
+  align-content: center;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+.chart-reading > span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.chart-reading i {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+.chart-reading strong {
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 .chart-empty,
 .chart-loading {

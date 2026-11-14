@@ -107,7 +107,7 @@ onBeforeUnmount(() => observer?.disconnect());
   position: absolute;
   top: -2px;
   height: 4px;
-  background: #e3bd76;
+  background: var(--warning-line);
 }
 .marker-choices {
   display: flex;

@@ -26,13 +26,22 @@ export function cloudConfiguration(
 ) {
   const envFile = resolve(root, '.env');
   const file = existsSync(envFile) ? parseEnv(readFileSync(envFile, 'utf8')) : {};
-  const env = { ...file, ...environment };
+  return configure({ ...file, ...environment }, envFile, fallbackDeepSeekKey);
+}
+
+export function publicCloudConfiguration(environment = process.env) {
+  return configure(environment);
+}
+
+function configure(env, envFile, fallbackDeepSeekKey) {
   const configs = Object.entries(cloudProviders).map(([provider, { prefix, presets }]) => {
     const keyName = prefix + '_API_KEY';
     const modelsName = prefix + '_MODELS';
     const endpointName = prefix + '_ENDPOINT';
-    const key = (env[keyName] ?? (provider === 'deepseek' ? fallbackDeepSeekKey() : '')).trim();
-    const configured = env[modelsName]?.trim();
+    const key = envFile
+      ? (env[keyName] ?? (provider === 'deepseek' ? fallbackDeepSeekKey() : '')).trim()
+      : '';
+    const configured = envFile && env[modelsName]?.trim();
     const ids = configured
       ? configured
           .split(',')
@@ -42,21 +51,21 @@ export function cloudConfiguration(
     const allowed = endpoints[provider];
     const endpoint = env[endpointName]?.trim() || allowed[0];
     const missing = [];
-    if (!temporaryApiKeyFormat.test(key)) missing.push(keyName);
-    if (!ids.length || !ids.every((id) => cloudModelId.test(id) && id !== key))
+    if (envFile && !temporaryApiKeyFormat.test(key)) missing.push(keyName);
+    if (envFile && (!ids.length || !ids.every((id) => cloudModelId.test(id) && id !== key)))
       missing.push(modelsName);
     if (!allowed.includes(endpoint)) missing.push(endpointName);
     return {
       provider,
       key,
       endpoint,
-      models: missing.length ? [] : [...new Set(ids)].slice(0, 40),
+      models: !envFile || missing.length ? [] : [...new Set(ids)].slice(0, 40),
       missing,
     };
   });
   return {
     catalog: {
-      envFile,
+      ...(envFile ? { envFile } : { public: true }),
       providers: configs.map(({ provider, endpoint, models, missing }) => ({
         provider,
         models,

@@ -4,13 +4,13 @@
 
 本项目面向通用人体运动的姿态采集与量化分析，提供本地推理、可追溯数值和 Agent 工具调用。启动、保留 Git 历史的上传步骤和已知限制见 [构建与交付](docs/delivery.md)，参赛要求核对见 [仓库提交清单](docs/submission-checklist.md)，目标需求见 [requirement.md](requirement.md)。
 
-2026-11-13 本机发布候选以 Git `8ccb203` 和待审阅的工作树为基线。隔离检出通过冻结安装、固定资源校验及根路径和 `/cnzjz/` 两套构建。构建产物与区间修复后的验收归档一致，沿用本机 Pages 12/12 和真人 Qwen 独立质量查询 1/1。发布验收等待发布者指定获授权的候选 SHA。[候选清单](docs/evidence/20261113-release-candidate/manifest.json) · [本机验收与证据版本](docs/evidence/20261113-release-candidate/review.md)
+已核验的发布基线为 `b36c10b`。同一 SHA 的 Checks、Pages 部署、线上产物核对及后续修复与待验条件见 [当前交付状态](docs/delivery-status.md)。
 
 ## 技术架构
 
 Vue 3 / TypeScript 负责页面和状态，Element Plus 提供交互组件，ECharts 展示时序图表。MediaPipe Pose Landmarker Lite 在浏览器内提取人体关键点；本地视频经过 MP4Box 索引、WebCodecs 解码与 Worker 推理，其他格式先由 FFmpeg WebAssembly 转换。分析层计算通用几何与时序指标，Agent 通过受控工具读取分析结果并交付带证据的报告、视图或导出。
 
-Ollama 由浏览器连接本机服务。DeepSeek、OpenAI GPT、Anthropic Claude、智谱 GLM 和 Moonshot Kimi 通过本机 Node 代理访问官方 API。系统数据流、模块职责和部署结构见 [系统架构](docs/architecture.md)，全部技术资料见 [文档索引](docs/README.md)。
+Ollama 由浏览器连接本机服务。DeepSeek、OpenAI GPT、Anthropic Claude、智谱 GLM 和 Moonshot Kimi 通过 Node 代理访问官方 API，支持本机版和带云端模型接口的 HTTPS 自托管版。[系统架构](docs/architecture.md) · [文档索引](docs/README.md)
 
 ## 启动
 
@@ -26,7 +26,7 @@ pnpm dev
 
 `prepare:assets` 将锁定版本的 MediaPipe 运行文件和固定哈希的 Lite 模型放入 public，模型缺失时需要联网下载。已有资源可以用 `pnpm check:assets` 校验。
 
-基础分析无需 API 密钥。使用云端模型时，在本机开发服务或生产预览的 Agent 页选模型、粘贴供应商的官方 API Key，再点「测试当前模型连接」。用完点击「清除 Key」，长期使用可通过本机 `.env` 配置。[模型连接指南](docs/agent-model-selection.md#快速连接)
+基础分析无需 API 密钥。使用云端模型时，在本机版或已配置 Agent 接口的 HTTPS 版选模型、粘贴供应商的官方 API Key，再点「测试当前模型连接」。用完点击「清除 Key」。本机版也可通过 `.env` 配置。[模型连接指南](docs/agent-model-selection.md#快速连接)
 
 ## 使用
 
@@ -37,9 +37,9 @@ pnpm dev
 5. 导出页保存 CSV 或 PNG；CSV 支持取消和进度，支持原生文件写入时使用文件流，否则使用内存 Blob。
 6. 在 Agent 页输入目标并选择模型。首次使用可展开「首次连接？查看连接指南」，测试通过后再发送任务。自定义模型 ID 位于「模型设置」。也可使用两段 ROM 比较任务卡手动填参或让已选模型草拟，核对后确认运行。详见 [Agent 工作台指南](docs/agent-workbench.md)。
 
-视频、画面、关键点推理和数值计算留在浏览器。云端任务的指令和必要的有界工具反馈经本机代理发送到供应商官方 API。临时 Key 仅保留在当前页面内存中，刷新后清除。Ollama 需允许页面来源跨域访问。
+视频、画面、关键点推理和数值计算留在浏览器。云端任务的指令和必要的工具反馈，经当前站点的代理发给供应商官方 API。临时 Key 在当前页面内存中保留，刷新后清除。HTTPS 自托管代理逐次使用用户提供的 Key。Ollama 需允许页面来源跨域访问。
 
-GitHub Pages 使用 `/cnzjz/` 静态构建，提供浏览器内视频分析、图表、双视频对比和 CSV/PNG 导出。摄像头需要安全上下文和设备授权，Ollama 需要本机服务允许当前网页来源且可被浏览器访问。官方云端 API 由本机 Vite 开发服务或生产预览的 Node 代理提供。
+GitHub Pages 使用 `/cnzjz/` 静态构建，提供浏览器内视频分析、图表、双视频对比和 CSV/PNG 导出。公网云端 Agent 使用独立的 Node 接口和同源 HTTPS 站点。[公网部署步骤](docs/delivery.md#公网部署云端-agent)
 
 ## 检查
 
@@ -91,4 +91,4 @@ node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case comp
 
 ## 开发与提交
 
-使用 TypeScript 类型检查、ESLint 和 Prettier 保持代码一致。改动签核后从当前 Git 仓库交付，保留开发历史。`.delivery/` 保存历史源码副本。[候选复核步骤](docs/delivery.md#核对候选与发布条件) · [核心功能执行计划](docs/core-execution-plan.md)
+使用 TypeScript 类型检查、ESLint 和 Prettier 保持代码一致。改动签核后从当前 Git 仓库交付，保留开发历史。`.delivery/` 保存历史源码副本。[构建与交付](docs/delivery.md) · [核心功能执行计划](docs/core-execution-plan.md)

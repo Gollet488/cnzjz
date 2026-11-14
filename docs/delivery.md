@@ -1,10 +1,10 @@
 # 构建与交付
 
-## 2026-11-13 本机发布候选
+## 当前交付
 
-当前交付基线为本地 `HEAD` `8ccb2034972d1bd9c6e93aa529f3c3a451969002` 加待审阅工作树。本地 `origin/main` 记录指向同一基线，发布验收等待发布者指定获授权的候选 SHA。[候选清单](evidence/20261113-release-candidate/manifest.json) · [本机验收与证据版本](evidence/20261113-release-candidate/review.md) · [仓库提交清单](submission-checklist.md)
+已核验发布版本、远程作业、产物一致性、后续修复与待验条件统一见 [当前交付状态](delivery-status.md)。交付材料见 [仓库提交清单](submission-checklist.md)。
 
-本机隔离检出通过冻结安装、固定资源校验及两套生产构建。每套 29 个产物均与区间修复后的验收归档字节一致，沿用本机 Pages 12/12 和真人 Qwen 独立质量查询 1/1。Pages 工作流在 Ubuntu 安装冻结依赖、校验资源、执行工程检查和 `/cnzjz/` 浏览器回归，合格的 main 构建上传 `dist/` 供部署。Checks 在 Windows 和 Ubuntu 独立运行。[Pages 工作流](../.github/workflows/pages.yml) · [Checks 工作流](../.github/workflows/check.yml) · [公开目标](https://gollet488.github.io/cnzjz/)
+Pages 工作流在 Ubuntu 安装冻结依赖、校验资源、执行工程检查和 `/cnzjz/` 浏览器回归，合格的 main 构建上传 `dist/` 供部署。Checks 在 Windows 和 Ubuntu 独立运行。[Pages 工作流](../.github/workflows/pages.yml) · [Checks 工作流](../.github/workflows/check.yml)
 
 ## 安装与运行
 
@@ -33,12 +33,22 @@ git rev-parse HEAD
 git diff --stat
 git diff --check
 git ls-files --others --exclude-standard
-pnpm verify:delivery --manifest docs/evidence/20261113-release-candidate/manifest.json
 ```
 
-清单校验读取原始工作树字节，`.gitattributes` 固定候选文件的检出换行。发布者应按清单审阅改动和新增文件，从当前仓库交付并保留 Git 历史。如修改清单涵盖的文件，完成编辑后用 `create:delivery` 选择新输出名，再校验和对照文件范围。源视频、完整审计、真人下载、私人路径与密钥留在本机。[复核命令、首错与文件范围](evidence/20261113-release-candidate/review.md)
+清单校验读取原始工作树字节，`.gitattributes` 固定历史清单文件的检出换行。`20261113-release-candidate/manifest.json` 在已发布 SHA 的干净检出校验。后续发布如需清单，用 `create:delivery` 选择新输出名，再用 `verify:delivery --manifest <路径>` 校验并核对文件范围。源视频、完整审计、真人下载、私人路径与密钥留在本机。[历史复核命令、首错与文件范围](evidence/20261113-release-candidate/review.md)
 
-确定候选提交后，从干净检出验证安装与访问权限，核对同一提交的 Checks、Pages 构建和部署，随后打开实际公开 HTTPS 页面核验入口及资源、视频推理、图表与片段、CSV/PNG 和所需的设备权限。原生文件选择器与落盘需交互核验，实体摄像头需可用且已获授权的设备，人体精度需独立同帧参考和不确定度。
+发布新版本时，从干净检出验证安装与访问权限，核对同一提交的 Checks、Pages 构建和部署，并在公开 HTTPS 核验入口、资源及受改动影响的流程。设备、原生保存和人体精度按 [当前交付状态](delivery-status.md) 中的条件验收。
+
+## 公网部署云端 Agent
+
+GitHub Pages 发布静态版。要让访客在公网使用自己的官方 API Key，可在有域名的服务器上部署同源 HTTPS 版。以下配置使用 Node 24.22.1 和 Caddy，域名的 DNS 指向服务器，开放 80 和 443。Caddy 自动申请和续期证书，必须能读取构建后的 `dist` 目录。[Caddy 自动 HTTPS](https://caddyserver.com/docs/automatic-https)
+
+1. 从仓库检出待发布版本，执行 `pnpm install --frozen-lockfile`、`pnpm prepare:assets`、`pnpm build`，得到根路径的 `dist`。
+2. 从项目根目录启动 `AGENT_PUBLIC_ORIGIN=https://pose.example.com pnpm start:agent`，将它交由服务器的进程管理器常驻。接口默认只监听 `127.0.0.1:8787`。视部署地区需要，在启动环境中设置 `ZHIPU_ENDPOINT` 或 `MOONSHOT_ENDPOINT` 选择对应官方端点。[端点列表](agent-model-selection.md)
+3. 将 `deploy/Caddyfile` 安装为 Caddy 的站点配置，在 Caddy 的进程环境中设置 `POSE_DOMAIN=pose.example.com`、`POSE_DIST=/srv/cnzjz/dist`，再启动或重载 Caddy。站点直接接受公网流量时，Caddy 会覆盖客户端 IP 和协议头后将 `/__models/*` 转给本机接口。使用其他反向代理时也需保留原 Host、覆盖 `X-Real-IP`、设置 `X-Forwarded-Proto: https`，并确保 Node 端口只对本机代理开放。
+4. 从 `https://pose.example.com` 打开「AI Agent 分析」，选择拥有调用权限的供应商模型，填入官方 Key 并测试。再用合成演示数据确认任务能完成、图表和 CSV 能保存。
+
+公网代理仅使用随请求传入的访客 Key，所有推理计入访客的供应商账户。代理只连接固定的官方 HTTPS 端点，拒绝跨站调用，并限制请求体、并发和单 IP 请求频率。本站处理 Key、任务指令和必要工具反馈，代理代码不记录请求内容，不将 Key 写入磁盘。多轮工具调用所需的部分供应商上下文短暂保存在 Node 内存，运维反向代理与监控时应避免采集请求体和密钥。原始视频、原始关键点、数值计算和下载留在用户的浏览器内。
 
 ## 历史记录
 

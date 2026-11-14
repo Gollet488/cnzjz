@@ -6,7 +6,7 @@ import {
   temporaryApiKeyFormat,
 } from './modelCatalog.ts';
 import type { CloudModelConfig, ProviderId } from './modelCatalog.ts';
-import { CloudPageProvider, modelError } from './providers/cloudPage.ts';
+import { CloudPageProvider, cloudUnavailable, modelError } from './providers/cloudPage.ts';
 import { localOllamaURL, OllamaProvider } from './providers/ollama.ts';
 
 const preference = 'kinetic-agent-model';
@@ -46,9 +46,12 @@ export function useAgentModels() {
   const choice = shallowRef(restoreChoice());
   const address = ref(choice.value?.address ?? defaultAddress);
   const addressInput = ref(address.value);
+  const addressError = ref('');
+  watch(addressInput, () => (addressError.value = ''), { flush: 'sync' });
   const local = ref<string[]>([]);
   const cloud = shallowRef<CloudModelConfig[]>([]);
   const envFile = ref('项目根目录下的 .env');
+  const publicCloud = ref(false);
   const localError = ref('');
   const cloudError = ref('');
   const refreshing = ref(false);
@@ -221,13 +224,13 @@ export function useAgentModels() {
           throw new Error('CLOUD_PROXY_UNAVAILABLE');
         if (controller.signal.aborted) return;
         cloud.value = configured.providers;
-        envFile.value = configured.envFile;
+        envFile.value = configured.envFile ?? envFile.value;
+        publicCloud.value = configured.public === true;
         cloudError.value = '';
       } catch {
         if (controller.signal.aborted) return;
         cloud.value = [];
-        cloudError.value =
-          '云端模型需要本机服务。请在项目目录运行 pnpm dev，从终端打开本机地址，再刷新模型列表。';
+        cloudError.value = cloudUnavailable;
       }
     };
     await Promise.all([readLocal(), readCloud()]);
@@ -243,7 +246,7 @@ export function useAgentModels() {
       local.value = [];
       void refresh();
     } catch {
-      localError.value = '请输入本机 Ollama 根地址，例如 http://127.0.0.1:11434。';
+      addressError.value = '请输入本机 Ollama 根地址，例如 http://127.0.0.1:11434。';
     }
   }
 
@@ -292,9 +295,11 @@ export function useAgentModels() {
 
   return {
     addressInput,
+    addressError,
     cloudError,
     localError,
     envFile,
+    publicCloud,
     refreshing,
     loaded,
     settings,

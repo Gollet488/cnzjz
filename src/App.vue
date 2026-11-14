@@ -12,46 +12,48 @@ import {
   nextTick,
 } from 'vue';
 import {
-  LayoutDashboard,
-  ChartNoAxesCombined,
   ArrowLeftRight,
-  FolderDown,
   ShieldCheck,
   ChevronDown,
-  ChevronRight,
   ArrowUpRight,
+  ArrowDown,
   Settings2,
   BookOpen,
-  PanelLeftClose,
   Maximize2,
   Download,
   Video,
   Upload,
   FlaskConical,
-  Play,
-  Pause,
   RotateCcw,
   Flag,
   Scissors,
   Check,
   MoveUpRight,
   Info,
-  Radio,
   ScanLine,
   Clock3,
   Layers,
+  Activity,
   Target,
   CheckCheck,
   Trash2,
   X,
   SlidersHorizontal,
+  ChartNoAxesCombined,
   Bot,
+  Moon,
+  Sun,
 } from 'lucide-vue-next';
 import { ElMessage } from './ui';
+import { theme, toggleTheme } from './theme';
 import PoseStage from './components/PoseStage.vue';
+import PlaybackTransport from './components/PlaybackTransport.vue';
 import TimeChart from './components/TimeChart.vue';
 import MarkerTimeline from './components/MarkerTimeline.vue';
 import PoseCorrection from './components/PoseCorrection.vue';
+import FloatingField from './components/FloatingField.vue';
+import ExportDownload from './components/ExportDownload.vue';
+import IconButton from './components/IconButton.vue';
 import { WorkspaceApplicationError } from './agent/completion.ts';
 import type { AgentRun } from './agent/runtime.ts';
 import { DEFAULT_SETTINGS, JOINTS, MAX_FRAMES, POINT_NAMES } from './config';
@@ -61,7 +63,7 @@ import { METRIC_VERSION } from './analysis/session';
 import { sourceClock, sourceLabel, sourceTimeSpan } from './analysis/sourceDisplay';
 import { createToolRegistry } from './analysis/tools';
 import type { ChartView } from './analysis/tools';
-import { intervalFrames, timeBound } from './analysis/frameIndex';
+import { intervalFrames, nearestFrameIndex, timeBound } from './analysis/frameIndex';
 import { useSessionStore } from './composables/useSessionStore';
 import { useCSVExport } from './composables/useCSVExport';
 import { demoPose } from './utils/demo';
@@ -90,11 +92,31 @@ const AgentPanel = defineAsyncComponent({
   loader: () => import('./components/AgentPanel.vue'),
 });
 const nav = [
-  { id: 'workspace', label: '采集与分析', icon: LayoutDashboard },
-  { id: 'analysis', label: '时序可视化', icon: ChartNoAxesCombined },
-  { id: 'compare', label: '姿态对比', icon: ArrowLeftRight },
-  { id: 'agent', label: 'AI Agent 分析', icon: Bot },
-  { id: 'export', label: '数据导出', icon: FolderDown },
+  {
+    id: 'workspace',
+    icon: ScanLine,
+    label: '采集与分析',
+    description: '采集姿态关键点，查看关节角度与重心变化。',
+  },
+  {
+    id: 'analysis',
+    icon: ChartNoAxesCombined,
+    label: '时序可视化',
+    description: '查看本次会话的关节角度、重心与统计指标。',
+  },
+  {
+    id: 'compare',
+    icon: ArrowLeftRight,
+    label: '姿态对比',
+    description: '对齐两段视频，查看动作差异出现的关节和时刻。',
+  },
+  {
+    id: 'agent',
+    icon: Bot,
+    label: 'AI Agent 分析',
+    description: '输入分析目标，由 Agent 调用本地工具计算指标。',
+  },
+  { id: 'export', icon: Download, label: '数据导出', description: '下载逐帧数据与可视化报告。' },
 ];
 const page = ref('workspace'),
   source = ref<Source>('demo'),
@@ -103,8 +125,8 @@ const page = ref('workspace'),
   guideOpen = ref(false),
   exportOpen = ref(false),
   fullOpen = ref(false),
-  sidebarOpen = ref(false),
   busy = ref(false);
+const currentPage = computed(() => nav.find((item) => item.id === page.value) ?? nav[0]!);
 const settings = reactive({ ...DEFAULT_SETTINGS });
 const joint = ref<Joint>('knee'),
   markers = ref<Marker[]>([]),
@@ -114,7 +136,8 @@ const joint = ref<Joint>('knee'),
   clipStart = ref<number | null>(null),
   clipRange = ref<[number, number] | null>(null),
   seekTime = ref(8),
-  selectedIndex = ref(-1);
+  selectedIndex = ref(-1),
+  offlineSampleTotal = ref<number | null>(null);
 const pointIndex = ref(15),
   pointBasis = ref<'raw' | 'filtered'>('filtered');
 const analysisMounted = ref(false),
@@ -219,6 +242,13 @@ const { csvProgress, csvState, csvMessage, csvFileStream, exportData, cancelCSV 
   markers,
   flush: () => publication.flush(),
 });
+const csvPercent = computed(() =>
+  csvProgress.value?.total
+    ? Math.min(99, Math.floor((csvProgress.value.rows / csvProgress.value.total) * 100))
+    : 0,
+);
+const reportState = ref<'idle' | 'writing' | 'completed' | 'failed'>('idle');
+const reportMessage = ref('');
 function initializeDemo() {
   for (let i = 0; i < 160; i++) session.append(demoPose(i * 0.05), i * 0.05);
   publishSession();
@@ -228,7 +258,12 @@ const latest = computed(() =>
   selectedIndex.value >= 0 ? frames.value[selectedIndex.value] : frames.value.at(-1),
 );
 const duration = computed(() => frames.value.at(-1)?.time ?? 0);
-const confidence = computed(() => (latest.value ? latest.value.confidence * 100 : 0));
+const chartCursorTime = computed(() => (selectedIndex.value >= 0 ? latest.value?.time : undefined));
+const playbackProgress = computed(() => {
+  if (source.value !== 'file' || !offlineSampleTotal.value) return null;
+  return Math.min(1, sessionInfo.value.sampleCount / offlineSampleTotal.value);
+});
+const confidence = computed(() => (latest.value ? latest.value.confidence * 100 : null));
 const lowConfidenceCount = computed(
   () =>
     latest.value?.points.filter((p) => p.visibility <= 0 || p.visibility < settings.threshold)
@@ -274,7 +309,9 @@ const centerScope = computed(() => {
 });
 const fps = computed(() => {
   const last = frames.value.slice(-20);
-  return last.length > 1 ? (last.length - 1) / (last.at(-1)!.time - last[0].time) : 0;
+  if (last.length < 2) return null;
+  const elapsed = last.at(-1)!.time - last[0].time;
+  return elapsed > 0 ? (last.length - 1) / elapsed : null;
 });
 const maxVelocity = computed(() => selectedSummary.value.maxVelocity);
 const jointSummaries = computed(() => selectedSummary.value.joints);
@@ -370,6 +407,7 @@ function reset(resume = true, fileName?: string) {
   lastCameraCaptureAt = 0;
   message.value = '';
   selectedIndex.value = -1;
+  offlineSampleTotal.value = null;
   clipStart.value = null;
   clipRange.value = null;
   range.value = null;
@@ -424,12 +462,7 @@ function clip() {
 function seek(value: number | number[]) {
   if (Array.isArray(value)) return;
   playing.value = false;
-  let index = timeBound(frames.value, value);
-  if (index >= frames.value.length) index = frames.value.length - 1;
-  const before = frames.value[Math.max(0, index - 1)],
-    after = frames.value[index];
-  if (before && after && Math.abs(before.time - value) <= Math.abs(after.time - value))
-    index = Math.max(0, index - 1);
+  const index = nearestFrameIndex(frames.value, value);
   selectedIndex.value = index;
   seekTime.value = frames.value[index]?.time ?? value;
   // A repeated time (especially the initial 0 s) is still an explicit media
@@ -471,6 +504,7 @@ function ready(name: string) {
 }
 function offlineStatus(state: OfflineState, metadata: OfflineMetadata | null) {
   if (source.value !== 'file' || state === 'idle') return;
+  offlineSampleTotal.value = metadata?.sampleTotal ?? null;
   const sampled = metadata && metadata.sampleTotal < metadata.total;
   session.setAcquisition({
     mode: metadata?.transcoded
@@ -495,14 +529,17 @@ async function redecode() {
   playing.value = true;
 }
 async function report() {
+  if (reportState.value === 'writing') return;
   const reportStage = stage.value;
   if (!reportStage?.canvas || !visibleFrames.value.length) {
     ElMessage.info('请先在采集页生成数据。');
     return;
   }
-  playing.value = false;
-  await nextTick();
+  reportState.value = 'writing';
+  reportMessage.value = '正在生成图片报告…';
   try {
+    playing.value = false;
+    await nextTick();
     const reference = session.info(),
       frame = latest.value,
       samples = visibleFrames.value;
@@ -526,13 +563,16 @@ async function report() {
       reference,
       assertCurrent,
     });
-    ElMessage.success('图片报告已生成，已发起下载');
+    reportState.value = 'completed';
+    reportMessage.value = '图片报告已生成，已发起下载';
+    ElMessage.success(reportMessage.value);
   } catch (error) {
-    ElMessage.error(`图片报告失败：${String(error)}`);
+    reportState.value = 'failed';
+    reportMessage.value = `图片报告失败：${String(error)}`;
+    ElMessage.error(reportMessage.value);
   }
 }
 watch(page, () => {
-  sidebarOpen.value = false;
   if (page.value !== 'workspace') playing.value = false;
 });
 watch(
@@ -554,7 +594,12 @@ defineExpose({ analysisTools, sessionInfo });
 
 <template>
   <div class="app-shell">
-    <div v-if="csvState !== 'idle'" class="csv-status" role="status" aria-live="polite">
+    <div
+      v-if="csvState !== 'idle' && page !== 'export' && !exportOpen"
+      class="csv-status"
+      role="status"
+      aria-live="polite"
+    >
       <span>{{ csvMessage }}</span>
       <template v-if="csvProgress">
         <progress
@@ -574,312 +619,204 @@ defineExpose({ analysisTools, sessionInfo });
       <button v-if="csvState === 'writing'" @click="cancelCSV">取消导出</button>
       <button v-else @click="csvState = 'idle'">关闭</button>
     </div>
-    <div v-if="sidebarOpen" class="sidebar-shade" @click="sidebarOpen = false" />
-    <aside class="sidebar" :class="{ opened: sidebarOpen }">
-      <a class="brand" href="#" @click.prevent="page = 'workspace'">
-        <img class="brand-symbol" :src="brandMark" alt="" width="44" height="44" />
-        <span class="brand-name">
-          <strong>Kinetic<span>动观</span></strong>
-          <small>HUMAN MOTION LAB</small>
-        </span>
-      </a>
-      <div class="nav-label">工作台</div>
-      <nav>
-        <button
-          v-for="item in nav"
-          :key="item.id"
-          :class="{ active: page === item.id }"
-          :aria-current="page === item.id ? 'page' : undefined"
-          @click="page = item.id"
-        >
-          <component :is="item.icon" :size="18" />
-          <span>{{ item.label }}</span>
-        </button>
-      </nav>
-      <div class="nav-label session-label">当前会话</div>
-      <button class="session-item" @click="page = 'workspace'"
-        ><span class="session-dot" /><div
-          >{{ sessionName
-          }}<small
-            >{{ frames.length.toLocaleString() }} 帧 ·
-            {{ source === 'demo' ? '演示数据' : '本地数据' }}</small
-          ></div
-        ><ChevronRight :size="13"
-      /></button>
-      <div class="sidebar-bottom">
-        <div class="privacy-card">
-          <div><ShieldCheck :size="17" /><b>本地姿态分析</b></div>
-          <p>视频与原始画面留在浏览器内。</p>
-        </div>
-        <button class="utility-link" @click="guideOpen = true">
-          <BookOpen :size="17" />使用指南 <ArrowUpRight :size="14" />
-        </button>
-        <button class="utility-link" @click="settingsOpen = true">
-          <Settings2 :size="17" />分析设置 <span class="version">v0.1 DEMO</span>
-        </button>
-        <div class="user-row">
-          <div class="avatar">研</div>
-          <div><b>研究者</b><small>本地研究工作空间</small></div>
-          <span class="user-online" />
-        </div>
-      </div>
-    </aside>
-
     <div class="main-shell">
-      <header class="topbar"
-        ><div class="breadcrumbs"
-          ><button class="mobile-toggle" aria-label="展开导航" @click="sidebarOpen = !sidebarOpen"
-            ><PanelLeftClose :size="19" /></button
-          ><img class="mobile-brand" :src="brandMark" alt="" width="24" height="24" />
-          <span>工作空间</span><ChevronRight :size="13" /><b>{{
-            nav.find((n) => n.id === page)?.label
-          }}</b></div
-        ><div class="topbar-right"
-          ><span class="privacy-status"><ShieldCheck :size="14" />隐私保护已开启</span
-          ><span class="topbar-divider" /><span class="project-tag">传智杯 · AI WEB</span
-          ><div class="small-avatar">研</div></div
-        ></header
-      >
+      <header class="topbar">
+        <a class="brand" href="#" @click.prevent="page = 'workspace'">
+          <img :src="brandMark" alt="" width="36" height="36" />
+          <strong>Kinetic <span>动观</span></strong>
+        </a>
+        <nav class="topbar-nav" aria-label="主导航">
+          <button
+            v-for="item in nav"
+            :key="item.id"
+            type="button"
+            :aria-label="item.label"
+            :aria-current="page === item.id ? 'page' : undefined"
+            :title="page === item.id ? undefined : item.label"
+            @click="page = item.id"
+          >
+            <component :is="item.icon" :size="18" aria-hidden="true" />
+            <span class="topbar-nav-label" aria-hidden="true"
+              ><span>{{ item.label }}</span></span
+            >
+          </button>
+        </nav>
+        <div class="icon-actions">
+          <button
+            class="theme-toggle"
+            type="button"
+            aria-label="深色模式"
+            :aria-pressed="theme === 'dark'"
+            :title="theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'"
+            @click="toggleTheme"
+          >
+            <Sun :size="16" aria-hidden="true" />
+            <Moon :size="16" aria-hidden="true" />
+          </button>
+          <IconButton label="使用指南" @click="guideOpen = true"><BookOpen /></IconButton>
+          <IconButton label="分析设置" @click="settingsOpen = true"><Settings2 /></IconButton>
+        </div>
+      </header>
       <main>
-        <div class="page-heading"
-          ><div
-            ><div class="eyebrow">HUMAN MOTION LAB</div
-            ><h1>{{
-              page === 'workspace'
-                ? '每一帧，都有迹可循。'
-                : page === 'analysis'
-                  ? '从变化中，读懂运动。'
-                  : page === 'compare'
-                    ? '姿态对比'
-                    : page === 'agent'
-                      ? '从目标，到有据的分析。'
-                      : '把观察，变成可用的数据。'
-            }}</h1
-            ><p>{{
-              page === 'workspace'
-                ? '通用人体姿态量化分析 · 让运动中的几何关系清晰可见'
-                : page === 'analysis'
-                  ? '探索关节角度、重心与时序变化，所有指标均来自本次会话。'
-                  : page === 'compare'
-                    ? '找出同一动作在哪个关节、哪个时刻出现差异。'
-                    : page === 'agent'
-                      ? '由模型动态选择本地工具，以真实计算结果完成分析目标。'
-                      : '将原始关键点与计算指标带入你的下一步研究。'
-            }}</p></div
-          ><div class="heading-actions"
-            ><span class="local-badge"><i />浏览器本地运行</span
-            ><el-button v-if="page !== 'compare'" @click="exportOpen = true"
-              ><Download :size="15" />导出数据<ChevronDown :size="13" /></el-button></div
-        ></div>
-
-        <template v-if="page === 'workspace' || page === 'analysis'">
-          <div class="metrics-grid">
-            <article class="metric-card"
-              ><div class="metric-label">关键点平均置信度<ScanLine :size="16" /></div
-              ><div class="metric-value"
-                >{{ frames.length ? confidence.toFixed(1) : '—' }}<span>%</span
-                ><svg viewBox="0 0 90 30" class="spark green">
-                  <path
-                    d="M0 26 9 22 17 24 26 13 33 17 42 14 49 18 58 9 67 13 75 4 90 7"
-                  /></svg></div
-              ><small
-                ><span class="mini-dot green-dot" />{{
-                  source === 'demo' ? '合成数据 · 不代表模型准确率' : '当前帧 33 个关键点平均值'
-                }}</small
-              ></article
-            >
-            <article class="metric-card"
-              ><div class="metric-label">已采集帧数<Layers :size="16" /></div
-              ><div class="metric-value"
-                >{{ frames.length.toLocaleString() }}<span>帧</span
-                ><span class="metric-badge">{{ display(fps, 0) }} FPS</span></div
-              ><small
-                >{{
-                  source === 'demo' || !latest
-                    ? '最多 33 个姿态关键点 / 帧'
-                    : `当前帧可用 ${latest.points.length - lowConfidenceCount} / 33 个关键点`
-                }}
-                <span class="quiet"
-                  >· {{ source === 'demo' ? '演示序列' : '单人姿态' }}</span
-                ></small
-              ></article
-            >
-            <article class="metric-card"
-              ><div class="metric-label">分析时长<Clock3 :size="16" /></div
-              ><div class="metric-value tabular"
-                >{{ formatTime(duration) }}<span class="metric-time-unit">min : sec</span></div
-              ><small
-                ><span class="mini-dot" :class="playing ? 'green-dot' : 'gray-dot'" />{{
-                  playing ? '正在持续采集' : '采集已暂停'
-                }}
-                <span class="quiet"
-                  >· {{ source === 'demo' ? '演示模式' : '本地模式' }}</span
-                ></small
-              ></article
-            >
-            <article class="metric-card"
-              ><div class="metric-label">平均左右不对称系数<ArrowLeftRight :size="16" /></div
-              ><div class="metric-value"
-                >{{ display(meanAsym) }}<span>%</span
-                ><div class="asym-bars"><i /><i /><i /><i /><i /><i /><i /></div></div
-              ><small
-                >左右关节角差 / 180°
-                <el-tooltip content="各双侧关节角差的平均值；仅描述差异，不代表好坏。"
-                  ><Info :size="12" /></el-tooltip></small
-            ></article>
+        <div class="page-heading">
+          <div>
+            <h1>{{ currentPage.label }}</h1>
+            <p>{{ currentPage.description }}</p>
           </div>
-        </template>
+          <div v-if="page !== 'compare'" class="heading-actions">
+            <a v-if="page === 'workspace'" class="capture-shortcut" href="#pose-capture">
+              姿态采集<ArrowDown :size="14" />
+            </a>
+            <el-button @click="exportOpen = true">
+              <Download :size="15" />导出数据<ChevronDown :size="13" />
+            </el-button>
+          </div>
+        </div>
 
-        <div v-show="page === 'workspace'" class="capture-layout">
-          <section class="panel capture-panel">
-            <div class="panel-heading capture-heading"
-              ><div class="section-title"
-                ><span class="title-marker" /><h2>姿态采集</h2
-                ><span class="tag">LIVE CAPTURE</span></div
-              ><button class="icon-button" aria-label="画布使用说明" @click="guideOpen = true"
-                ><Info :size="17" /></button
+        <div
+          v-show="page === 'workspace' || page === 'analysis'"
+          class="dashboard"
+          :class="{ 'dashboard-analysis': page === 'analysis' }"
+        >
+          <div class="dashboard-overview">
+            <section class="metrics-grid" aria-label="会话指标概览">
+              <article class="panel metric-card metric-primary">
+                <h2 class="metric-label">关键点平均置信度<ScanLine :size="20" /></h2>
+                <div class="metric-value">
+                  {{ display(confidence) }}<span v-if="confidence !== null">%</span>
+                </div>
+                <div class="metric-context">
+                  <div class="confidence-track" aria-hidden="true">
+                    <span :style="{ width: `${confidence ?? 0}%` }" />
+                  </div>
+                  <small>{{
+                    source === 'demo' ? '合成数据 · 不代表模型准确率' : '当前帧 33 个关键点平均值'
+                  }}</small>
+                </div>
+              </article>
+              <div class="metric-support">
+                <article class="panel metric-card">
+                  <h2 class="metric-label">已采集帧数<Layers :size="16" /></h2>
+                  <div class="metric-value"
+                    >{{ frames.length.toLocaleString() }}<span>帧</span></div
+                  >
+                  <small v-if="latest">
+                    当前帧可用 {{ latest.points.length - lowConfidenceCount }} / 33 个关键点
+                  </small>
+                </article>
+                <article class="panel metric-card">
+                  <h2 class="metric-label">采样帧率<Activity :size="16" /></h2>
+                  <div class="metric-value"
+                    >{{ display(fps, 0) }}<span v-if="fps !== null">FPS</span></div
+                  >
+                  <small>按最近最多 20 帧估算</small>
+                </article>
+                <article class="panel metric-card">
+                  <h2 class="metric-label">分析时长<Clock3 :size="16" /></h2>
+                  <div class="metric-value">{{ formatTime(duration) }}</div>
+                  <small>分钟 : 秒</small>
+                </article>
+                <article class="panel metric-card">
+                  <h2 class="metric-label">平均左右不对称系数<ArrowLeftRight :size="16" /></h2>
+                  <div class="metric-value"
+                    >{{ display(meanAsym) }}<span v-if="meanAsym !== null">%</span></div
+                  >
+                  <small>
+                    左右关节角差 / 180°
+                    <el-tooltip content="各双侧关节角差的平均值；仅描述差异，不代表好坏。">
+                      <Info :size="12" />
+                    </el-tooltip>
+                  </small>
+                </article>
+              </div>
+            </section>
+            <div v-if="clipRange" class="clip-banner"
+              ><Scissors :size="15" />当前片段 {{ clipRange[0].toFixed(2) }}–{{
+                clipRange[1].toFixed(2)
+              }}
+              s · {{ visibleFrames.length }} 帧<button @click="clipRange = null"
+                >查看完整会话 <X :size="12" /></button
             ></div>
-            <div class="source-toolbar"
-              ><div class="source-tabs"
-                ><button :class="{ selected: source === 'demo' }" @click="changeSource('demo')"
-                  ><FlaskConical :size="14" />演示模式</button
-                ><button :class="{ selected: source === 'camera' }" @click="changeSource('camera')"
-                  ><Video :size="14" />实时摄像头</button
-                ><button :class="{ selected: source === 'file' }" @click="changeSource('file')"
-                  ><Upload :size="14" />上传视频</button
-                ></div
-              ><el-tooltip content="骨骼、角度标注、平滑窗口与置信阈值"
-                ><button
-                  class="icon-button"
-                  aria-label="显示与分析设置"
-                  @click="settingsOpen = true"
-                  ><SlidersHorizontal :size="16" /></button></el-tooltip
-            ></div>
-            <label
-              v-if="source === 'file'"
-              style="display: block; padding: 8px 18px; font-size: 12px"
-            >
-              <input v-model="syntheticFile" type="checkbox" @change="fileProvenance" />
-              生成/合成视频素材（synthetic）
-            </label>
-            <PoseStage
-              ref="stage"
-              :source="source"
-              :playing="playing"
-              :settings="settings"
-              :selected-frame="latest"
-              :source-aspect="sessionInfo.parameters.aspect"
-              :seek-time="seekTime"
-              :session-id="sessionInfo.sessionId"
-              @frame="capture"
-              @status="status"
-              @ready="ready"
-              @ended="playing = false"
-              @busy="busy = $event"
-              @offline="offlineStatus"
-            />
-            <div class="capture-legend"
-              ><span><i class="legend-dot mint" />人体骨骼</span
-              ><span><i class="legend-dot amber" />近似重心</span
-              ><span class="capture-quality"
-                ><i
-                  class="mini-dot"
-                  :class="
-                    latest?.points.length === 33 && !lowConfidenceCount ? 'green-dot' : 'red-dot'
-                  "
-                />{{
-                  source === 'demo'
-                    ? '合成序列 · 非推理结果'
-                    : !latest
-                      ? '等待采集'
-                      : !latest.points.length
-                        ? '当前帧无可用姿态'
-                        : lowConfidenceCount
-                          ? '部分关键点可用'
-                          : '单人姿态 · 本地分析'
-                }}</span
-              ></div
-            >
-            <div class="transport"
-              ><div class="transport-row"
-                ><div class="transport-main"
-                  ><el-button type="primary" :loading="busy" @click="togglePlay"
-                    ><component :is="playing ? Pause : Play" :size="15" fill="currentColor" />{{
-                      playing ? '暂停分析' : '开始分析'
-                    }}</el-button
-                  ><el-tooltip content="清空本次会话数据并从头开始"
-                    ><button class="icon-button reset-button" aria-label="重置会话" @click="reset()"
-                      ><RotateCcw :size="16" /></button></el-tooltip
-                  ><button class="text-button" @click="recalculate">重算指标</button
-                  ><button v-if="source === 'file'" class="text-button" @click="redecode">{{
-                    sessionInfo.acquisition?.mode.endsWith('-sampled')
-                      ? '重新抽样分析'
-                      : '重新逐帧分析'
-                  }}</button
-                  ><span class="transport-divider" /><button class="text-button" @click="mark"
-                    ><Flag :size="14" />手动打点</button
-                  ><button
-                    class="text-button clip-button"
-                    :class="{ clipping: clipStart !== null }"
-                    @click="clip"
-                    ><Scissors :size="14" />{{
-                      clipStart === null ? '截取片段' : '完成截取'
-                    }}</button
-                  ></div
-                ><span class="transport-time"
-                  >{{ formatTime(latest?.time ?? 0) }}
-                  <span>/ {{ formatTime(duration) }}</span></span
-                ></div
-              ><div class="timeline-row"
-                ><el-slider
-                  :model-value="latest?.time ?? 0"
-                  :min="0"
-                  :max="Math.max(duration, 0.01)"
-                  :step="0.01"
-                  :show-tooltip="false"
-                  aria-label="历史帧时间轴"
-                  @input="seek"
-                /><span>{{ display(latest?.time ?? 0, 2) }} s</span></div
-              ><div class="capture-marker-rail"
-                ><MarkerTimeline
-                  :markers="markers"
-                  :domain="[0, duration]"
-                  :selection="
-                    clipRange ??
-                    (clipStart === null
-                      ? null
-                      : [
-                          Math.min(clipStart, latest?.time ?? clipStart),
-                          Math.max(clipStart, latest?.time ?? clipStart),
-                        ])
-                  "
-                  @seek="seek" /></div
-              ><div v-if="markers.length" class="marker-list"
-                ><button v-for="(marker, index) in markers" :key="index" @click="seek(marker.time)"
-                  ><Flag :size="10" />{{ marker.label }} · {{ marker.time.toFixed(1) }}s</button
-                ></div
-              ></div
-            >
-            <div class="capture-tip"
-              ><Info :size="13" /><span
-                >请保持单人全身入镜，正面或侧面视角更佳。角度为 2D 平面投影值。</span
-              ></div
-            >
-          </section>
+          </div>
 
-          <aside class="panel joints-panel"
+          <div class="charts-layout">
+            <section class="panel angle-panel"
+              ><div class="panel-heading"
+                ><div class="section-title"><span class="title-marker" /><h2>关节角度时序</h2></div
+                ><div class="chart-tools"
+                  ><span class="chart-legend"
+                    ><i class="legend-dot blue" />{{ joint === 'spine' ? '中线' : '左侧'
+                    }}<template v-if="joint !== 'spine'"
+                      ><i class="legend-dot orange" />右侧</template
+                    ></span
+                  ><el-select
+                    v-model="joint"
+                    size="small"
+                    aria-label="选择分析关节"
+                    style="width: 100px"
+                    ><el-option
+                      v-for="item in JOINTS"
+                      :key="item.key"
+                      :label="item.label"
+                      :value="item.key" /></el-select
+                  ><IconButton label="放大角度图表" @click="fullOpen = true"
+                    ><Maximize2 /></IconButton></div></div
+              ><TimeChart
+                :frames="visibleFrames"
+                :revision="sessionInfo.revision"
+                :joint="joint"
+                :markers="markers"
+                :interval="range"
+                kind="angle"
+                :active="page === 'workspace' || page === 'analysis'"
+                :expanded="page === 'analysis'"
+                :cursor-time="chartCursorTime"
+                @seek="seek"
+                @range="selectChartRange" /><div class="chart-footer"
+                ><span><MoveUpRight :size="12" />Shift 拖动平移 · 滚轮缩放</span
+                ><button v-if="page === 'workspace'" @click="page = 'analysis'"
+                  >探索时序数据<ArrowUpRight :size="12" /></button></div
+            ></section>
+            <section class="panel motion-panel"
+              ><div class="panel-heading"
+                ><div class="section-title"><span class="title-marker" /><h2>重心起伏</h2></div
+                ><span class="unit-label">Y / 归一化坐标</span></div
+              ><TimeChart
+                :frames="visibleFrames"
+                :revision="sessionInfo.revision"
+                :joint="joint"
+                :markers="noMarkers"
+                :interval="range"
+                kind="center"
+                :active="page === 'workspace' || page === 'analysis'"
+                :expanded="page === 'analysis'"
+                :cursor-time="chartCursorTime"
+                @seek="seek"
+                @range="selectChartRange"
+              /><div class="center-chart-foot"
+                ><span><i class="legend-dot mint" />纵向位置</span
+                ><span
+                  >波动范围 <b>{{ display(selectedSummary.centerRange, 4) }}</b></span
+                ></div
+              ><p class="center-stat-scope">统计范围：{{ centerScope }}</p></section
+            >
+          </div>
+
+          <aside class="panel joints-panel" aria-labelledby="joints-title"
             ><div class="panel-heading"
-              ><div class="section-title"><span class="title-marker" /><h2>实时关节数据</h2></div
-              ><span class="live-label"><i />{{ playing ? 'LIVE' : 'PAUSED' }}</span></div
-            ><div class="joint-intro"><span>关节夹角</span><small>单位：°</small></div
+              ><div class="section-title"
+                ><span class="title-marker" /><h2 id="joints-title">当前帧关节数据</h2></div
+              ><span class="live-label" :class="{ running: playing }"
+                ><i />{{ playing ? '播放中' : '已暂停' }}</span
+              ></div
             ><div class="joint-table-head"
-              ><span>关节</span><span><i class="legend-dot blue" />左侧 / 中线</span
+              ><span>关节 (°)</span><span><i class="legend-dot blue" />左侧 / 中线</span
               ><span><i class="legend-dot orange" />右侧</span></div
             ><button
               v-for="item in JOINTS"
               :key="item.key"
               class="joint-row"
-              :class="{ highlight: joint === item.key }"
+              :aria-pressed="joint === item.key"
               @click="joint = item.key"
               ><span>{{ item.label }}</span
               ><b class="left-value">{{
@@ -898,118 +835,187 @@ defineExpose({ analysisTools, sessionInfo });
                   :style="{
                     width: ((currentAngle(item.key, 'right') ?? 0) / 180) * 100 + '%',
                   }" /></span></button
-            ><div class="joint-footnote">当前显示 filtered 角度；脊柱只显示一个中线值。</div
+            ><div class="joint-footnote">角度已滤波，脊柱显示中线值。</div
             ><div class="center-summary"
-              ><div class="subsection-title"
-                ><Target :size="15" /><b>近似重心</b><span>HIP CENTER</span></div
+              ><div class="subsection-title"><Target :size="15" /><b>近似重心</b></div
               ><div class="coordinate-row"
                 ><div
-                  ><small>X 坐标</small
-                  ><b>{{ display(latest?.center?.x, 3) }}<span>norm</span></b></div
+                  ><small>X 坐标</small><b>{{ display(latest?.center?.x, 3) }}</b></div
                 ><div
-                  ><small>Y 坐标</small
-                  ><b>{{ display(latest?.center?.y, 3) }}<span>norm</span></b></div
+                  ><small>Y 坐标</small><b>{{ display(latest?.center?.y, 3) }}</b></div
                 ></div
-              ><p>以左右髋部置信度加权估算</p></div
+              ><p>归一化坐标，按左右髋部置信度加权</p></div
             ><div class="filter-status"
               ><div><CheckCheck :size="15" /><span>滑动均值滤波已启用</span></div
               ><span>{{ settings.window }} 帧窗口</span></div
             ></aside
           >
-        </div>
 
-        <PoseCorrection
-          v-show="page === 'workspace'"
-          :frame="liveCorrection ? undefined : latest"
-          :live="liveCorrection"
-          :camera="correctionCamera"
-        />
-
-        <div v-if="message && page === 'workspace'" class="status-message"
-          ><Info :size="15" />{{ message
-          }}<button aria-label="关闭提示" @click="message = ''"><X :size="14" /></button
-        ></div>
-        <div
-          v-if="lowConfidenceCount > 0 && source !== 'demo' && page === 'workspace'"
-          class="status-message"
-          ><Info :size="15" />{{
-            lowConfidenceCount
-          }}
-          个关键点不可用，仍记录可测关节；缺失角度留空。请检查光照、遮挡和拍摄视角。</div
-        >
-        <div v-if="clipRange && (page === 'workspace' || page === 'analysis')" class="clip-banner"
-          ><Scissors :size="15" />当前片段 {{ clipRange[0].toFixed(2) }}–{{
-            clipRange[1].toFixed(2)
-          }}
-          s · {{ visibleFrames.length }} 帧<button @click="clipRange = null"
-            >查看完整会话 <X :size="12" /></button
-        ></div>
-
-        <div
-          v-show="page === 'workspace' || page === 'analysis'"
-          class="charts-layout"
-          :class="{ 'analysis-charts': page === 'analysis' }"
-        >
-          <section class="panel angle-panel"
-            ><div class="panel-heading"
-              ><div class="section-title"
-                ><span class="title-marker" /><h2>关节角度时序</h2
-                ><span class="tag">ANGLE / TIME</span></div
-              ><div class="chart-tools"
-                ><span class="chart-legend"
-                  ><i class="legend-dot blue" />{{ joint === 'spine' ? '中线' : '左侧'
-                  }}<template v-if="joint !== 'spine'"
-                    ><i class="legend-dot orange" />右侧</template
-                  ></span
-                ><el-select
-                  v-model="joint"
-                  size="small"
-                  aria-label="选择分析关节"
-                  style="width: 100px"
-                  ><el-option
-                    v-for="item in JOINTS"
-                    :key="item.key"
-                    :label="item.label"
-                    :value="item.key" /></el-select
-                ><button class="icon-button" aria-label="放大角度图表" @click="fullOpen = true"
-                  ><Maximize2 :size="14" /></button></div></div
-            ><TimeChart
-              :frames="visibleFrames"
-              :revision="sessionInfo.revision"
-              :joint="joint"
-              :markers="markers"
-              :interval="range"
-              kind="angle"
-              :active="page === 'workspace' || page === 'analysis'"
-              :expanded="page === 'analysis'"
-              @seek="seek"
-              @range="selectChartRange" /><div class="chart-footer"
-              ><span><MoveUpRight :size="12" />滚轮缩放 · 拖动底部滑块选择时间区间</span
-              ><button @click="page = 'analysis'"
-                >{{ page === 'analysis' ? '详细统计见下方' : '探索时序数据'
-                }}<ArrowUpRight :size="12" /></button></div
-          ></section>
-          <section class="panel motion-panel"
-            ><div class="panel-heading"
-              ><div class="section-title"><span class="title-marker" /><h2>重心起伏</h2></div
-              ><span class="unit-label">Y / 归一化坐标</span></div
-            ><TimeChart
-              :frames="visibleFrames"
-              :revision="sessionInfo.revision"
-              :joint="joint"
-              :markers="noMarkers"
-              :interval="range"
-              kind="center"
-              :active="page === 'workspace' || page === 'analysis'"
-              @range="selectChartRange"
-            /><div class="center-chart-foot"
-              ><span><i class="legend-dot mint" />纵向位置</span
-              ><span
-                ><span class="center-stat-scope">统计范围：{{ centerScope }}</span> · 波动范围
-                <b>{{ display(selectedSummary.centerRange, 4) }}</b></span
-              ></div
-            ></section
-          >
+          <div v-show="page === 'workspace'" class="dashboard-capture">
+            <section
+              id="pose-capture"
+              class="panel capture-panel"
+              aria-labelledby="capture-title"
+              tabindex="-1"
+            >
+              <div class="panel-heading capture-heading">
+                <div class="section-title"
+                  ><span class="title-marker" /><h2 id="capture-title">姿态采集</h2></div
+                >
+                <IconButton label="显示与分析设置" @click="settingsOpen = true">
+                  <SlidersHorizontal />
+                </IconButton>
+              </div>
+              <div class="source-toolbar">
+                <div class="source-tabs" role="group" aria-label="采集来源">
+                  <button
+                    type="button"
+                    :aria-pressed="source === 'demo'"
+                    @click="changeSource('demo')"
+                  >
+                    <FlaskConical :size="14" />演示模式
+                  </button>
+                  <button
+                    type="button"
+                    :aria-pressed="source === 'camera'"
+                    @click="changeSource('camera')"
+                  >
+                    <Video :size="14" />实时摄像头
+                  </button>
+                  <button
+                    type="button"
+                    :aria-pressed="source === 'file'"
+                    @click="changeSource('file')"
+                  >
+                    <Upload :size="14" />上传视频
+                  </button>
+                </div>
+              </div>
+              <label
+                v-if="source === 'file'"
+                style="display: block; padding: 8px 18px; font-size: 12px"
+              >
+                <input v-model="syntheticFile" type="checkbox" @change="fileProvenance" />
+                生成/合成视频素材（synthetic）
+              </label>
+              <PoseStage
+                ref="stage"
+                :source="source"
+                :playing="playing"
+                :settings="settings"
+                :selected-frame="latest"
+                :source-aspect="sessionInfo.parameters.aspect"
+                :seek-time="seekTime"
+                :session-id="sessionInfo.sessionId"
+                @frame="capture"
+                @status="status"
+                @ready="ready"
+                @ended="playing = false"
+                @busy="busy = $event"
+                @offline="offlineStatus"
+              />
+              <div class="capture-legend"
+                ><span><i class="legend-dot mint" />人体骨骼</span
+                ><span><i class="legend-dot amber" />近似重心</span
+                ><span class="capture-quality"
+                  ><i
+                    class="mini-dot"
+                    :class="
+                      latest?.points.length === 33 && !lowConfidenceCount ? 'green-dot' : 'red-dot'
+                    "
+                  />{{
+                    source === 'demo'
+                      ? '合成序列 · 非推理结果'
+                      : !latest
+                        ? '等待采集'
+                        : !latest.points.length
+                          ? '当前帧无可用姿态'
+                          : lowConfidenceCount
+                            ? '部分关键点可用'
+                            : '单人姿态 · 本地分析'
+                  }}</span
+                ></div
+              >
+              <div class="transport"
+                ><PlaybackTransport
+                  :playing="playing"
+                  :busy="busy"
+                  :time="latest?.time ?? 0"
+                  :progress="playbackProgress"
+                  @toggle="togglePlay"
+                /><div class="transport-main"
+                  ><IconButton label="重置会话" @click="reset()"><RotateCcw /></IconButton
+                  ><button class="text-button" @click="recalculate">重算指标</button
+                  ><button v-if="source === 'file'" class="text-button" @click="redecode">{{
+                    sessionInfo.acquisition?.mode.endsWith('-sampled')
+                      ? '重新抽样分析'
+                      : '重新逐帧分析'
+                  }}</button
+                  ><span class="transport-divider" /><button class="text-button" @click="mark"
+                    ><Flag :size="14" />手动打点</button
+                  ><button
+                    class="text-button clip-button"
+                    :class="{ clipping: clipStart !== null }"
+                    @click="clip"
+                    ><Scissors :size="14" />{{
+                      clipStart === null ? '截取片段' : '完成截取'
+                    }}</button
+                  ></div
+                ><div class="timeline-row"
+                  ><el-slider
+                    :model-value="latest?.time ?? 0"
+                    :min="0"
+                    :max="Math.max(duration, 0.01)"
+                    :step="0.01"
+                    :show-tooltip="false"
+                    aria-label="历史帧时间轴"
+                    @input="seek"
+                  /><span>{{ display(latest?.time ?? 0, 2) }} s</span></div
+                ><div class="capture-marker-rail"
+                  ><MarkerTimeline
+                    :markers="markers"
+                    :domain="[0, duration]"
+                    :selection="
+                      clipRange ??
+                      (clipStart === null
+                        ? null
+                        : [
+                            Math.min(clipStart, latest?.time ?? clipStart),
+                            Math.max(clipStart, latest?.time ?? clipStart),
+                          ])
+                    "
+                    @seek="seek" /></div
+                ><div v-if="markers.length" class="marker-list"
+                  ><button
+                    v-for="(marker, index) in markers"
+                    :key="index"
+                    @click="seek(marker.time)"
+                    ><Flag :size="10" />{{ marker.label }} · {{ marker.time.toFixed(1) }}s</button
+                  ></div
+                ></div
+              >
+              <div class="capture-tip"
+                ><Info :size="13" /><span
+                  >请保持单人全身入镜，正面或侧面视角更佳。角度为 2D 平面投影值。</span
+                ></div
+              >
+            </section>
+            <div v-if="message" class="status-message"
+              ><Info :size="15" />{{ message
+              }}<button aria-label="关闭提示" @click="message = ''"><X :size="14" /></button
+            ></div>
+            <div v-if="lowConfidenceCount > 0 && source !== 'demo'" class="status-message"
+              ><Info :size="15" />{{
+                lowConfidenceCount
+              }}
+              个关键点不可用，仍记录可测关节；缺失角度留空。请检查光照、遮挡和拍摄视角。</div
+            >
+            <PoseCorrection
+              :frame="liveCorrection ? undefined : latest"
+              :live="liveCorrection"
+              :camera="correctionCamera"
+            />
+          </div>
         </div>
 
         <div v-if="analysisMounted" v-show="page === 'analysis'" class="analysis-bottom"
@@ -1127,6 +1133,7 @@ defineExpose({ analysisTools, sessionInfo });
             :point-basis="pointBasis"
             :threshold="sessionInfo.parameters.threshold"
             :interval="range"
+            :cursor-time="chartCursorTime"
             expanded
             @range="selectChartRange"
             @seek="seek"
@@ -1181,6 +1188,7 @@ defineExpose({ analysisTools, sessionInfo });
               :markers="markers"
               :view="agentChart"
               kind="angle"
+              :cursor-time="chartCursorTime"
               expanded
               @range="agentRange"
               @seek="seek"
@@ -1189,20 +1197,12 @@ defineExpose({ analysisTools, sessionInfo });
           </section>
         </AgentPanel>
 
-        <div v-if="page === 'export'" class="export-page"
-          ><div class="export-summary panel"
-            ><div class="export-icon"><FolderDown :size="30" /></div
-            ><div
-              ><span class="eyebrow">YOUR DATA, YOUR NEXT STEP</span><h2>本次观察，已经准备好。</h2
-              ><p
-                >{{ sessionName }} · {{ visibleFrames.length.toLocaleString() }} 帧 ·
-                {{ formatTime(duration)
-                }}<span v-if="source === 'demo'" class="tag">合成演示数据</span></p
-              ></div
-            ><div class="export-summary-mark"
-              ><ShieldCheck :size="36" /><span>LOCAL ONLY</span></div
-            ></div
-          ><div class="export-options"
+        <div v-if="page === 'export'" class="export-page">
+          <p class="export-summary">
+            {{ sessionName }} · {{ visibleFrames.length.toLocaleString() }} 帧 ·
+            {{ formatTime(duration) }}<template v-if="source === 'demo'"> · 合成数据</template>
+          </p>
+          <div class="export-options"
             ><section class="panel export-option"
               ><div class="file-type">CSV</div><h2>原始数据与量化指标</h2
               ><p
@@ -1214,12 +1214,16 @@ defineExpose({ analysisTools, sessionInfo });
                 ><li
                   ><Check :size="14" />{{ clipRange ? '导出当前截取片段' : '导出完整采集会话' }}</li
                 ></ul
-              ><el-button
-                type="primary"
-                :disabled="!visibleFrames.length || csvState === 'writing'"
-                @click="exportData"
-                ><Download :size="15" />下载 CSV 数据</el-button
-              ></section
+              ><ExportDownload
+                :inert="exportOpen"
+                format="CSV"
+                label="下载 CSV 数据"
+                :state="csvState"
+                :percent="csvPercent"
+                :message="csvMessage"
+                :frame-count="visibleFrames.length"
+                @download="exportData()"
+                @cancel="cancelCSV" /></section
             ><section class="panel export-option"
               ><div class="file-type picture-type">PNG</div><h2>一页可视化报告</h2
               ><p
@@ -1228,10 +1232,14 @@ defineExpose({ analysisTools, sessionInfo });
                 ><li><Check :size="14" />直接在浏览器生成高清图片</li
                 ><li><Check :size="14" />包含数据来源与 2D 量测限制说明</li
                 ><li><Check :size="14" />适合研究记录与项目展示</li></ul
-              ><el-button :disabled="!visibleFrames.length" @click="report"
-                ><Download :size="15" />下载图片报告</el-button
-              ></section
-            ></div
+              ><ExportDownload
+                :inert="exportOpen"
+                format="PNG"
+                label="下载图片报告"
+                :state="reportState"
+                :message="reportMessage"
+                :frame-count="visibleFrames.length"
+                @download="report" /></section></div
           ><section class="panel marker-panel"
             ><div class="panel-heading"
               ><h2>会话标记</h2><span class="tag">{{ markers.length }} 个节点</span></div
@@ -1239,29 +1247,14 @@ defineExpose({ analysisTools, sessionInfo });
               ><Flag :size="24" /><p>还没有手动标记</p
               ><span>在采集页点击「手动打点」，为你关注的时刻留下标记。</span></div
             ><div v-for="(marker, index) in markers" :key="index" class="export-marker"
-              ><Flag :size="15" /><input
-                v-model="marker.label"
-                :aria-label="`标记 ${index + 1} 名称`"
-                maxlength="60" /><span>{{ marker.time.toFixed(2) }} s</span
-              ><button
-                class="icon-button"
-                aria-label="删除标记"
-                @click="markers = markers.filter((_, i) => i !== index)"
-                ><Trash2 :size="14" /></button></div></section
+              ><Flag :size="15" /><FloatingField
+                v-slot="{ control }"
+                :label="`标记 ${index + 1} 名称`"
+                ><input v-bind="control" v-model="marker.label" maxlength="60" /></FloatingField
+              ><span>{{ marker.time.toFixed(2) }} s</span
+              ><IconButton label="删除标记" @click="markers = markers.filter((_, i) => i !== index)"
+                ><Trash2 /></IconButton></div></section
         ></div>
-
-        <div v-if="page === 'workspace'" class="bottom-insight"
-          ><div
-            ><Radio :size="16" /><span>专注客观量化，让解读保留空间。</span
-            ><small>不识别运动类型，不预设动作标准，不做对错评分。</small></div
-          ><button @click="guideOpen = true">了解分析边界 <ArrowUpRight :size="13" /></button
-        ></div>
-        <footer
-          ><span
-            ><img :src="brandMark" alt="" width="14" height="14" />KINETIC 动观
-            <span>·</span> 通用人体姿态量化分析平台</span
-          ><span>Vue 3 <i /> MediaPipe <i /> ECharts <b>FRONTEND ONLY</b></span></footer
-        >
       </main>
     </div>
 
@@ -1285,8 +1278,10 @@ defineExpose({ analysisTools, sessionInfo });
           :min="1"
           :max="30"
           controls-position="right" /></div
-      ><div class="setting-row"><b>骨骼与关键点</b><el-switch v-model="settings.skeleton" /></div
-      ><div class="setting-row"><b>关节角度标注</b><el-switch v-model="settings.labels" /></div
+      ><div class="setting-row"
+        ><b>骨骼与关键点</b><el-switch v-model="settings.skeleton" aria-label="骨骼与关键点" /></div
+      ><div class="setting-row"
+        ><b>关节角度标注</b><el-switch v-model="settings.labels" aria-label="关节角度标注" /></div
       ><div v-if="settings.labels" class="label-joints"
         ><p>选择标注关节；自动避让并用引线连接。低置信度留空，脊柱仅中线。</p
         ><el-checkbox-group v-model="settings.labelJoints"
@@ -1294,7 +1289,9 @@ defineExpose({ analysisTools, sessionInfo });
             item.label
           }}</el-checkbox></el-checkbox-group
         ></div
-      ><div class="setting-row"><b>近似重心轨迹</b><el-switch v-model="settings.trajectory" /></div
+      ><div class="setting-row"
+        ><b>近似重心轨迹</b
+        ><el-switch v-model="settings.trajectory" aria-label="近似重心轨迹" /></div
       ><div class="info-box"
         ><ShieldCheck :size="20" /><p
           >推理资源在本地提供。视频文件与画面始终保留在浏览器内。刷新页面会清空本次采集。</p
@@ -1348,20 +1345,30 @@ defineExpose({ analysisTools, sessionInfo });
         ><el-button type="primary" @click="guideOpen = false">了解，开始观察</el-button></template
       ></el-dialog
     >
-    <el-dialog v-model="exportOpen" title="导出本次分析" width="440px"
+    <el-dialog v-model="exportOpen" title="导出本次分析" width="min(440px, calc(100vw - 24px))"
       ><p class="drawer-intro"
         >{{ source === 'demo' ? '合成演示数据' : '本地采集数据' }} · {{ visibleFrames.length }} 帧{{
           clipRange ? ' · 已选片段' : ''
         }}</p
       ><div class="export-dialog-options"
-        ><button :disabled="!visibleFrames.length || csvState === 'writing'" @click="exportData"
-          ><span class="file-type">CSV</span
-          ><div><b>逐帧数据表</b><small>33 个原始关键点 + 全部量化指标</small></div
-          ><Download :size="17" /></button
-        ><button :disabled="!visibleFrames.length" @click="report"
-          ><span class="file-type picture-type">PNG</span
-          ><div><b>图片分析报告</b><small>当前画布 + 会话汇总指标</small></div
-          ><Download :size="17" /></button></div
+        ><ExportDownload
+          v-if="exportOpen"
+          format="CSV"
+          :state="csvState"
+          :percent="csvPercent"
+          :message="csvMessage"
+          :frame-count="visibleFrames.length"
+          label="逐帧数据表"
+          @download="exportData()"
+          @cancel="cancelCSV" />
+        <ExportDownload
+          v-if="exportOpen"
+          format="PNG"
+          label="图片分析报告"
+          :state="reportState"
+          :message="reportMessage"
+          :frame-count="visibleFrames.length"
+          @download="report" /></div
       ><p class="export-hint"
         >{{
           csvFileStream
@@ -1380,12 +1387,13 @@ defineExpose({ analysisTools, sessionInfo });
         :markers="markers"
         :interval="range"
         kind="angle"
+        :cursor-time="chartCursorTime"
         expanded
         @range="selectChartRange"
         @seek="seek"
       /><p class="drawer-intro"
         >蓝色为左侧或脊柱中线，橙色为右侧；使用 filtered
-        角度。使用滚轮与底部滑块缩放；低置信度帧显示为缺口。</p
+        角度。横拖选择采样帧，松开定位回看。滚轮缩放，按住 Shift 拖动平移；低置信度帧显示为缺口。</p
       ></el-dialog
     >
   </div>

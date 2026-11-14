@@ -1,7 +1,11 @@
 import { createApp } from 'vue';
 import App from './App.vue';
 import { installUI } from './ui';
+import { installButtonGlow } from './utils/buttonGlow';
+import { installTheme } from './theme';
 import './style.css';
 const app = createApp(App);
 installUI(app);
+app.onUnmount(installButtonGlow());
+app.onUnmount(installTheme());
 app.mount('#app');

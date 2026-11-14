@@ -415,6 +415,7 @@ export function humanSubmissionEvidence(scenario, sidecar) {
     );
   return {
     requiredCitations: requirements.length,
+    requirements,
     gaps(run, citations) {
       const calls = new Map();
       for (const { name, args } of scenario.turns[0].expected) {
@@ -1337,6 +1338,9 @@ export async function runEvaluation(options, dependencies = {}) {
             },
             modelProtocol: dependencies.modelProtocol,
             submissionEvidence: humanEvidence.get(scenario.id)?.gaps,
+            ...(scenario.id === 'human-1080'
+              ? { submissionRequirements: humanEvidence.get(scenario.id).requirements }
+              : {}),
             session,
             registry,
             provider: instrumented,

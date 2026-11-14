@@ -19,8 +19,8 @@ export function renderPose(
     h = canvas.height;
   ctx.clearRect(0, 0, w, h);
   const bg = ctx.createLinearGradient(0, 0, w, h);
-  bg.addColorStop(0, '#254246');
-  bg.addColorStop(1, '#142629');
+  bg.addColorStop(0, '#244341');
+  bg.addColorStop(1, '#122426');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
   let ox = 0,
@@ -37,7 +37,7 @@ export function renderPose(
     oy = (h - dh) / 2;
     ctx.drawImage(video, ox, oy, dw, dh);
   } else {
-    ctx.strokeStyle = '#a5c7c71a';
+    ctx.strokeStyle = '#a8d3c91a';
     ctx.lineWidth = 1;
     for (let x = 0; x < w; x += 44) {
       ctx.beginPath();
@@ -52,11 +52,11 @@ export function renderPose(
       ctx.stroke();
     }
     const glow = ctx.createRadialGradient(w / 2, h * 0.47, 10, w / 2, h * 0.47, h * 0.6);
-    glow.addColorStop(0, '#6fb4bc33');
-    glow.addColorStop(1, '#6fb4bc00');
+    glow.addColorStop(0, '#5aa48b33');
+    glow.addColorStop(1, '#5aa48b00');
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = '#a5c7c724';
+    ctx.strokeStyle = '#a8d3c924';
     for (let i = -6; i <= 6; i++) {
       ctx.beginPath();
       ctx.moveTo(w / 2 + i * 36, h * 0.76);
@@ -77,9 +77,9 @@ export function renderPose(
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     const body = ctx.createLinearGradient(w * 0.4, 0, w * 0.6, h);
-    body.addColorStop(0, '#506a6c');
-    body.addColorStop(0.5, '#3c5558');
-    body.addColorStop(1, '#30484b');
+    body.addColorStop(0, '#698d87');
+    body.addColorStop(0.5, '#406560');
+    body.addColorStop(1, '#2b4b49');
     ctx.strokeStyle = body;
     for (const [a, b] of [
       [11, 13],
@@ -120,7 +120,7 @@ export function renderPose(
     ctx.moveTo(head.x, head.y + 40);
     ctx.lineTo((xy(points[11]).x + xy(points[12]).x) / 2, xy(points[11]).y);
     ctx.stroke();
-    ctx.strokeStyle = '#a5c7c71f';
+    ctx.strokeStyle = '#a8d3c91f';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.ellipse(w / 2, h * 0.88, 190, 24, 0, 0, Math.PI * 2);

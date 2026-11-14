@@ -51,6 +51,8 @@ export function useCSVExport({
       ElMessage.error(String(error));
       return;
     }
+    csvProgress.value = latestProgress = undefined;
+    csvMessage.value = '正在准备导出…';
     csvState.value = 'writing';
     playing.value = false;
     // Let PoseStage apply pause/acquisition metadata before fixing the revision.

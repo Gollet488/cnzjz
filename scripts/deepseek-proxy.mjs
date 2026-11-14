@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { isIP } from 'node:net';
 import { preservesCloudContext, temporaryApiKeyFormat } from '../src/agent/modelCatalog.ts';
 import { ProviderResponseError } from '../src/agent/provider.ts';
 import { DeepSeekProvider, DeepSeekRequestError } from '../src/agent/providers/deepseek.ts';
@@ -103,12 +104,29 @@ export function createDeepSeekMiddleware({
   providerFactory = () => new DeepSeekProvider(userApiKey()),
   cloud,
   timeoutMs = 60_000,
+  publicOrigin,
 } = {}) {
   const active = new Set();
   const responses = new Map();
+  const clients = new Map();
+  const publicHost = publicOrigin && new URL(publicOrigin).host;
+  let resetAt = 0;
+
+  function allowPublicRequest(ip) {
+    const now = Date.now();
+    if (now >= resetAt) {
+      clients.clear();
+      resetAt = now + 60_000;
+    }
+    const count = clients.get(ip) ?? 0;
+    if (count >= 90 || (!count && clients.size >= 4096)) return false;
+    clients.set(ip, count + 1);
+    return true;
+  }
+
   const middleware = async (req, res, next) => {
     const cloudRoute = cloud && req.url?.startsWith('/__models/');
-    if (!cloudRoute && !req.url?.startsWith('/__deepseek/')) return next();
+    if (!cloudRoute && (publicOrigin || !req.url?.startsWith('/__deepseek/'))) return next();
     const prefix = cloudRoute ? 'CLOUD' : 'DEEPSEEK_PROXY';
     const send = (status, data) => {
       if (res.destroyed || res.writableEnded) return;
@@ -120,15 +138,21 @@ export function createDeepSeekMiddleware({
       });
       res.end(JSON.stringify(data));
     };
-    // Exact Host/Origin plus socket checks prevent DNS rebinding and cross-site use.
     const host = req.headers.host;
     const port = req.socket.localPort;
     const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
+    // Public mode trusts forwarding headers only from a local TLS terminator.
+    const client = req.headers['x-real-ip'];
     if (
       !loopback.has(req.socket.remoteAddress) ||
       !loopback.has(req.socket.localAddress) ||
-      !allowedHosts.includes(host) ||
-      req.headers.origin !== `http://${host}` ||
+      (publicOrigin
+        ? host !== publicHost ||
+          req.headers.origin !== publicOrigin ||
+          req.headers['x-forwarded-proto'] !== 'https' ||
+          typeof client !== 'string' ||
+          !isIP(client)
+        : !allowedHosts.includes(host) || req.headers.origin !== `http://${host}`) ||
       (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin')
     )
       return send(403, { error: prefix + '_ORIGIN_REJECTED' });
@@ -141,6 +165,8 @@ export function createDeepSeekMiddleware({
       return send(415, { error: 'DEEPSEEK_PROXY_JSON_REQUIRED' });
     if (Number(req.headers['content-length']) > PROXY_BODY_LIMIT)
       return send(413, { error: 'DEEPSEEK_PROXY_BODY_LIMIT' });
+    if (publicOrigin && (!allowPublicRequest(client) || active.size >= 24))
+      return send(429, { error: 'CLOUD_PROXY_BUSY' });
     const controller = new AbortController();
     active.add(controller);
     const stop = () => controller.abort();
@@ -197,6 +223,8 @@ export function createDeepSeekMiddleware({
             : !validInput(inputFields, provider !== 'deepseek') || !validTaskId(task))
         )
           return send(400, { error: 'CLOUD_INVALID_INPUT' });
+        if (publicOrigin && !apiKey) return send(400, { error: 'CLOUD_KEY_REQUIRED' });
+        controller.signal.throwIfAborted();
         let adapter = cloud.create(provider, model, apiKey);
         if (!adapter) return send(409, { error: 'CLOUD_CONFIGURATION' });
         let state;
