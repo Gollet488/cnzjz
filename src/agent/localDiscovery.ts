@@ -15,14 +15,6 @@ export interface LocalService {
   runningModels?: string[];
 }
 
-export function resolveOllamaModel(service: LocalService, model: string) {
-  if (service.models.includes(model)) return model;
-  const prefix = /^(?:sha256:)?([0-9a-f]{12,64})$/i.exec(model)?.[1].toLowerCase();
-  if (!prefix || !service.modelDigests) return;
-  const matches = [...service.modelDigests].filter(([, digest]) => digest?.startsWith(prefix));
-  if (matches.length === 1 && service.models.includes(matches[0][0])) return matches[0][0];
-}
-
 export function localServiceGroups(configured: string[]) {
   const defaults = [11434, 1234, 8080, 8000].map((port) =>
     localHosts.map((host) => `http://${host}:${port}`),

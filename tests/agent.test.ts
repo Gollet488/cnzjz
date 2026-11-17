@@ -4,6 +4,7 @@ import { AnalysisSession } from '../src/analysis/session.ts';
 import { createToolRegistry } from '../src/analysis/tools.ts';
 import { AgentRuntime, resolveCitation } from '../src/agent/runtime.ts';
 import { OllamaProvider, localOllamaURL } from '../src/agent/provider.ts';
+import { resolveOllamaModel } from '../src/agent/providers/ollama.ts';
 import type { ModelCall, ModelMessage, ModelProvider, ModelReply } from '../src/agent/provider.ts';
 import { demoPose } from '../src/utils/demo.ts';
 import { evidenceRef, taskFixture, withTaskSpecs } from './agentFixtures.ts';
@@ -558,6 +559,19 @@ test('Ollama adapter maps native tools/history, strips thinking and uses fixed l
   assert.equal(JSON.stringify(result).includes('private reasoning'), false);
   assert.equal(JSON.stringify(result).includes('999'), false);
   assert.deepEqual(result.usage, { inputTokens: 12, outputTokens: 4 });
+});
+
+test('Ollama restores a digest selection only when the detected model is unambiguous', () => {
+  const prefix = 'b7c7f6edea2b';
+  const digest = prefix.padEnd(64, '0');
+  const models = ['llama3.1:8b', 'qwen2.5:7b'];
+  const modelDigests = new Map([['llama3.1:8b', digest]]);
+  assert.equal(resolveOllamaModel(prefix, models, modelDigests), 'llama3.1:8b');
+  assert.equal(resolveOllamaModel('b7c7f6e', models, modelDigests), undefined);
+  modelDigests.set('qwen2.5:7b', prefix.padEnd(64, '1'));
+  assert.equal(resolveOllamaModel(prefix, models, modelDigests), undefined);
+  assert.equal(resolveOllamaModel(`sha256:${digest}`, models, modelDigests), 'llama3.1:8b');
+  assert.equal(resolveOllamaModel('qwen2.5:7b', models, modelDigests), 'qwen2.5:7b');
 });
 
 test('Ollama connection requires capability plus actual structured probe; rejects cloud relay', async () => {

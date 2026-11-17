@@ -38,6 +38,18 @@ function cloudOllamaModel(model: string) {
   return /(?:[:-]cloud)(?:$|:)/i.test(model);
 }
 
+export function resolveOllamaModel(
+  model: string,
+  models: readonly string[],
+  modelDigests?: ReadonlyMap<string, string | undefined>,
+) {
+  if (models.includes(model)) return model;
+  const prefix = /^(?:sha256:)?([0-9a-f]{12,64})$/i.exec(model)?.[1].toLowerCase();
+  if (!prefix || !modelDigests) return;
+  const matches = [...modelDigests].filter(([, digest]) => digest?.startsWith(prefix));
+  if (matches.length === 1 && models.includes(matches[0][0])) return matches[0][0];
+}
+
 export class OllamaProvider implements ModelProvider {
   readonly id = 'ollama-local';
   readonly model: string;

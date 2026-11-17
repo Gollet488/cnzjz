@@ -53,8 +53,9 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
     await page.getByRole('button', { name: '模型设置', exact: true }).click();
     const help = page
       .getByRole('region', { name: '模型设置' })
-      .getByText(/^在浏览器站点设置中允许访问本地网络/);
-    await expect(help).toContainText('OLLAMA_ORIGINS');
+      .locator('p')
+      .filter({ hasText: 'OLLAMA_ORIGINS' });
+    await expect(help).toContainText('允许访问本地网络');
     await expect(help).toContainText(origin);
     await expect(help).toContainText('重启 Ollama');
   });

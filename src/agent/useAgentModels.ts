@@ -4,7 +4,6 @@ import {
   defaultLocalAddress,
   discoverLocalService,
   localServiceGroups,
-  resolveOllamaModel,
   withRunningModels,
 } from './localDiscovery.ts';
 import type { LocalService } from './localDiscovery.ts';
@@ -16,7 +15,7 @@ import {
 } from './modelCatalog.ts';
 import type { CloudModelConfig, CloudProviderId, ProviderId } from './modelCatalog.ts';
 import { CloudPageProvider, cloudUnavailable, modelError } from './providers/cloudPage.ts';
-import { OllamaProvider } from './providers/ollama.ts';
+import { OllamaProvider, resolveOllamaModel } from './providers/ollama.ts';
 import { LocalOpenAIProvider } from './providers/localOpenAI.ts';
 import { localModelAddress, localModelId } from './providers/localModel.ts';
 import type { LocalProviderId } from './providers/localModel.ts';
@@ -346,7 +345,8 @@ export function useAgentModels() {
         const service = localServices.value.find(
           ({ address, provider }) => provider === 'ollama' && address === current.address,
         );
-        const model = service && resolveOllamaModel(service, current.model);
+        const model =
+          service && resolveOllamaModel(current.model, service.models, service.modelDigests);
         if (service && model)
           rememberChoice({ provider: 'ollama', address: service.address, model });
       }
