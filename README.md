@@ -2,7 +2,7 @@
 
 浏览器端通用人体姿态分析应用，使用 Vue 3、TypeScript、MediaPipe、ECharts 和 Element Plus。支持单人摄像头采集、多格式本地视频分析、时序指标、姿态对比、CSV/PNG 导出，以及支持本地与云端模型的 Agent。
 
-本项目面向通用人体运动的姿态采集与量化分析，提供本地推理、可追溯数值和 Agent 工具调用。启动、保留 Git 历史的上传步骤和已知限制见 [构建与交付](docs/delivery.md)，参赛要求核对见 [仓库提交清单](docs/submission-checklist.md)，目标需求见 [requirement.md](requirement.md)。
+本项目面向通用人体运动的姿态采集与量化分析，提供本地推理、可追溯数值和 Agent 工具调用。[公开源码仓库](https://github.com/Gollet488/cnzjz) · [在线演示](https://gollet488.github.io/cnzjz/) · [仓库提交清单](docs/submission-checklist.md) · [项目需求](requirement.md)
 
 远程发布、本机候选和剩余验收条件见 [当前交付状态](docs/delivery-status.md)。
 
@@ -14,9 +14,11 @@ AI Agent 可发现本机 Ollama、LM Studio、llama.cpp 和 vLLM 等模型服务
 
 ## 启动
 
-项目固定 Node 24.22.1、pnpm 11.25.0。
+使用 Git、Node.js 24.22.1、pnpm 11.25.0，以及支持 WebCodecs 的 Chrome 或 Edge。未安装 pnpm 时，先运行 `npm install --global pnpm@11.25.0`。
 
 ```powershell
+git clone https://github.com/Gollet488/cnzjz.git
+cd cnzjz
 pnpm install --frozen-lockfile
 pnpm prepare:assets
 pnpm dev
@@ -25,6 +27,8 @@ pnpm dev
 访问终端显示的本机地址。Windows 也可使用“启动Demo.cmd”和“停止Demo.cmd”。启动脚本验证项目进程身份；端口被其他程序占用时会报错。
 
 `prepare:assets` 将锁定版本的 MediaPipe 运行文件和固定哈希的 Lite 模型放入 public，模型缺失时需要联网下载。已有资源可以用 `pnpm check:assets` 校验。
+
+生产预览依次运行 `pnpm build` 和 `pnpm preview`。依赖按锁文件安装，模型配置和浏览器检查所需的变量见 [环境配置](docs/environment.md) · [环境变量模板](.env.example) · [依赖清单](package.json) · [依赖锁文件](pnpm-lock.yaml)
 
 基础分析无需 API 密钥。在「AI Agent 分析」中，选择「本地模型 · 检测与选择」即可查看检测到的本机模型。自定义端口可在模型设置里填写地址。使用云端模型时，选择供应商和模型，再点「测试当前模型连接」。本机版可从环境变量或 `.env` 读取 Key，也可在页面填写临时 Key。HTTPS 自托管版使用页面临时 Key。[模型连接指南](docs/agent-model-selection.md#快速连接)
 

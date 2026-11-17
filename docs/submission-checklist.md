@@ -6,10 +6,12 @@
 
 | 要求 | 当前材料及核验状态 |
 | --- | --- |
+| 托管与评审访问 | GitHub 公开仓库，评审可直接访问或克隆。[源码仓库](https://github.com/Gollet488/cnzjz) · [提交历史](https://github.com/Gollet488/cnzjz/commits/main/) |
 | 功能源码、必要资源与测试 | 采集、Worker、分析、图表、Agent、本机代理及回归入口在候选清单。冻结安装使用 FFmpeg 补丁，Pages 使用独立的 Playwright 配置。 |
+| 代码规范与远程检查 | 源码按采集、视频、分析和 Agent 等职责组织。Checks 对 Windows 与 Ubuntu 执行冻结安装、格式、Lint、单测及生产构建，Pages 另外验证静态部署。`685f342` 的两套工作流均通过。[Checks](https://github.com/Gollet488/cnzjz/actions/runs/44064126439) · [Pages](https://github.com/Gollet488/cnzjz/actions/runs/44064126458) |
 | 介绍、架构、运行和团队 | [README](../README.md)、[系统架构](architecture.md)、[环境配置](environment.md) 与无密钥 [环境变量模板](../.env.example)。团队为 CN终结者，共 3 人。 |
 | 固定依赖与构建 | Node 24.22.1、pnpm 11.25.0。隔离检出使用既有缓存通过冻结安装，固定资源、18 项浏览器素材和两套本机生产构建均通过。 |
-| 本机功能验收及远程核验 | 仓库保留 Git 历史。已发布版本与本轮结果见 [当前交付状态](delivery-status.md)。 |
+| Git 历史 | `main` 保留原始提交和 PR 合并记录。匿名完整克隆 `685f342` 可追溯到初始提交，共 44 条提交。 |
 | 正式技术 PDF | 已完成。[技术报告](../output/pdf/kinetic-pose-lab-technical-report.pdf) 共 8 页，符合最多 30 页的要求。逐页渲染核对布局、中文字体和图表，验证页码、目录跳转及 16 个外部链接。 |
 | 正式演示视频 | 待提供成片。11 月 17 日复核时，工作区中符合时长的 MP4 是 64×48 的测试素材。正式视频需为 MP4、5–8 分钟、至少 1080p，并用普通话讲解项目、核心功能和 AI 技术亮点。[赛项提交要求](https://m.saikr.com/vse/2026AIWEBKF) |
 | 在线演示（可选加分项） | [GitHub Pages](https://gollet488.github.io/cnzjz/) 提供浏览器内姿态分析、图表及导出。评审要体验本地 Agent 时，可按[连接指南](environment.md#ollama)配置模型。 |

@@ -34,13 +34,20 @@ pnpm build
 pnpm preview
 ```
 
-本机 Node 在服务启动时读取项目根目录的 `.env`。进程环境变量优先，DeepSeek 兼容 Windows 用户级密钥。编辑后重启服务，在模型设置中点击「刷新模型列表」。`dev:env` 和 `preview:env` 仍支持通过 Node 的 `--env-file=.env` 启动。供应商变量、端点和真实验收命令见 [Agent 模型配置与验收](agent-model-selection.md)。
+本机 Node 在服务启动时读取项目根目录的 `.env`。读取顺序为进程环境变量、`.env`、Windows 用户级环境变量，最后一层仅用于供应商密钥。使用 Windows 用户级密钥时，在 `.env` 中省略对应的 `*_API_KEY` 行。编辑后重启服务，在模型设置中点击「刷新模型列表」。`dev:env` 和 `preview:env` 也可通过 Node 的 `--env-file=.env` 启动。供应商变量、端点和真实验收命令见 [Agent 模型配置与验收](agent-model-selection.md)。
+
+## 浏览器测试变量
+
+在运行 Playwright 命令的终端中设置以下变量。Pages 专项使用 Chrome 和固定端口 5188。
 
 | 变量 | 必需性 / 默认 | 读取位置与用途 |
 | --- | --- | --- |
 | `BROWSER_CHANNEL` | 可选；默认 Playwright Chromium | Playwright；设为 `chrome` 使用已安装的 Chrome |
-| `BROWSER_VITE_CACHE` | 可选；默认 Vite 缓存目录 | 浏览器回归的开发服务缓存；同时运行日常开发服务时可设置为 `.qa/browser-vite-cache` 隔离预打包缓存 |
+| `BROWSER_DEV_PORT` | 可选；默认 `5186` | 浏览器回归的开发服务端口 |
+| `BROWSER_PREVIEW_PORT` | 可选；默认 `5187` | 浏览器回归的生产预览端口 |
+| `BROWSER_VITE_CACHE` | 可选；默认 `test-results/browser-vite` | 浏览器回归的开发服务预打包缓存 |
 | `HUMAN_VIDEO_PATH` | 可选；默认跳过真人视频用例 | 浏览器测试读取授权的本机人体视频路径；素材不提交 |
+| `OLLAMA_ADDRESS` | 可选；默认 `http://127.0.0.1:11434` | Ollama 真实浏览器回归的模型服务地址 |
 | `OLLAMA_MODEL` | 可选；真实 Ollama 回归默认选模型清单首项 | `tests/browser/real.spec.ts` 的模型选择，建议显式指定已安装且支持工具调用的模型 |
 | `REAL_AGENT_PROVIDER` | 可选；默认 Ollama 真实回归 | 支持 `ollama`、`deepseek`、`openai`、`anthropic`、`zhipu`、`moonshot` |
 | `REAL_AGENT_MODEL` | 云端测试的模型 ID | DeepSeek 默认 `deepseek-flash`，其他云端供应商需要显式指定 |
@@ -48,7 +55,18 @@ pnpm preview
 | `REAL_AGENT_SESSIONS` | 可选；默认 3 | 云端多轮回归的计划会话数量 |
 | `BROWSER_REAL_OUTPUT` | 可选；默认 `test-results/real-时间戳` | 真实浏览器回归输出目录，建议放在已忽略的 `test-results/` 内 |
 
-上述测试变量在运行命令的 shell 中设置；`.env.example` 中注释掉的示例不会自动生效。`KINETIC_DEMO_TOKEN` 是启停脚本生成的内部健康检查标记，不需要手动配置。历史回归证据目录及性能条件等高级参数见对应 `scripts/` 和测试入口。
+`KINETIC_DEMO_TOKEN` 由启停脚本生成，用于健康检查。历史回归证据目录及性能条件等高级参数见对应 `scripts/` 和测试入口。
+
+## 公网部署变量
+
+使用公网 HTTPS 自托管版时，在对应服务的进程环境中设置这些变量。[部署步骤](delivery.md#公网部署云端-agent)
+
+| 变量 | 必需性 / 默认 | 用途 |
+| --- | --- | --- |
+| `AGENT_PUBLIC_ORIGIN` | Node 必填 | 公网 HTTPS 来源，例如 `https://pose.example.com`，只填协议、主机及可选端口 |
+| `AGENT_PORT` | Node 可选，默认 `8787` | Agent 监听的回环端口，修改时同步更新 `deploy/Caddyfile` 的 `reverse_proxy` 端口 |
+| `POSE_DOMAIN` | Caddy 必填 | 站点域名，例如 `pose.example.com` |
+| `POSE_DIST` | Caddy 必填 | 构建产物 `dist` 的绝对路径 |
 
 ## Ollama
 
@@ -118,7 +136,7 @@ pnpm exec playwright install chromium
 pnpm test:browser
 ```
 
-已有 Chrome 可省去 Chromium 安装，先设置 `$env:BROWSER_CHANNEL='chrome'`。测试在 5186 / 5187 端口启动隔离开发/生产服务，需要端口空闲。真实模型测试独立运行，不属于普通回归，不建议在 CI 注入真实密钥。
+已有 Chrome 可省去 Chromium 安装，先设置 `$env:BROWSER_CHANNEL='chrome'`。运行前确保浏览器测试使用的端口空闲。真实模型测试使用独立的回归入口与本机或供应商账户。
 
 | 现象 | 处理 |
 | --- | --- |
