@@ -11,7 +11,16 @@ export interface LocalService {
   provider: LocalProviderId;
   deployment: string;
   models: string[];
+  modelDigests?: ReadonlyMap<string, string | undefined>;
   runningModels?: string[];
+}
+
+export function resolveOllamaModel(service: LocalService, model: string) {
+  if (service.models.includes(model)) return model;
+  const prefix = /^(?:sha256:)?([0-9a-f]{12,64})$/i.exec(model)?.[1].toLowerCase();
+  if (!prefix || !service.modelDigests) return;
+  const matches = [...service.modelDigests].filter(([, digest]) => digest?.startsWith(prefix));
+  if (matches.length === 1 && service.models.includes(matches[0][0])) return matches[0][0];
 }
 
 export function localServiceGroups(configured: string[]) {
@@ -40,12 +49,11 @@ export async function discoverLocalService(
 ): Promise<LocalService> {
   async function read(address: string, timeout: number): Promise<LocalService> {
     const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
-    const native = await OllamaProvider.models(
+    const native = await OllamaProvider.inventory(
       address,
       AbortSignal.any([requestSignal, AbortSignal.timeout(2000)]),
     ).catch((error: unknown) => ({ error }));
-    if (Array.isArray(native))
-      return { address, provider: 'ollama', deployment: 'Ollama', models: native };
+    if ('models' in native) return { address, provider: 'ollama', deployment: 'Ollama', ...native };
     requestSignal.throwIfAborted();
     try {
       const inventory = await LocalOpenAIProvider.inventory(

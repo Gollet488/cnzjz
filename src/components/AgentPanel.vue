@@ -86,6 +86,7 @@ const {
   dispose,
 } = useAgentModels();
 const localSettings = computed(() => settingsProvider.value === 'local');
+const httpsPageOrigin = location.protocol === 'https:' ? location.origin : '';
 const localChoice = computed(() =>
   choice.value && isLocalProvider(choice.value.provider) ? choice.value : undefined,
 );
@@ -521,6 +522,9 @@ onBeforeUnmount(() => {
           当前本地模型 <strong>{{ localChoice.model }}</strong> ·
           {{ modelProviderName(localChoice) }} ·
           {{ localChoice.address }}
+          <template v-if="localChoice.manual && (!selected || selected.manual)">
+            · 手动配置</template
+          >
         </p>
         <details class="model-guide">
           <summary>首次连接？查看连接指南</summary>
@@ -689,7 +693,7 @@ onBeforeUnmount(() => {
               >检测到的本地模型
               <select
                 aria-label="检测到的本地模型"
-                :value="target ? choiceKey(target) : ''"
+                :value="target && !target.manual ? choiceKey(target) : ''"
                 @change="changeLocalModel"
               >
                 <option value="" disabled>请选择本地模型</option>
@@ -752,6 +756,11 @@ onBeforeUnmount(() => {
             "
           >
             Ollama 模型列表为空。运行 <code>ollama list</code> 检查已安装的模型后刷新。
+          </p>
+          <p v-if="!refreshing && localError && httpsPageOrigin">
+            在浏览器站点设置中允许访问本地网络。使用 Ollama 时，将
+            <code>{{ httpsPageOrigin }}</code> 加入 <code>OLLAMA_ORIGINS</code>，重启 Ollama
+            后点击「刷新模型列表」。
           </p>
           <p v-if="canEnterLocalModel"
             >支持 LM Studio、llama.cpp、vLLM 等服务。模型列表不可用时，可手动填写模型

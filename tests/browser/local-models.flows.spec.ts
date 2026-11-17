@@ -4,6 +4,7 @@ import { expect, test } from '@playwright/test';
 test('Agent discovers native Ollama and compatible services on multiple loopback ports', async ({
   page,
 }) => {
+  const digest = 'b7c7f6edea2b' + '0'.repeat(52);
   await page.route(
     /^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(?:11434|1234|8080|8000)\//,
     (route) => route.abort(),
@@ -13,7 +14,7 @@ test('Agent discovers native Ollama and compatible services on multiple loopback
       json: {
         models: [
           null,
-          { model: 'local-cloud-study:latest' },
+          { model: 'local-cloud-study:latest', digest },
           { name: 'remote:cloud' },
           { name: 'alias', remote_host: 'example.org' },
         ],
@@ -94,6 +95,33 @@ test('Agent discovers native Ollama and compatible services on multiple loopback
   expect(
     await page.evaluate(() => JSON.parse(localStorage.getItem('kinetic-agent-model')!).provider),
   ).toBe('ollama');
+
+  await page.evaluate(
+    (model) => {
+      localStorage.setItem(
+        'kinetic-agent-model',
+        JSON.stringify({
+          provider: 'local-openai',
+          model,
+          address: 'http://localhost:11434',
+          manual: true,
+        }),
+      );
+    },
+    digest.slice(0, 12),
+  );
+  await page.reload();
+  await page.getByRole('button', { name: 'AI Agent 分析' }).click();
+  await page.getByRole('button', { name: '模型设置', exact: true }).click();
+  await expect(localModels).toHaveValue(key);
+  await expect(localModels.locator('option')).toHaveCount(5);
+  expect(
+    await page.evaluate(() => JSON.parse(localStorage.getItem('kinetic-agent-model')!)),
+  ).toEqual({
+    provider: 'ollama',
+    model: 'local-cloud-study:latest',
+    address: 'http://localhost:11434',
+  });
 });
 
 test('Agent can use a custom authenticated local service without upstream CORS', async ({
@@ -189,6 +217,10 @@ test('Agent can use a custom authenticated local service without upstream CORS',
     await settings.getByLabel('手动填写本地模型 ID').fill('manual/model');
     await settings.getByRole('button', { name: '选择此模型' }).click();
     await expect(page.getByText('当前本地模型', { exact: false })).toContainText('manual/model');
+    await expect(page.getByText('当前本地模型', { exact: false })).toContainText('手动配置');
+    await expect(
+      settings.getByLabel('检测到的本地模型').locator('option').filter({ hasText: 'manual/model' }),
+    ).toHaveCount(0);
     await settings.getByRole('button', { name: '测试连接', exact: true }).click();
     await expect(settings.getByText('结构化工具调用通过 · manual/model')).toBeVisible();
     expect(seen.filter((path) => path === 'POST /v1/chat/completions')).toHaveLength(2);

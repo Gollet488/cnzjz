@@ -65,29 +65,35 @@ export class OllamaProvider implements ModelProvider {
     return readLocalJSON(response, 'OLLAMA');
   }
 
-  static async models(address: string, signal: AbortSignal, fetcher: typeof fetch = fetch) {
-    return OllamaProvider.modelList(address, '/api/tags', signal, fetcher);
+  static async inventory(address: string, signal: AbortSignal) {
+    const entries = await OllamaProvider.modelList(address, '/api/tags', signal);
+    return { models: [...entries.keys()].slice(0, 100), modelDigests: entries };
   }
 
   static async runningModels(address: string, signal: AbortSignal) {
-    return OllamaProvider.modelList(address, '/api/ps', signal, fetch);
+    const entries = await OllamaProvider.modelList(address, '/api/ps', signal);
+    return [...entries.keys()].slice(0, 100);
   }
 
   private static async modelList(
     address: string,
     path: '/api/tags' | '/api/ps',
     signal: AbortSignal,
-    fetcher: typeof fetch,
   ) {
-    const provider = new OllamaProvider(address, 'discovery', fetcher);
+    const provider = new OllamaProvider(address, 'discovery');
     const data = await provider.request(path, signal);
     if (!Array.isArray(data?.models)) throw new Error('OLLAMA_INVALID_MODELS');
-    const models = new Set<string>();
+    const models = new Map<string, string | undefined>();
     for (const item of data.models) {
       const id = localModelId(item?.name) ?? localModelId(item?.model);
-      if (id && !cloudOllamaModel(id) && !item.remote_host && !item.remote_model) models.add(id);
+      if (!id || cloudOllamaModel(id) || item.remote_host || item.remote_model) continue;
+      const digest =
+        typeof item.digest === 'string'
+          ? /^(?:sha256:)?([0-9a-f]{64})$/i.exec(item.digest)?.[1].toLowerCase()
+          : undefined;
+      models.set(id, digest ?? models.get(id));
     }
-    return [...models].slice(0, 100);
+    return models;
   }
 
   async checkConfiguration(signal: AbortSignal) {
