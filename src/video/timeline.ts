@@ -114,12 +114,19 @@ export class PresentationAudit {
 
 // One-based indices within the selected interval, including its endpoints.
 export function analysisFrameIndices(presentation: SourceSample[], limit: number) {
-  const total = presentation.length;
+  return presentationFrameIndices(presentation.length, limit, (i) => presentation[i].timestamp);
+}
+
+export function presentationFrameIndices(
+  total: number,
+  limit: number,
+  timestamp: (i: number) => number,
+) {
   const count = Math.min(total, limit);
   if (count === total || count < 2) return Uint32Array.from({ length: count }, (_, i) => i + 1);
   const result = new Uint32Array(count);
-  const first = presentation[0].timestamp;
-  const last = presentation[total - 1].timestamp;
+  const first = timestamp(0);
+  const last = timestamp(total - 1);
   let frame = 0;
   result[0] = 1;
   result[count - 1] = total;
@@ -128,11 +135,7 @@ export function analysisFrameIndices(presentation: SourceSample[], limit: number
     // Reserve one distinct source frame for every remaining slot.
     const latest = total - count + slot;
     frame++;
-    while (
-      frame < latest &&
-      target - presentation[frame].timestamp >= presentation[frame + 1].timestamp - target
-    )
-      frame++;
+    while (frame < latest && target - timestamp(frame) >= timestamp(frame + 1) - target) frame++;
     result[slot] = frame + 1;
   }
   return result;

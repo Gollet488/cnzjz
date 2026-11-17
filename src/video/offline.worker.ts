@@ -33,9 +33,16 @@ self.onmessage = ({ data }) => {
     paused = false;
   }
   notify();
-  if (data.type === 'start') void run(data.file, data.limit, data.clip);
+  if (data.type === 'start')
+    void run(data.file, data.limit, data.clip, data.mode === 'still', data.previewTimestamps);
 };
-async function run(file: File, limit: number, clip?: VideoClip) {
+async function run(
+  file: File,
+  limit: number,
+  clip: VideoClip | undefined,
+  still: boolean,
+  previewTimestamps?: number[],
+) {
   let decoder: VideoDecoder | undefined;
   let inference: PoseEngine | undefined;
   const queue: VideoFrame[] = [];
@@ -119,8 +126,8 @@ async function run(file: File, limit: number, clip?: VideoClip) {
     decoder.configure(source.config);
     // Read/decode and consume concurrently in this worker. The output callback
     // cannot await: outstanding encoded inputs + decoded outputs share a budget.
-    inference = new PoseEngine();
-    const modelReady = inference.ready();
+    if (!still) inference = new PoseEngine('file');
+    const modelReady = inference?.ready();
     const feed = (async () => {
       try {
         let blockStart = -1;
@@ -166,7 +173,8 @@ async function run(file: File, limit: number, clip?: VideoClip) {
         notify();
       }
     })();
-    const scale = Math.min(1, 1600 / Math.max(source.displayWidth, source.displayHeight));
+    const maxSide = still ? 2560 : 1600;
+    const scale = Math.min(1, maxSide / Math.max(source.displayWidth, source.displayHeight));
     const width = Math.max(1, Math.round(source.displayWidth * scale));
     const height = Math.max(1, Math.round(source.displayHeight * scale));
     const outWidth = source.rotation % 180 ? height : width;
@@ -175,6 +183,7 @@ async function run(file: File, limit: number, clip?: VideoClip) {
     const ctx = canvas.getContext('2d', { alpha: false })!;
     let analyzed = 0;
     let lastPreviewAt = -Infinity;
+    const requestedPreviews = previewTimestamps && new Set(previewTimestamps);
     await modelReady;
     while (!inputDone || queue.length) {
       await checkpoint();
@@ -196,15 +205,13 @@ async function run(file: File, limit: number, clip?: VideoClip) {
       }
       // A fresh MediaPipe instance per decode run: source PTS + 1 ms is strictly
       // monotonic even at PTS zero. Wall-clock/performance time is never used.
-      const showPreview =
-        performance.now() - lastPreviewAt >= 1000 / 15 || analyzed + 1 === indices.length;
-      const result = await inference.detect(
-        canvas.transferToImageBitmap(),
-        timestamp / 1000 + 1,
-        showPreview,
-        source.aspect,
-        true,
-      );
+      const showPreview = requestedPreviews
+        ? requestedPreviews.has(timestamp)
+        : performance.now() - lastPreviewAt >= 1000 / 15 || analyzed + 1 === indices.length;
+      const bitmap = canvas.transferToImageBitmap();
+      const result = inference
+        ? await inference.detect(bitmap, timestamp / 1000 + 1, showPreview, source.aspect)
+        : { points: [], preview: bitmap };
       const preview = result.preview;
       if (showPreview && !preview) throw new Error('本地姿态 Worker 未返回预览画面。');
       try {

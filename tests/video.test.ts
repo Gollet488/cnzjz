@@ -12,7 +12,7 @@ import {
 } from '../src/video/timeline.ts';
 import { humanPose } from '../src/utils/humanPose.ts';
 import { demoPose } from '../src/utils/demo.ts';
-import { OfflineVideoJob } from '../src/video/job.ts';
+import { OfflineVideoJob, readVideoStill } from '../src/video/job.ts';
 import { AnalysisSession } from '../src/analysis/session.ts';
 import { createToolRegistry } from '../src/analysis/tools.ts';
 import { serializeCSV } from '../src/utils/export.ts';
@@ -234,6 +234,46 @@ class FakeWorker {
     this.onmessage?.({ data });
   }
 }
+
+test('a still must match the requested PTS and completion; cancellation releases its bitmap', async () => {
+  const previous = globalThis.Worker;
+  globalThis.Worker = FakeWorker as unknown as typeof Worker;
+  const video = new File([], 'test.mp4');
+  let closed = 0;
+  const bitmap = { close: () => closed++ };
+  const frame = (time: number) => ({ type: 'frame', time, index: 1, points: [], preview: bitmap });
+  try {
+    const controller = new AbortController();
+    const aborted = readVideoStill(video, 17, 0.58, controller.signal);
+    const worker = FakeWorker.last;
+    assert.deepEqual(worker.commands[0], {
+      type: 'start',
+      file: video,
+      limit: 1,
+      clip: { start: 17, end: 17 },
+      mode: 'still',
+    });
+    worker.send(frame(0.58));
+    controller.abort();
+    await assert.rejects(aborted, /无法读取/);
+    assert.equal(closed, 1);
+    assert.ok(worker.terminated);
+
+    const signal = new AbortController().signal;
+    const wrongFrame = readVideoStill(video, 17, 0.58, signal);
+    FakeWorker.last.send(frame(0.55));
+    await assert.rejects(wrongFrame, /拒收当前帧/);
+    assert.equal(closed, 2);
+
+    const matched = readVideoStill(video, 17, 0.58, signal);
+    FakeWorker.last.send(frame(0.58));
+    FakeWorker.last.send({ type: 'done', truncated: false, count: 1 });
+    assert.equal(await matched, bitmap);
+    assert.equal(closed, 2);
+  } finally {
+    globalThis.Worker = previous;
+  }
+});
 
 test('converted video provenance survives tool validation and CSV with a source audit limitation', () => {
   const session = new AnalysisSession('file', {

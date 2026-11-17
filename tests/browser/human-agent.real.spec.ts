@@ -8,11 +8,14 @@ import { readMP4 } from '../../src/video/mp4.ts';
 import {
   downloadFile,
   fullCSV,
+  localChatURL,
   numericEqual,
+  ollamaChatBody,
   parseCSV,
   realAgentBudget,
   verifyAudit,
   replayFullCSV,
+  selectOllamaModel,
 } from './files.ts';
 import { latestRom, romCard } from './rom-card-helpers.ts';
 
@@ -174,14 +177,14 @@ function humanTest(
     page.on('download', (download) => summary.downloads.push(download.suggestedFilename()));
     const responses: Promise<void>[] = [];
     page.on('response', (response) => {
-      if (response.url() !== `${address}/api/chat` || response.request().method() !== 'POST')
-        return;
+      const payload = ollamaChatBody(response.request(), address);
+      if (!payload) return;
       responses.push(
         response.json().then(
           (body) => {
             summary.transport.push({
               status: response.status(),
-              requestedModel: response.request().postDataJSON()?.model,
+              requestedModel: payload.model,
               returnedModel: body.model,
             });
           },
@@ -193,11 +196,9 @@ function humanTest(
     });
     try {
       const version = await request.get(`${address}/api/version`);
-      const inventory = await request.get(`${address}/api/tags`, {
-        headers: { Origin: new URL(info.project.use.baseURL!).origin },
-      });
+      const inventory = await request.get(`${address}/api/tags`);
       expect(version.ok(), 'Ollama version endpoint').toBe(true);
-      expect(inventory.ok(), 'Ollama inventory and allowed preview origin').toBe(true);
+      expect(inventory.ok(), 'Ollama inventory endpoint').toBe(true);
       summary.version = (await version.json()).version;
       summary.modelDigest = (await inventory.json()).models.find(
         (m: any) => m.name === model,
@@ -243,17 +244,15 @@ function humanTest(
         range: [Number(rows[0].time_s), Number(rows.at(-1)!.time_s)],
       };
       await nav('AI Agent 分析');
-      const choice = page.getByLabel('模型', { exact: true });
-      await expect(choice.locator('option').filter({ hasText: model })).toBeAttached();
-      await choice.selectOption(JSON.stringify(['ollama', model, address]));
+      await selectOllamaModel(page, model, address);
       await page.getByRole('button', { name: '模型设置', exact: true }).click();
       const settings = page.getByRole('region', { name: '模型设置' });
       await settings.getByRole('button', { name: '测试连接', exact: true }).click();
       await expect(settings.getByText('结构化工具调用通过')).toBeVisible({ timeout: 65_000 });
       await page.getByRole('button', { name: '模型设置', exact: true }).click();
       summary.structuredProbe = 'passed';
-      await page.route(`${address}/api/chat`, (route) =>
-        route.request().method() !== 'POST' || budget.beforeRequest()
+      await page.route(localChatURL(address), (route) =>
+        !ollamaChatBody(route.request(), address) || budget.beforeRequest()
           ? route.continue()
           : route.abort(),
       );

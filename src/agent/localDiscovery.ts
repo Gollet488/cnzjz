@@ -1,41 +1,64 @@
 import { ProviderResponseError } from './provider.ts';
-import { localDefaults, localHosts } from './providers/localModel.ts';
+import { localHosts } from './providers/localModel.ts';
 import { OllamaProvider } from './providers/ollama.ts';
 import { LocalOpenAIProvider } from './providers/localOpenAI.ts';
 import type { LocalProviderId } from './providers/localModel.ts';
 
-export const localProviderIds = ['ollama', 'local-openai'] as const;
+export const defaultLocalAddress = 'http://127.0.0.1:11434';
 
 export interface LocalService {
   address: string;
+  provider: LocalProviderId;
+  deployment: string;
   models: string[];
+  runningModels?: string[];
 }
 
-export function localServiceGroups(provider: LocalProviderId, configured?: string) {
-  const ports = provider === 'ollama' ? [11434] : [1234, 8080, 8000];
-  const groups = ports.map((port) => localHosts.map((host) => `http://${host}:${port}`));
-  if (!configured) return groups;
-  const defaultGroup = groups.find((group) => group.includes(configured));
-  return [
-    [configured, ...(defaultGroup?.filter((address) => address !== configured) ?? [])],
-    ...groups.filter((group) => group !== defaultGroup),
-  ];
+export function localServiceGroups(configured: string[]) {
+  const defaults = [11434, 1234, 8080, 8000].map((port) =>
+    localHosts.map((host) => `http://${host}:${port}`),
+  );
+  const preferred: string[][] = [];
+  for (const address of configured) {
+    if (preferred.some((group) => group.includes(address))) continue;
+    const index = defaults.findIndex((group) => group.includes(address));
+    const aliases = index < 0 ? [] : defaults.splice(index, 1)[0];
+    preferred.push([address, ...aliases.filter((alias) => alias !== address)]);
+  }
+  return [...preferred, ...defaults];
+}
+
+export function authenticationStatus(error: unknown) {
+  if (error instanceof ProviderResponseError && [401, 403].includes(error.failure.httpStatus))
+    return error.failure.httpStatus;
 }
 
 export async function discoverLocalService(
-  provider: LocalProviderId,
   addresses: string[],
   signal: AbortSignal,
   tokenFor: (address: string) => string,
 ): Promise<LocalService> {
-  async function read(address: string, timeout: number) {
+  async function read(address: string, timeout: number): Promise<LocalService> {
     const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
-    const models =
-      provider === 'ollama'
-        ? await OllamaProvider.models(address, requestSignal)
-        : await LocalOpenAIProvider.models(address, requestSignal, tokenFor(address));
+    const native = await OllamaProvider.models(
+      address,
+      AbortSignal.any([requestSignal, AbortSignal.timeout(2000)]),
+    ).catch((error: unknown) => ({ error }));
+    if (Array.isArray(native))
+      return { address, provider: 'ollama', deployment: 'Ollama', models: native };
     requestSignal.throwIfAborted();
-    return { address, models };
+    try {
+      const inventory = await LocalOpenAIProvider.inventory(
+        address,
+        requestSignal,
+        tokenFor(address),
+      );
+      return { address, provider: 'local-openai', ...inventory };
+    } catch (error) {
+      throw authenticationStatus(error) || !authenticationStatus(native.error)
+        ? error
+        : native.error;
+    }
   }
 
   // Keep the preferred loopback address stable when the same service answers on aliases.
@@ -51,21 +74,17 @@ export async function discoverLocalService(
     if (attempt.status === 'fulfilled' && attempt.value.models.length) return attempt.value;
   if ('models' in first) return first;
   for (const attempt of fallbacks) if (attempt.status === 'fulfilled') return attempt.value;
-  if (
-    first.error instanceof ProviderResponseError &&
-    [401, 403].includes(first.error.failure.httpStatus)
-  )
-    throw first.error;
+  if (authenticationStatus(first.error)) throw first.error;
   for (const attempt of fallbacks)
-    if (
-      attempt.status === 'rejected' &&
-      attempt.reason instanceof ProviderResponseError &&
-      [401, 403].includes(attempt.reason.failure.httpStatus)
-    )
-      throw attempt.reason;
+    if (attempt.status === 'rejected' && authenticationStatus(attempt.reason)) throw attempt.reason;
   throw first.error;
 }
 
-export function defaultLocalAddress(provider: LocalProviderId) {
-  return localDefaults[provider];
+export async function withRunningModels(service: LocalService, signal: AbortSignal) {
+  if (service.provider !== 'ollama' || !service.models.length) return service;
+  const runningModels = await OllamaProvider.runningModels(
+    service.address,
+    AbortSignal.any([signal, AbortSignal.timeout(1200)]),
+  ).catch(() => undefined);
+  return { ...service, runningModels };
 }

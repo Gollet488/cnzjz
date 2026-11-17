@@ -53,15 +53,6 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
     await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
     const panel = page.locator('.comparison-panel');
     const files = panel.locator('input[type=file]');
-    const videos = panel.locator('video');
-    const playback = () =>
-      videos.evaluateAll((items: HTMLVideoElement[]) =>
-        items.map((video) => ({
-          playingAt: Number(video.dataset.playingAt) || null,
-          advancedAt: Number(video.dataset.advancedAt) || null,
-          time: Number(video.dataset.advancedTime) || null,
-        })),
-      );
     try {
       await files.nth(0).setInputFiles(resolve('tests/fixtures/format.avi'));
       await files.nth(1).setInputFiles(resolve('tests/fixtures/format.webm'));
@@ -75,46 +66,19 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
         }),
       );
       expect(downloads).toHaveLength(2);
-      await videos.evaluateAll((items: HTMLVideoElement[], start) => {
-        for (const video of items) {
-          video.addEventListener(
-            'playing',
-            () => {
-              video.dataset.playingAt = String(Date.now() - start);
-            },
-            { once: true },
-          );
-          video.addEventListener('timeupdate', () => {
-            if (!video.dataset.playingAt || video.dataset.advancedAt || video.currentTime < 0.1)
-              return;
-            video.dataset.advancedAt = String(Date.now() - start);
-            video.dataset.advancedTime = String(video.currentTime);
-          });
-        }
-      }, start);
       clickedAt = Date.now() - start;
       await panel.getByRole('button', { name: '开始对比', exact: true }).click();
-      await Promise.all([
-        expect
-          .poll(async () => (await playback()).map(({ time }) => time !== null), {
-            timeout: 55_000,
-          })
-          .toEqual([true, true]),
-        (async () => {
-          // The playhead is published only after the first paired frame is analyzed and drawn.
-          await expect(panel.locator('.compare-playhead')).toContainText(/参考 .+ s · 待测 .+ s/, {
-            timeout: 55_000,
-          });
-          firstPairAt = Date.now() - start;
-        })(),
-      ]);
+      await expect(panel.locator('.compare-playhead')).toContainText(/参考 .+ s · 待测 .+ s/, {
+        timeout: 55_000,
+      });
+      firstPairAt = Date.now() - start;
+      await expect(panel.locator('.compare-playhead')).toContainText('对比结束');
     } finally {
       await info.attach('slow-comparison-timing', {
         body: JSON.stringify({
           downloads,
           convertedAt,
           clickedAt,
-          playback: await playback().catch(() => []),
           firstPairAt,
         }),
         contentType: 'application/json',

@@ -1,7 +1,7 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import type { RunAudit } from '../../src/agent/audit.ts';
 import type { RomDraftAudit } from '../../src/agent/romTaskCard.ts';
-import { downloadFile } from './files.ts';
+import { downloadFile, selectOllamaModel } from './files.ts';
 import {
   FIXED_ROM_FINGERPRINT,
   fixedRomSession,
@@ -47,6 +47,7 @@ async function scripted(page: Page, outcome: Outcome) {
   // that can complete even after its signal aborts. Every model URL is blocked
   // at the network boundary as a second guard.
   await page.route(/(?:127\.0\.0\.1:11434|\/__deepseek)\//, (route) => route.abort());
+  await page.route('**/__local-model', (route) => route.fulfill({ status: 404 }));
   await page.addInitScript(
     ({ outcome, archived }) => {
       const nativeFetch = window.fetch.bind(window);
@@ -77,6 +78,7 @@ async function scripted(page: Page, outcome: Outcome) {
         if (!url.startsWith('http://127.0.0.1:11434/')) return nativeFetch(input, init);
         if (url.endsWith('/tags'))
           return Response.json({ models: [{ name: 'scripted-recovery' }] });
+        if (url.endsWith('/ps')) return Response.json({ models: [] });
         if (url.endsWith('/show')) return Response.json({ capabilities: ['tools'] });
         if (!url.endsWith('/chat')) throw new Error(url);
         const name = JSON.parse(String(init?.body)).tools[0].function.name;
@@ -122,9 +124,7 @@ async function relative(page: Page) {
   await card.getByLabel('统计后段时长').fill('5');
 }
 async function startDraft(page: Page) {
-  await page
-    .getByLabel('模型', { exact: true })
-    .selectOption(JSON.stringify(['ollama', 'scripted-recovery', 'http://127.0.0.1:11434']));
+  await selectOllamaModel(page, 'scripted-recovery');
   await choose(page, '用当前模型草拟').click();
   await romCard(page).getByLabel('模型草拟指令').fill(romGoal);
   await choose(page, '生成待审阅草稿').click();

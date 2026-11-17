@@ -1,28 +1,18 @@
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { preservesCloudContext, temporaryApiKeyFormat } from '../src/agent/modelCatalog.ts';
 import { ProviderResponseError } from '../src/agent/provider.ts';
 import { DeepSeekProvider, DeepSeekRequestError } from '../src/agent/providers/deepseek.ts';
-import { cloudConfiguration } from './cloud-model-config.mjs';
+import { cloudConfiguration, windowsUserCloudKeys } from './cloud-model-config.mjs';
 
 export const PROXY_BODY_LIMIT = 256_000;
 const loopback = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
-// Read the actual Windows user environment when Codex predates the key setup.
-// The result stays in this Node process; never print it or write it to disk.
 export function userApiKey() {
-  if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY;
-  if (process.platform !== 'win32') return '';
-  return execFileSync(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      "[Console]::Write([Environment]::GetEnvironmentVariable('DEEPSEEK_API_KEY','User'))",
-    ],
-    { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] },
+  return (
+    process.env.DEEPSEEK_API_KEY ||
+    windowsUserCloudKeys(['DEEPSEEK_API_KEY']).DEEPSEEK_API_KEY ||
+    ''
   ).trim();
 }
 
@@ -318,13 +308,7 @@ export function deepSeekProxy() {
   const proxies = new Set();
   const install = (server) => {
     const proxy = createDeepSeekMiddleware({
-      cloud: cloudConfiguration(server.config.root, () => {
-        try {
-          return userApiKey();
-        } catch {
-          return '';
-        }
-      }),
+      cloud: cloudConfiguration(server.config.root),
     });
     proxies.add(proxy);
     server.middlewares.use(proxy.middleware);

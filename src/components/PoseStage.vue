@@ -5,7 +5,7 @@ import type { Angles, Landmark, PoseFrame, Settings, Source } from '../types';
 import { demoPose } from '../utils/demo';
 import { renderPose } from '../utils/renderer';
 import { PoseEngine } from '../utils/poseEngine';
-import { OfflineVideoJob } from '../video/job';
+import { OfflineVideoJob, readVideoStill } from '../video/job';
 import { MAX_VIDEO_BYTES, prepareVideo, VIDEO_ACCEPT } from '../video/prepare';
 import type { OfflineMetadata, OfflineState, VideoClip } from '../video/protocol';
 import { nearestVideoFrame } from '../video/timeline';
@@ -947,10 +947,26 @@ async function waitUntilRendered() {
     waiting = requestAnimationFrame(check);
   });
 }
+async function readReviewImage(time: number, signal: AbortSignal) {
+  if (props.playing || props.selectedFrame?.time !== time)
+    throw new Error('请暂停并选择要复核的帧。');
+  if (props.source === 'camera') {
+    const image = cameraHistory.get(time);
+    if (!image) throw new Error('该时刻的摄像头画面已不在本机回看缓存中。');
+    return createImageBitmap(image);
+  }
+  const times = timestamps.value;
+  if (props.source !== 'file' || !file || !times?.length) throw new Error('请先分析本地视频。');
+  const timeUs = Math.round(time * 1e6);
+  const index = nearestVideoFrame(times, timeUs);
+  if (times[index] !== timeUs) throw new Error('无法找到采样时刻对应的视频帧。');
+  return readVideoStill(file, index, time, signal);
+}
 defineExpose({
   canvas,
   seekToTime,
   waitUntilRendered,
+  readReviewImage,
   isEnded: offlineEnded,
   chooseFile: () => input.value?.click(),
   reset: () => {
@@ -1008,12 +1024,6 @@ defineExpose({
       ><span>Y ↓</span><div>·</div><small>X →</small></div
     >
     <div
-      v-if="cameraReviewTime !== undefined && !cameraReviewImage"
-      class="camera-history-status"
-      role="status"
-      >{{ CAMERA_HISTORY_MISSING }}</div
-    >
-    <div
       v-if="(source === 'file' && !filename) || (source === 'camera' && !cameraConnected)"
       class="stage-empty"
       ><component :is="source === 'camera' ? Video : UploadCloud" :size="38" /><h3>{{
@@ -1034,37 +1044,6 @@ defineExpose({
       }}</span
       ><button v-if="source === 'file'" @click="cancelPreparation">取消准备</button></div
     >
-    <div v-if="source === 'file' && filename" class="offline-progress" role="status">
-      <button @click="input?.click()">更换视频</button>
-      <span
-        >{{
-          {
-            idle: '待分析',
-            preparing: '准备中',
-            running: sampled ? '长视频抽样中' : '逐帧分析中',
-            paused: '已暂停',
-            completed: '全部完成',
-            sampled: '抽样完成',
-            cancelled: '已取消 · 前缀',
-            truncated: '上限截断',
-            failed: '失败 · 前缀',
-          }[offlineState]
-        }}
-        · {{ processed }} / {{ offlineMetadata?.sampleTotal ?? '—' }} 帧
-        <template v-if="sampled">（分析范围 {{ offlineMetadata?.total }} 帧）</template>
-        <template v-if="processed"> · 检测到人体 {{ detectedFrames }} 帧</template></span
-      >
-      <progress
-        :value="processed"
-        :max="offlineMetadata?.sampleTotal || 1"
-        aria-label="视频分析进度"
-      />
-      <button
-        v-if="['preparing', 'running', 'paused'].includes(offlineState)"
-        @click="job?.cancel()"
-        >取消解码</button
-      >
-    </div>
     <div class="stage-bottom"
       ><span
         ><ScanLine :size="13" />
@@ -1074,6 +1053,43 @@ defineExpose({
     <div class="corner tl" /><div class="corner tr" /><div class="corner bl" /><div
       class="corner br"
     />
+  </div>
+  <slot name="legend" />
+  <div
+    v-if="cameraReviewTime !== undefined && !cameraReviewImage"
+    class="camera-history-status"
+    role="status"
+  >
+    {{ CAMERA_HISTORY_MISSING }}
+  </div>
+  <div v-if="source === 'file' && filename" class="offline-progress" role="status">
+    <button @click="input?.click()">更换视频</button>
+    <span
+      >{{
+        {
+          idle: '待分析',
+          preparing: '准备中',
+          running: sampled ? '长视频抽样中' : '逐帧分析中',
+          paused: '已暂停',
+          completed: '全部完成',
+          sampled: '抽样完成',
+          cancelled: '已取消 · 前缀',
+          truncated: '上限截断',
+          failed: '失败 · 前缀',
+        }[offlineState]
+      }}
+      · {{ processed }} / {{ offlineMetadata?.sampleTotal ?? '—' }} 帧
+      <template v-if="sampled">（分析范围 {{ offlineMetadata?.total }} 帧）</template>
+      <template v-if="processed"> · 检测到人体 {{ detectedFrames }} 帧</template></span
+    >
+    <progress
+      :value="processed"
+      :max="offlineMetadata?.sampleTotal || 1"
+      aria-label="视频分析进度"
+    />
+    <button v-if="['preparing', 'running', 'paused'].includes(offlineState)" @click="job?.cancel()"
+      >取消解码</button
+    >
   </div>
   <VideoClipControls
     v-if="source === 'file' && timestamps"
@@ -1094,31 +1110,35 @@ defineExpose({
 <style scoped>
 .offline-progress,
 .camera-history-status {
-  position: absolute;
-  bottom: 42px;
-  left: 16px;
-  right: 16px;
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 9px 12px;
-  border-radius: 6px;
-  background: var(--stage-overlay);
-  color: var(--stage-ink);
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  background: var(--capture-surface);
+  box-shadow: var(--capture-recessed);
+  color: var(--ink);
   font-size: 12px;
-  z-index: 3;
+  line-height: 1.5;
+}
+.offline-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 10px;
 }
 .offline-progress progress {
-  flex: 1;
-  min-width: 30px;
+  flex: 1 1 64px;
+  min-width: 40px;
   height: 8px;
   accent-color: var(--accent-mid);
 }
 .offline-progress button {
-  border: 1px solid var(--stage-line);
+  min-height: 34px;
+  padding: 0 8px;
   color: inherit;
-  background: transparent;
-  border-radius: 4px;
+  background: var(--capture-surface);
+  box-shadow: var(--capture-raised);
+  border-radius: var(--control-radius);
   cursor: pointer;
   white-space: nowrap;
 }

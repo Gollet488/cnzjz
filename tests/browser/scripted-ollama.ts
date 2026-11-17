@@ -18,6 +18,8 @@ export async function scriptedOllama(
 ) {
   const requests: any[] = [];
   const steps = new Map<string, number>();
+  if (provider === 'ollama')
+    await page.route('**/__local-model', (route) => route.fulfill({ status: 404 }));
   await page.route(
     provider === 'ollama' ? 'http://127.0.0.1:11434/api/**' : '**/__models/**',
     async (route) => {
@@ -25,6 +27,7 @@ export async function scriptedOllama(
       const path = new URL(route.request().url()).pathname;
       const reply = (data: unknown) => route.fulfill({ json: data });
       if (path === '/api/tags') return reply({ models: [{ name: 'scripted-protocol-only' }] });
+      if (path === '/api/ps') return reply({ models: [] });
       if (path === '/__models/catalog')
         return reply({
           providers: [

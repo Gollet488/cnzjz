@@ -16,6 +16,9 @@ import {
   rom,
   numericEqual,
   realAgentBudget,
+  localChatURL,
+  ollamaChatBody,
+  selectOllamaModel,
 } from './files.ts';
 
 test('REAL MODEL demonstration: compare → right/second interval → evidence/view → report/CSV', async ({
@@ -60,11 +63,7 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
   };
   await persist();
   await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
-  const choice = JSON.stringify(['ollama', model, 'http://127.0.0.1:11434']);
-  await expect(
-    page.getByLabel('模型', { exact: true }).locator('option').filter({ hasText: model }),
-  ).toBeAttached();
-  await page.getByLabel('模型', { exact: true }).selectOption(choice);
+  await selectOllamaModel(page, model, address);
   await page.getByRole('button', { name: '模型设置', exact: true }).click();
   const settings = page.getByRole('region', { name: '模型设置' });
   await settings.getByRole('button', { name: '测试连接', exact: true }).click();
@@ -119,8 +118,10 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
       .click({ timeout: 2000 })
       .catch(() => {});
   });
-  await page.route(`${address}/api/chat`, (route) =>
-    budget.beforeRequest() ? route.continue() : route.abort(),
+  await page.route(localChatURL(address), (route) =>
+    !ollamaChatBody(route.request(), address) || budget.beforeRequest()
+      ? route.continue()
+      : route.abort(),
   );
   try {
     for (const [index, goal] of goals.entries()) {

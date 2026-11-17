@@ -7,6 +7,7 @@ import {
   LandmarkFilter,
   measureFrame,
   poseDistance,
+  shortProjectionSides,
   stabilityVariance,
 } from '../src/utils/poseMath.ts';
 import type { Landmark } from '../src/types.ts';
@@ -35,6 +36,21 @@ test('joint metrics reject low-confidence landmarks instead of generating angles
   assert.equal(jointAngles(p).elbow.left, null);
   assert.notEqual(jointAngles(p).elbow.right, null);
 });
+test('short projection advice accounts for source aspect without removing a valid angle', () => {
+  const p = fixture();
+  p[11] = point(0.3, 0.3);
+  p[13] = point(0.35, 0.3);
+  p[15] = point(0.35, 0.5);
+  p[14].visibility = 0;
+  const original = structuredClone(p);
+  assert.deepEqual(shortProjectionSides(p, 'elbow', 0.5, 0.5), ['left']);
+  assert.deepEqual(shortProjectionSides(p, 'elbow', 0.5, 2), []);
+  near(jointAngles(p, 0.5, 0.5).elbow.left, 90);
+  assert.deepEqual(p, original);
+  p[15].visibility = 0.4;
+  assert.deepEqual(shortProjectionSides(p, 'elbow', 0.5, 0.5), []);
+  assert.deepEqual(shortProjectionSides([], 'elbow', 0.5, 0.5), []);
+});
 test('filter honors its window, reset and current low confidence', () => {
   const filter = new LandmarkFilter();
   filter.apply([point(0, 0)], 2);
@@ -44,6 +60,32 @@ test('filter honors its window, reset and current low confidence', () => {
   near(filter.apply([point(7, 7)], 5)[0].x, 7);
   filter.clear();
   near(filter.apply([point(8, 8)], 5)[0].x, 8);
+});
+test('recency-weighted filtering favors the current frame and stops at occlusion', () => {
+  const filter = new LandmarkFilter();
+  filter.apply([point(0, 0)], 3, 0.5, true);
+  filter.apply([point(0.5, 0.5)], 3, 0.5, true);
+  near(filter.apply([point(1, 1)], 3, 0.5, true)[0].x, 1.2 / 1.56);
+  filter.apply([point(0, 0, 0.4)], 3, 0.5, true);
+  near(filter.apply([point(0.7, 0.7)], 3, 0.5, true)[0].x, 0.7);
+});
+
+test('offline motion weighting keeps small jitter smooth and follows rapid movement', () => {
+  const steady = fixture();
+  for (const i of [11, 12]) steady[i] = point(0.5, 0.25);
+  for (const i of [23, 24]) steady[i] = point(0.5, 0.75);
+  steady[15] = point(0.4, 0.5);
+  const filter = new LandmarkFilter();
+  filter.apply(steady, 5, 0.5, true, 2);
+  const jitter = steady.map((p) => ({ ...p }));
+  jitter[15].x += 0.004;
+  const smoothed = filter.apply(jitter, 5, 0.5, true, 2)[15];
+  near(smoothed.x, (jitter[15].x + 0.4 * steady[15].x) / 1.4);
+  const turn = steady.map((p) => ({ ...p }));
+  turn[15].x += 0.09;
+  near(filter.apply(turn, 5, 0.5, true, 2)[15].x, turn[15].x);
+  turn[15].visibility = 0.3;
+  assert.equal(filter.apply(turn, 5, 0.5, true, 2)[15].visibility, 0.3);
 });
 test('stability is zero for static points and unavailable without reliable samples', () => {
   const p = fixture();

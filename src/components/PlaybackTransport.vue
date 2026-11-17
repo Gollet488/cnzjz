@@ -76,17 +76,19 @@ const peaks = [
 
 <style scoped>
 .playback {
-  --playback-surface: var(--surface-muted);
+  --playback-surface: var(--capture-surface, var(--surface-muted));
   display: flex;
   align-items: center;
   gap: clamp(14px, 3vw, 24px);
   padding: 12px 16px;
-  border: 1px solid var(--surface);
+  border: 1px solid var(--capture-surface, var(--surface));
   border-radius: 14px;
   background: var(--playback-surface);
-  box-shadow:
+  box-shadow: var(
+    --capture-recessed,
     3px 4px 9px var(--shadow-soft),
-    -3px -4px 9px var(--highlight);
+    -3px -4px 9px var(--highlight)
+  );
 }
 .playback-toggle {
   display: inline-flex;
@@ -99,10 +101,8 @@ const peaks = [
   border: 1px solid var(--surface);
   border-radius: 999px;
   color: var(--accent-dark);
-  background: linear-gradient(145deg, var(--surface), var(--page-edge));
-  box-shadow:
-    3px 4px 7px var(--shadow-deep),
-    -3px -4px 8px var(--highlight);
+  background: var(--capture-surface, linear-gradient(145deg, var(--surface), var(--page-edge)));
+  box-shadow: var(--capture-raised, 3px 4px 7px var(--shadow-deep), -3px -4px 8px var(--highlight));
   font-size: 11px;
   font-weight: 650;
   white-space: nowrap;

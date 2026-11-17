@@ -149,7 +149,9 @@ export function renderPose(
     ctx.lineCap = 'round';
     ctx.lineWidth = 2.5;
     for (const [a, b] of CONNECTIONS) {
-      const low = Math.min(points[a].visibility, points[b].visibility) < settings.threshold;
+      const confidence = Math.min(points[a].visibility, points[b].visibility);
+      if (confidence <= 0) continue;
+      const low = confidence < settings.threshold;
       ctx.strokeStyle = low ? 'rgba(250,111,105,.3)' : '#62dbac';
       ctx.shadowColor = '#5ce8bd';
       ctx.shadowBlur = low ? 0 : 7;
@@ -162,6 +164,7 @@ export function renderPose(
     }
     ctx.shadowBlur = 0;
     points.forEach((p, i) => {
+      if (p.visibility <= 0) return;
       const c = xy(p),
         low = p.visibility < settings.threshold;
       ctx.fillStyle = low ? 'rgba(248,113,113,.55)' : '#a0ffda';

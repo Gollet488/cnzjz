@@ -1,9 +1,14 @@
 <script setup lang="ts">
-defineProps<{ label: string }>();
+defineProps<{ label: string; expandStart?: boolean }>();
 </script>
 
 <template>
-  <button type="button" class="icon-button" :aria-label="label">
+  <button
+    type="button"
+    class="icon-button"
+    :class="{ 'icon-button--expand-start': expandStart }"
+    :aria-label="label"
+  >
     <span class="icon-button-icon" aria-hidden="true"><slot /></span>
     <span class="icon-button-label" aria-hidden="true"
       ><span>{{ label }}</span></span
@@ -14,8 +19,9 @@ defineProps<{ label: string }>();
 <style scoped>
 .icon-button {
   --icon-button-size: 48px;
+  --icon-button-reveal: 0fr;
   display: inline-grid;
-  grid-template-columns: var(--icon-button-size) minmax(0, 0fr);
+  grid-template-columns: var(--icon-button-size) minmax(0, var(--icon-button-reveal));
   flex: none;
   align-items: center;
   height: var(--icon-button-size);
@@ -31,6 +37,17 @@ defineProps<{ label: string }>();
     background-color 0.15s ease,
     box-shadow 0.15s ease;
 }
+.icon-button--expand-start {
+  grid-template-columns: minmax(0, var(--icon-button-reveal)) var(--icon-button-size);
+}
+.icon-button--expand-start .icon-button-icon {
+  grid-area: 1 / 2;
+}
+.icon-button--expand-start .icon-button-label {
+  display: flex;
+  grid-area: 1 / 1;
+  justify-content: flex-end;
+}
 .icon-button-icon {
   display: grid;
   place-items: center;
@@ -42,30 +59,31 @@ defineProps<{ label: string }>();
 .icon-button-label {
   overflow: hidden;
   white-space: nowrap;
-  opacity: 0;
+  opacity: var(--icon-button-label-opacity, 0);
   transition: opacity 0.12s ease;
+  transition-delay: var(--icon-button-label-delay, 0ms);
 }
 .icon-button-label > span {
-  padding-inline-end: 14px;
+  padding-inline-end: var(--icon-button-label-padding, 14px);
+}
+.icon-button--expand-start .icon-button-label > span {
+  flex: none;
+  padding-inline: var(--icon-button-label-padding, 14px) 0;
 }
 .icon-button:focus-visible {
-  grid-template-columns: var(--icon-button-size) minmax(0, 1fr);
+  --icon-button-reveal: var(--icon-button-focus-reveal, 1fr);
+  --icon-button-label-opacity: var(--icon-button-focus-opacity, 1);
+  --icon-button-label-delay: 80ms;
   background-color: var(--accent-soft);
   box-shadow: var(--control-hover-edge);
 }
-.icon-button:focus-visible .icon-button-label {
-  opacity: 1;
-  transition-delay: 80ms;
-}
 @media (hover: hover) {
   .icon-button:enabled:hover {
-    grid-template-columns: var(--icon-button-size) minmax(0, 1fr);
+    --icon-button-reveal: 1fr;
+    --icon-button-label-opacity: 1;
+    --icon-button-label-delay: 80ms;
     background-color: var(--accent-soft);
     box-shadow: var(--control-hover-edge);
-  }
-  .icon-button:enabled:hover .icon-button-label {
-    opacity: 1;
-    transition-delay: 80ms;
   }
 }
 .icon-button:enabled:active {

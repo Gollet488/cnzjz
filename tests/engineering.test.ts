@@ -57,7 +57,8 @@ async function fixture(dependencies = true) {
   await writeFile(path.join(folder, 'index.html'), '<title>Kinetic launcher test</title>');
   await writeFile(
     path.join(folder, 'vite.config.mjs'),
-    "import {demoHealth} from './scripts/demo-health.mjs'; export default {plugins:[demoHealth()]};",
+    // The node_modules junction shares Vite's default cache with the real app.
+    "import {demoHealth} from './scripts/demo-health.mjs'; export default {cacheDir: '.vite-cache', plugins:[demoHealth()]};",
   );
   if (dependencies)
     await symlink(

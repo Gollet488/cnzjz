@@ -1,5 +1,6 @@
 import {
   localHosts,
+  localInventoryPaths,
   localModelAddress,
   localModelRoute,
   localPaths,
@@ -47,14 +48,15 @@ export function localModelRelay() {
         }
         const { address, path, body } = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (!localPaths.includes(path)) return reject(400);
-        const origin = localModelAddress(address, path.startsWith('/v1/'));
-        const read = path === '/api/tags' || path === '/v1/models';
+        const compatible = path.startsWith('/v1/') || path === '/api/v1/models';
+        const origin = localModelAddress(address, compatible);
+        const read = localInventoryPaths.includes(path);
         if (read ? body !== undefined : !body || typeof body !== 'object' || Array.isArray(body))
           return reject(400);
         const authorization = req.headers.authorization;
         if (
           authorization &&
-          (!path.startsWith('/v1/') ||
+          (!compatible ||
             !authorization.startsWith('Bearer ') ||
             !temporaryApiKeyFormat.test(authorization.slice(7)))
         )

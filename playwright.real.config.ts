@@ -9,7 +9,7 @@ const stamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
 // Playwright reloads this config in workers. Inherit the parent run's name.
 const output = human
   ? `.qa/human-agent/runs/${(process.env.HUMAN_AGENT_RUN_ID ??= `${stamp}-${randomUUID()}`)}`
-  : (process.env.BROWSER_REAL_OUTPUT ?? `test-results/real-${stamp}`);
+  : (process.env.BROWSER_REAL_OUTPUT ??= `test-results/real-${stamp}`);
 const provider = process.env.REAL_AGENT_PROVIDER ?? 'ollama';
 if (human && (!process.env.HUMAN_VIDEO_PATH?.trim() || provider !== 'ollama'))
   throw new Error('human_acceptance requires HUMAN_VIDEO_PATH and REAL_AGENT_PROVIDER=ollama');

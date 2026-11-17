@@ -1,9 +1,10 @@
 import { computed, reactive, ref, shallowRef, watch } from 'vue';
 import {
+  authenticationStatus,
   defaultLocalAddress,
   discoverLocalService,
-  localProviderIds,
   localServiceGroups,
+  withRunningModels,
 } from './localDiscovery.ts';
 import type { LocalService } from './localDiscovery.ts';
 import {
@@ -12,16 +13,16 @@ import {
   cloudProviders,
   temporaryApiKeyFormat,
 } from './modelCatalog.ts';
-import type { CloudModelConfig, ProviderId } from './modelCatalog.ts';
+import type { CloudModelConfig, CloudProviderId, ProviderId } from './modelCatalog.ts';
 import { CloudPageProvider, cloudUnavailable, modelError } from './providers/cloudPage.ts';
 import { OllamaProvider } from './providers/ollama.ts';
 import { LocalOpenAIProvider } from './providers/localOpenAI.ts';
 import { localModelAddress, localModelId } from './providers/localModel.ts';
 import type { LocalProviderId } from './providers/localModel.ts';
-import { ProviderResponseError } from './provider.ts';
 
 const preference = 'kinetic-agent-model';
 const addressPreference = 'kinetic-agent-local-addresses';
+export type SettingsProvider = 'local' | CloudProviderId;
 export interface ModelChoice {
   provider: ProviderId;
   model: string;
@@ -66,12 +67,12 @@ function restoreChoice(): ModelChoice | undefined {
 }
 
 function restoreAddresses() {
-  const addresses: Partial<Record<LocalProviderId, string>> = {};
+  const addresses: Partial<Record<'local' | LocalProviderId, string>> = {};
   try {
     const saved = JSON.parse(localStorage.getItem(addressPreference) ?? '{}');
-    for (const provider of localProviderIds) {
-      if (typeof saved?.[provider] === 'string')
-        addresses[provider] = localModelAddress(saved[provider], provider === 'local-openai');
+    for (const key of ['local', 'ollama', 'local-openai'] as const) {
+      const address = normalizeAddress(saved?.[key]);
+      if (address) addresses[key] = address;
     }
   } catch {
     // The defaults also work when storage is unavailable.
@@ -79,20 +80,24 @@ function restoreAddresses() {
   return addresses;
 }
 
+function normalizeAddress(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  try {
+    return localModelAddress(value, true);
+  } catch {
+    return '';
+  }
+}
+
 export function useAgentModels() {
   const choice = shallowRef(restoreChoice());
   const addresses = ref(restoreAddresses());
-  if (choice.value && isLocalProvider(choice.value.provider) && choice.value.address)
-    addresses.value[choice.value.provider] ??= choice.value.address;
   const addressInput = ref('');
   const addressError = ref('');
   watch(addressInput, () => (addressError.value = ''), { flush: 'sync' });
-  const local = shallowRef<Record<LocalProviderId, LocalService[]>>({
-    ollama: [],
-    'local-openai': [],
-  });
-  const localErrors = ref<Record<LocalProviderId, string>>({ ollama: '', 'local-openai': '' });
-  const compatibleAuthAddress = ref('');
+  const localServices = shallowRef<LocalService[]>([]);
+  const localError = ref('');
+  const authAddress = ref('');
   const localToken = ref('');
   const localTokens = reactive(new Map<string, string>());
   const cloud = shallowRef<CloudModelConfig[]>([]);
@@ -102,7 +107,7 @@ export function useAgentModels() {
   const refreshing = ref(false);
   const loaded = ref(false);
   const settings = ref(false);
-  const settingsProvider = ref<ProviderId>(choice.value?.provider ?? 'ollama');
+  const settingsProvider = ref<SettingsProvider>('local');
   const tests = ref<Record<string, { ok: boolean; message: string }>>({});
   const testing = ref(false);
   const temporaryKey = ref('');
@@ -114,30 +119,28 @@ export function useAgentModels() {
   watch(
     addressInput,
     (value, previous) => {
-      if (settingsProvider.value !== 'local-openai') return;
-      const normalize = (input: string) => {
-        try {
-          return localModelAddress(input, true);
-        } catch {
-          return '';
-        }
-      };
-      const address = normalize(value);
-      if (address !== normalize(previous)) localToken.value = localTokens.get(address) ?? '';
+      const address = normalizeAddress(value);
+      if (address !== normalizeAddress(previous)) localToken.value = localTokens.get(address) ?? '';
     },
     { flush: 'sync' },
   );
 
-  const localError = computed(() =>
-    isLocalProvider(settingsProvider.value) ? localErrors.value[settingsProvider.value] : '',
-  );
-  const settledLocalServices = computed(() =>
-    localProviderIds.flatMap((provider) => local.value[provider]),
-  );
+  function serviceFor(item: ModelChoice) {
+    return localServices.value.find(
+      ({ address, provider }) => address === item.address && provider === item.provider,
+    );
+  }
+  function modelProviderName(item: ModelChoice) {
+    return serviceFor(item)?.deployment ?? providerNames[item.provider];
+  }
+  function localModelLabel(item: ModelChoice) {
+    const loaded = serviceFor(item)?.runningModels?.includes(item.model);
+    return `${item.model} · ${modelProviderName(item)} · ${item.address}${loaded ? ' · 已载入 Ollama' : ''}`;
+  }
   const localModelCount = computed(() =>
-    settledLocalServices.value.reduce((total, service) => total + service.models.length, 0),
+    localServices.value.reduce((total, service) => total + service.models.length, 0),
   );
-  const localServiceCount = computed(() => settledLocalServices.value.length);
+  const localServiceCount = computed(() => localServices.value.length);
 
   watch(
     temporaryKey,
@@ -160,10 +163,8 @@ export function useAgentModels() {
     }),
   );
   const localOptions = computed<ModelChoice[]>(() => {
-    const options = localProviderIds.flatMap((provider) =>
-      local.value[provider].flatMap(({ address, models }) =>
-        models.map((model): ModelChoice => ({ provider, model, address })),
-      ),
+    const options = localServices.value.flatMap(({ provider, address, models }) =>
+      models.map((model): ModelChoice => ({ provider, model, address })),
     );
     const manual = choice.value;
     if (manual?.manual && !options.some((item) => choiceKey(item) === choiceKey(manual)))
@@ -184,9 +185,13 @@ export function useAgentModels() {
     ),
   );
   const keyValid = computed(() => temporaryApiKeyFormat.test(temporaryKey.value.trim()));
+  const canEnterLocalModel = computed(() => {
+    const input = normalizeAddress(addressInput.value);
+    return localServices.value.find(({ address }) => address === input)?.provider !== 'ollama';
+  });
   const customModelValid = computed(() => {
     const model = customModel.value.trim();
-    if (settingsProvider.value === 'local-openai')
+    if (settingsProvider.value === 'local')
       return !!localModelId(model) && model !== localToken.value.trim();
     return cloudModelId.test(model) && model !== temporaryKey.value.trim();
   });
@@ -209,16 +214,28 @@ export function useAgentModels() {
 
   const ready = computed(() => selected.value && canSend(selected.value));
   const settingsOptions = computed(() =>
-    options.value.filter((p) => p.provider === settingsProvider.value && canSend(p)),
+    cloudOptions.value.filter((p) => p.provider === settingsProvider.value && canSend(p)),
   );
   const testModel = ref('');
-  const target = computed(
-    () =>
-      settingsOptions.value.find((m) => choiceKey(m) === testModel.value) ??
-      (selected.value?.provider === settingsProvider.value && canSend(selected.value)
-        ? selected.value
-        : settingsOptions.value[0]),
+  const testAddress = ref('');
+  const defaultTestModel = computed(
+    () => settingsOptions.value.find((item) => item === selected.value) ?? settingsOptions.value[0],
   );
+  const target = computed(() => {
+    if (settingsProvider.value !== 'local')
+      return (
+        settingsOptions.value.find((m) => choiceKey(m) === testModel.value) ??
+        defaultTestModel.value
+      );
+    const item = selected.value;
+    if (
+      item &&
+      isLocalProvider(item.provider) &&
+      (!testAddress.value || testAddress.value === item.address)
+    )
+      return item;
+    return undefined;
+  });
   watch(
     () => target.value && choiceKey(target.value),
     () => probe?.abort(),
@@ -227,34 +244,28 @@ export function useAgentModels() {
   const testResult = computed(() => target.value && tests.value[choiceKey(target.value)]);
   const settingsStatus = computed(() => {
     if (testing.value) return '正在测试';
-    if (!loaded.value || (isLocalProvider(settingsProvider.value) && refreshing.value))
+    if (!loaded.value || (settingsProvider.value === 'local' && refreshing.value))
       return '正在读取配置';
-    if (
-      isLocalProvider(settingsProvider.value) ? localError.value && !target.value : cloudError.value
-    )
+    if (settingsProvider.value === 'local' ? localError.value && !target.value : cloudError.value)
       return '连接异常';
     if (!target.value) return '待配置';
-    return testResult.value ? (testResult.value.ok ? '已连接' : '连接异常') : '可发送';
+    if (testResult.value) return testResult.value.ok ? '已连接' : '连接异常';
+    return settingsProvider.value === 'local' ? '待验证' : '可发送';
   });
 
+  function rememberChoice(item?: ModelChoice) {
+    choice.value = item;
+    try {
+      if (item) localStorage.setItem(preference, JSON.stringify(item));
+      else localStorage.removeItem(preference);
+    } catch {
+      // Selection is still updated for the current page.
+    }
+  }
   function choose(item?: ModelChoice) {
     if (item?.provider !== choice.value?.provider) temporaryKey.value = '';
-    if (!item) {
-      choice.value = undefined;
-      try {
-        localStorage.removeItem(preference);
-      } catch {
-        // Selection is still cleared for the current page.
-      }
-      return;
-    }
-    choice.value = item;
-    openSettings(item.provider, false);
-    try {
-      localStorage.setItem(preference, JSON.stringify(item));
-    } catch {
-      // Selection remains available for the current page.
-    }
+    rememberChoice(item);
+    if (item) openSettings(isLocalProvider(item.provider) ? 'local' : item.provider, false);
   }
   function select(key: string) {
     const item = options.value.find((value) => choiceKey(value) === key);
@@ -263,11 +274,12 @@ export function useAgentModels() {
 
   function selectCustom() {
     const provider = settingsProvider.value;
-    if (provider === 'ollama' || !customModelValid.value) return;
+    if (!customModelValid.value) return;
     const model = customModel.value.trim();
-    if (provider === 'local-openai') {
+    if (provider === 'local') {
+      if (!canEnterLocalModel.value) return;
       const address = applyAddress();
-      if (address) choose({ provider, address, model, manual: true });
+      if (address) choose({ provider: 'local-openai', address, model, manual: true });
       return;
     }
     choose({
@@ -277,24 +289,28 @@ export function useAgentModels() {
     settings.value = false;
   }
 
-  function openSettings(provider: ProviderId, open = true) {
+  function openSettings(provider: SettingsProvider, open = true) {
     settingsProvider.value = provider;
     customModel.value = '';
     testModel.value = '';
-    if (isLocalProvider(provider)) {
+    testAddress.value = '';
+    if (provider === 'local') {
       const current = choice.value;
       addressInput.value =
-        (current?.provider === provider && current.address) ||
-        addresses.value[provider] ||
-        local.value[provider][0]?.address ||
-        (provider === 'local-openai' && compatibleAuthAddress.value) ||
-        defaultLocalAddress(provider);
+        current?.address ||
+        addresses.value.local ||
+        addresses.value.ollama ||
+        addresses.value['local-openai'] ||
+        localServices.value[0]?.address ||
+        authAddress.value ||
+        defaultLocalAddress;
       localToken.value = localTokens.get(addressInput.value) ?? '';
       addressError.value = '';
     }
     if (open) settings.value = true;
   }
-  openSettings(settingsProvider.value, false);
+  const initial = choice.value?.provider;
+  openSettings(!initial || isLocalProvider(initial) ? 'local' : initial, false);
 
   async function refresh(clearConnectionStatus = false) {
     if (clearConnectionStatus) tests.value = {};
@@ -304,57 +320,54 @@ export function useAgentModels() {
     refreshing.value = true;
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]);
     const readLocal = async () => {
-      await Promise.all(
-        localProviderIds.map(async (provider) => {
-          const groups = localServiceGroups(provider, addresses.value[provider]);
-          const results = await Promise.allSettled(
-            groups.map((group) =>
-              discoverLocalService(
-                provider,
-                group,
-                signal,
-                (address) => localTokens.get(address) ?? '',
-              ),
-            ),
+      const configured = addresses.value.local;
+      const groups = localServiceGroups(
+        [configured, choice.value?.address, ...Object.values(addresses.value)].filter(
+          (address): address is string => !!address,
+        ),
+      );
+      const results = await Promise.allSettled(
+        groups.map(async (group) => {
+          const service = await discoverLocalService(
+            group,
+            signal,
+            (address) => localTokens.get(address) ?? '',
           );
-          if (controller.signal.aborted) return;
-          const services = results.flatMap((result) =>
-            result.status === 'fulfilled' ? [result.value] : [],
-          );
-          local.value = { ...local.value, [provider]: services };
-          const configured = addresses.value[provider];
-          const preferred = results[0];
-          const authIndex = results.findIndex(
-            (result) =>
-              result.status === 'rejected' &&
-              result.reason instanceof ProviderResponseError &&
-              [401, 403].includes(result.reason.failure.httpStatus),
-          );
-          if (provider === 'local-openai')
-            compatibleAuthAddress.value = authIndex < 0 ? '' : groups[authIndex][0];
-          const failure =
-            (configured && preferred.status === 'rejected' ? preferred : undefined) ??
-            results[authIndex];
-          if (
-            failure?.status === 'rejected' &&
-            failure.reason instanceof ProviderResponseError &&
-            [401, 403].includes(failure.reason.failure.httpStatus)
-          ) {
-            const status = failure.reason.failure.httpStatus;
-            localErrors.value[provider] =
-              provider === 'local-openai'
-                ? `${compatibleAuthAddress.value} 拒绝访问（${status}）。请检查本地服务令牌或浏览器跨域权限。`
-                : `Ollama 拒绝访问（${status}）。请检查 OLLAMA_ORIGINS 是否允许当前页面来源。`;
-          } else if (!services.length || (configured && preferred.status === 'rejected')) {
-            localErrors.value[provider] =
-              provider === 'ollama'
-                ? '无法读取本机 Ollama。请确认服务已启动、地址正确，并检查浏览器本地网络权限或 OLLAMA_ORIGINS。'
-                : '无法读取本地兼容服务。请确认服务已启动、地址正确，并检查浏览器本地网络权限或服务的 CORS 设置。';
-          } else {
-            localErrors.value[provider] = '';
-          }
+          return withRunningModels(service, signal);
         }),
       );
+      if (controller.signal.aborted) return;
+      localServices.value = results.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value] : [],
+      );
+      const current = choice.value;
+      if (
+        current?.provider === 'local-openai' &&
+        localServices.value.some(
+          ({ address, provider, models }) =>
+            provider === 'ollama' && address === current.address && models.includes(current.model),
+        )
+      )
+        rememberChoice({ provider: 'ollama', address: current.address, model: current.model });
+
+      const preferredIndex = groups.findIndex(
+        (group) => !!configured && group.includes(configured),
+      );
+      const authIndex = results.findIndex(
+        (result) => result.status === 'rejected' && authenticationStatus(result.reason),
+      );
+      authAddress.value = authIndex < 0 ? '' : groups[authIndex][0];
+      const failedIndex =
+        results[preferredIndex]?.status === 'rejected' ? preferredIndex : authIndex;
+      const failure = results[failedIndex];
+      const status = failure?.status === 'rejected' && authenticationStatus(failure.reason);
+      localError.value = '';
+      if (status) {
+        localError.value = `${groups[failedIndex][0]} 拒绝访问（${status}）。请检查本地服务令牌或跨域权限。`;
+      } else if (failure || !localServices.value.length) {
+        const address = failure ? groups[failedIndex][0] : '本地模型服务';
+        localError.value = `无法读取 ${address}。请检查服务是否已启动、监听地址和浏览器本地网络权限。`;
+      }
     };
     const readCloud = async () => {
       try {
@@ -379,28 +392,22 @@ export function useAgentModels() {
   }
 
   function applyAddress() {
-    const provider = settingsProvider.value;
-    if (!isLocalProvider(provider)) return;
-    let address: string;
-    try {
-      address = localModelAddress(addressInput.value, provider === 'local-openai');
-    } catch {
-      addressError.value =
-        provider === 'ollama'
-          ? '请输入本机 Ollama 根地址，例如 http://127.0.0.1:11434。'
-          : '请输入本机兼容服务地址，例如 http://127.0.0.1:1234/v1。';
+    if (settingsProvider.value !== 'local') return;
+    const address = normalizeAddress(addressInput.value);
+    if (!address) {
+      addressError.value = '请输入本机服务地址，例如 http://127.0.0.1:11434。';
       return;
     }
-    if (provider === 'local-openai') {
-      const token = localToken.value.trim();
-      if (token && !temporaryApiKeyFormat.test(token)) return;
-      if (token) localTokens.set(address, token);
-      else localTokens.delete(address);
-      tests.value = {};
-      probe?.abort();
-    }
-    addresses.value[provider] = address;
+    const token = localToken.value.trim();
+    if (token && !temporaryApiKeyFormat.test(token)) return;
+    if (token) localTokens.set(address, token);
+    else localTokens.delete(address);
+    addresses.value.local = address;
     addressInput.value = address;
+    testModel.value = '';
+    testAddress.value = address;
+    probe?.abort();
+    tests.value = {};
     try {
       localStorage.setItem(addressPreference, JSON.stringify(addresses.value));
     } catch {
@@ -476,9 +483,9 @@ export function useAgentModels() {
     localOptions,
     localServiceCount,
     localModelCount,
-    localServices: computed(() =>
-      isLocalProvider(settingsProvider.value) ? local.value[settingsProvider.value] : [],
-    ),
+    modelProviderName,
+    localModelLabel,
+    localServices,
     envFile,
     publicCloud,
     refreshing,
@@ -487,6 +494,7 @@ export function useAgentModels() {
     settingsProvider,
     settingsConfig,
     settingsOptions,
+    defaultTestModel,
     testModel,
     target,
     testResult,
@@ -500,9 +508,9 @@ export function useAgentModels() {
     keyValid,
     customModel,
     customModelValid,
+    canEnterLocalModel,
     selectCustom,
     createProvider,
-    options,
     cloudOptions,
     select,
     openSettings,

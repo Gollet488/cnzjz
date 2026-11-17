@@ -17,7 +17,11 @@ async function productionPreview() {
   await build({ build: buildOptions });
   return preview({
     build: buildOptions,
-    preview: { host: '127.0.0.1', port: 5187, strictPort: true },
+    preview: {
+      host: '127.0.0.1',
+      port: Number(process.env.BROWSER_PREVIEW_PORT ?? 5187),
+      strictPort: true,
+    },
   });
 }
 
@@ -37,8 +41,12 @@ if (import.meta.main) {
   else {
     checkFixtures();
     const server = await createServer({
-      cacheDir: process.env.BROWSER_VITE_CACHE || undefined,
-      server: { host: '127.0.0.1', port: 5186, strictPort: true },
+      cacheDir: process.env.BROWSER_VITE_CACHE || 'test-results/browser-vite',
+      server: {
+        host: '127.0.0.1',
+        port: Number(process.env.BROWSER_DEV_PORT ?? 5186),
+        strictPort: true,
+      },
     });
     await server.listen();
   }

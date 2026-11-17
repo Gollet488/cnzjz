@@ -1,9 +1,13 @@
 import type { AnalysisParameters, Landmark, PoseFrame, Source } from '../types.ts';
-import { METRIC_VERSION } from '../types.ts';
+import {
+  METRIC_VERSION,
+  OFFLINE_METRIC_VERSION,
+  WEIGHTED_OFFLINE_METRIC_VERSION,
+} from '../types.ts';
 import { LandmarkFilter, measureFrame } from '../utils/poseMath.ts';
 import { SampleContinuity } from './sampleTiming.ts';
 
-export { METRIC_VERSION };
+export { METRIC_VERSION, OFFLINE_METRIC_VERSION };
 export type SessionReference = { sessionId: string; revision: number };
 export interface Acquisition {
   mode: `webcodecs${'' | '-transcoded'}${'' | '-clip'}${'' | '-sampled'}`;
@@ -44,7 +48,9 @@ export function validateParameters(p: AnalysisParameters) {
     p.window > 120 ||
     !Number.isFinite(p.aspect) ||
     p.aspect <= 0 ||
-    p.metricVersion !== METRIC_VERSION
+    (p.metricVersion !== METRIC_VERSION &&
+      p.metricVersion !== WEIGHTED_OFFLINE_METRIC_VERSION &&
+      p.metricVersion !== OFFLINE_METRIC_VERSION)
   )
     throw new Error('INVALID_PARAMETERS');
 }
@@ -153,7 +159,15 @@ export class AnalysisSession {
       : null;
     if (!raw.length || samplingGapLimit !== null) this.clearPipeline();
     const filtered = raw.length
-      ? this.filter.apply(raw, this.parameters.window, this.parameters.threshold)
+      ? this.filter.apply(
+          raw,
+          this.parameters.window,
+          this.parameters.threshold,
+          this.parameters.metricVersion !== METRIC_VERSION,
+          this.parameters.metricVersion === OFFLINE_METRIC_VERSION
+            ? this.parameters.aspect
+            : undefined,
+        )
       : [];
     if (raw.length) {
       this.rawHistory.push(raw);

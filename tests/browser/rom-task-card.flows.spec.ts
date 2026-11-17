@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { downloadFile } from './files.ts';
+import { downloadFile, selectOllamaModel } from './files.ts';
 import {
   confirmRom,
   finishRomDelivery,
@@ -52,10 +52,13 @@ test('ROM task card: archive-shaped scripted draft stays editable until confirma
     report: false,
     csv: false,
   };
+  await page.route('**/__local-model', (route) => route.fulfill({ status: 404 }));
   await page.route('http://127.0.0.1:11434/api/**', async (route) => {
     const headers = { 'access-control-allow-origin': '*' };
     if (route.request().url().endsWith('/tags'))
       return route.fulfill({ headers, json: { models: [{ name: 'scripted-rom' }] } });
+    if (route.request().url().endsWith('/ps'))
+      return route.fulfill({ headers, json: { models: [] } });
     if (route.request().url().endsWith('/show'))
       return route.fulfill({ headers, json: { capabilities: ['tools'] } });
     const payload = route.request().postDataJSON();
@@ -75,9 +78,7 @@ test('ROM task card: archive-shaped scripted draft stays editable until confirma
   await card.getByRole('button', { name: '手动填写' }).click();
   await setAbsolute(page, '统计前段', 0, 5);
   await setAbsolute(page, '统计后段', 12, 17);
-  await page
-    .getByLabel('模型', { exact: true })
-    .selectOption(JSON.stringify(['ollama', 'scripted-rom', 'http://127.0.0.1:11434']));
+  await selectOllamaModel(page, 'scripted-rom');
   await card.getByRole('button', { name: '用当前模型草拟' }).click();
   await card.getByLabel('模型草拟指令').fill(romGoal);
   const draftButton = card.getByRole('button', { name: '生成待审阅草稿' });

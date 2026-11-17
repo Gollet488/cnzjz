@@ -1,7 +1,8 @@
 import { JOINTS, MAX_FRAMES } from '../config.ts';
-import { METRIC_VERSION, type Angles, type Landmark } from '../types.ts';
+import { OFFLINE_METRIC_VERSION, type Angles, type Landmark } from '../types.ts';
 import { csvCells } from '../utils/csv.ts';
 import { angleValue, channels } from '../utils/poseMath.ts';
+import { presentationFrameIndices } from './timeline.ts';
 
 export const COMPARISON_INTERVAL = 0.1;
 export const COMPARISON_MAX_SKEW = 0.1;
@@ -11,6 +12,33 @@ export function comparisonSchedule(duration: number) {
   const slots =
     duration > 0 ? Math.max(1, Math.min(MAX_FRAMES, Math.ceil(duration / interval - 1e-8))) : 0;
   return { interval, slots };
+}
+
+export type ComparisonPair = { slot: number; frames: number[]; times: number[] };
+
+export function comparisonPairs(timelines: Float64Array[], starts: number[], duration: number) {
+  const { interval, slots } = comparisonSchedule(duration);
+  const byLane = timelines.map((timeline, lane) => {
+    const selected = new Map<number, number>();
+    const indices = presentationFrameIndices(timeline.length, MAX_FRAMES, (i) => timeline[i]);
+    for (const index of indices) {
+      const elapsed = timeline[index - 1] / 1e6 - starts[lane];
+      if (elapsed < -1e-8 || elapsed >= duration - 1e-8) continue;
+      const slot = Math.min(slots - 1, Math.floor((elapsed + 1e-8) / interval));
+      if (!selected.has(slot)) selected.set(slot, index - 1);
+    }
+    return selected;
+  });
+  const pairs: ComparisonPair[] = [];
+  for (const [slot, reference] of byLane[0]) {
+    const candidate = byLane[1].get(slot);
+    if (candidate === undefined) continue;
+    const frames = [reference, candidate];
+    const times = frames.map((index, lane) => timelines[lane][index] / 1e6);
+    const skew = times[1] - starts[1] - (times[0] - starts[0]);
+    if (Math.abs(skew) <= COMPARISON_MAX_SKEW + 1e-8) pairs.push({ slot, frames, times });
+  }
+  return pairs;
 }
 
 export const comparisonMeasurements = JOINTS.flatMap(({ key, label }) =>
@@ -33,10 +61,7 @@ export function comparisonReadings(angles: readonly Angles[]) {
   });
 }
 
-export interface ComparisonSample {
-  slot: number;
-  times: number[];
-  timeBasis: ('presented_frame' | 'playback_clock')[];
+export interface ComparisonSample extends ComparisonPair {
   elapsed: number;
   skew: number;
   points: Landmark[][];
@@ -131,7 +156,7 @@ export async function comparisonCSV(run: ComparisonExport, signal: AbortSignal) 
   const sourceFields = ['file', 'start_s', 'duration_s', 'width_px', 'height_px', 'transcoded'];
   const csvFilename = (name: string) => (/^[\s]*[=+\-@]|^[\t\r\n]/.test(name) ? `'${name}` : name);
   const common = [
-    METRIC_VERSION,
+    OFFLINE_METRIC_VERSION,
     status,
     threshold,
     window,
@@ -181,7 +206,8 @@ export async function comparisonCSV(run: ComparisonExport, signal: AbortSignal) 
         ? [
             sample.elapsed,
             ...sample.times,
-            ...sample.timeBasis,
+            'decoded_frame',
+            'decoded_frame',
             sample.skew,
             ...sample.points.map((points) => points.length > 0),
             ...sample.reliablePoints,

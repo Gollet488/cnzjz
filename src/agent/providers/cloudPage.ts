@@ -18,12 +18,12 @@ export function modelError(error: unknown, local: boolean | LocalProviderId = fa
     if (timedOut) return '等待本地模型响应超时。首次载入大模型可能较慢。';
     if (/Failed to fetch|NetworkError|Load failed/.test(code))
       return '无法连接本地模型服务。请检查服务地址、浏览器本地网络权限和服务的 CORS 设置。';
-    if (/NO_TOOL|HTTP_(400|422)|INVALID_(RESPONSE|CALL)/.test(code))
+    if (/TOOL_PROBE|NO_TOOL|HTTP_(400|422)|INVALID_(RESPONSE|CALL)/.test(code))
       return '本地模型未返回可用的工具调用。请检查该模型的工具模板和服务的工具调用设置。';
     return `本地模型请求未完成。${code}`;
   }
   if (local) {
-    if (code === 'NO_TOOL')
+    if (/^NO_TOOL$|^LOCAL_TOOL_PROBE/.test(code))
       return 'Ollama 模型未返回结构化工具调用。请在模型设置测试连接，或更换模型。';
     const reason = timedOut
       ? '本机 Ollama 响应超时，首次载入大模型可能较慢'

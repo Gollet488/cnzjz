@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { parseEnv } from 'node:util';
 import { cloudModelId, cloudProviders, temporaryApiKeyFormat } from '../src/agent/modelCatalog.ts';
@@ -19,28 +20,56 @@ const endpoints = {
     'https://api.moonshot.ai/v1/chat/completions',
   ],
 };
+const keyNames = Object.values(cloudProviders).map(({ prefix }) => prefix + '_API_KEY');
+
+export function windowsUserCloudKeys(requested) {
+  const names = keyNames.filter((name) => requested.includes(name));
+  if (process.platform !== 'win32' || !names.length) return {};
+  // Query only known keys, in one process. Keep the output in server memory.
+  const script = [
+    '$keys = @{}',
+    `foreach ($name in @(${names.map((name) => `'${name}'`).join(', ')})) {`,
+    "  $value = [Environment]::GetEnvironmentVariable($name, 'User')",
+    '  if ($null -ne $value) { $keys[$name] = $value }',
+    '}',
+    '[Console]::Write(($keys | ConvertTo-Json -Compress))',
+  ].join('\n');
+  try {
+    return JSON.parse(
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    );
+  } catch {
+    return {};
+  }
+}
+
 export function cloudConfiguration(
   root,
-  fallbackDeepSeekKey = () => '',
   environment = process.env,
+  readUserKeys = windowsUserCloudKeys,
 ) {
   const envFile = resolve(root, '.env');
   const file = existsSync(envFile) ? parseEnv(readFileSync(envFile, 'utf8')) : {};
-  return configure({ ...file, ...environment }, envFile, fallbackDeepSeekKey);
+  const env = { ...file, ...environment };
+  const missing = keyNames.filter((name) => env[name] === undefined);
+  return configure({ ...readUserKeys(missing), ...env }, envFile);
 }
 
 export function publicCloudConfiguration(environment = process.env) {
   return configure(environment);
 }
 
-function configure(env, envFile, fallbackDeepSeekKey) {
+function configure(env, envFile) {
   const configs = Object.entries(cloudProviders).map(([provider, { prefix, presets }]) => {
     const keyName = prefix + '_API_KEY';
     const modelsName = prefix + '_MODELS';
     const endpointName = prefix + '_ENDPOINT';
-    const key = envFile
-      ? (env[keyName] ?? (provider === 'deepseek' ? fallbackDeepSeekKey() : '')).trim()
-      : '';
+    const key = envFile ? (env[keyName] ?? '').trim() : '';
     const configured = envFile && env[modelsName]?.trim();
     const ids = configured
       ? configured

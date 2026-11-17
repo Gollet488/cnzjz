@@ -2,10 +2,11 @@ import type { Landmark, Angles, PoseFrame, Joint, Channel, VarianceSummary } fro
 
 // A very short projection cannot establish a stable direction. This is a
 // geometry floor in units of source image height, not an accuracy estimate.
-const MIN_PROJECTED_SEGMENT = 0.005;
+export const MIN_PROJECTED_SEGMENT = 0.005;
 
 // Monocular coordinates yield 2D projection angles, not anatomical 3D measurements.
-export function angle(a: Landmark, b: Landmark, c: Landmark, aspect = 1): number | null {
+export type Point2D = Pick<Landmark, 'x' | 'y'>;
+export function angle(a: Point2D, b: Point2D, c: Point2D, aspect = 1): number | null {
   if (![aspect, a.x, a.y, b.x, b.y, c.x, c.y].every(Number.isFinite) || aspect <= 0) return null;
   const ux = (a.x - b.x) * aspect,
     uy = a.y - b.y,
@@ -50,36 +51,65 @@ export const reliable = (p: Landmark | undefined, threshold: number): boolean =>
   [p.x, p.y, p.z, p.visibility].every(Number.isFinite) &&
   p.visibility > 0 &&
   p.visibility >= threshold;
+const jointTriples: Record<Exclude<Joint, 'spine'>, [number, number, number][]> = {
+  shoulder: [
+    [13, 11, 23],
+    [14, 12, 24],
+  ],
+  elbow: [
+    [11, 13, 15],
+    [12, 14, 16],
+  ],
+  hip: [
+    [11, 23, 25],
+    [12, 24, 26],
+  ],
+  knee: [
+    [23, 25, 27],
+    [24, 26, 28],
+  ],
+  ankle: [
+    [25, 27, 31],
+    [26, 28, 32],
+  ],
+  wrist: [
+    [13, 15, 19],
+    [14, 16, 20],
+  ],
+};
+
+// The reference evaluation supports an advisory at 5% of image height for
+// these joints. Keep this separate from the angle calculation and its floor.
+export function shortProjectionSides(
+  points: Landmark[],
+  joint: Joint,
+  threshold: number,
+  aspect: number,
+): ('left' | 'right')[] {
+  if (
+    points.length !== 33 ||
+    !Number.isFinite(aspect) ||
+    aspect <= 0 ||
+    joint === 'spine' ||
+    joint === 'ankle' ||
+    joint === 'wrist'
+  )
+    return [];
+
+  const short: ('left' | 'right')[] = [];
+  jointTriples[joint].forEach(([a, b, c], i) => {
+    if (![a, b, c].every((index) => reliable(points[index], threshold))) return;
+    const first = Math.hypot((points[a].x - points[b].x) * aspect, points[a].y - points[b].y);
+    const second = Math.hypot((points[c].x - points[b].x) * aspect, points[c].y - points[b].y);
+    if (Math.min(first, second) < 0.05) short.push(i === 0 ? 'left' : 'right');
+  });
+  return short;
+}
+
 export function jointAngles(p: Landmark[], threshold = 0.5, aspect = 1): Angles {
   const result = emptyAngles();
   if (p.length !== 33) return result;
-  const triples: Record<Exclude<Joint, 'spine'>, [number, number, number][]> = {
-    shoulder: [
-      [13, 11, 23],
-      [14, 12, 24],
-    ],
-    elbow: [
-      [11, 13, 15],
-      [12, 14, 16],
-    ],
-    hip: [
-      [11, 23, 25],
-      [12, 24, 26],
-    ],
-    knee: [
-      [23, 25, 27],
-      [24, 26, 28],
-    ],
-    ankle: [
-      [25, 27, 31],
-      [26, 28, 32],
-    ],
-    wrist: [
-      [13, 15, 19],
-      [14, 16, 20],
-    ],
-  };
-  for (const [key, pairs] of Object.entries(triples))
+  for (const [key, pairs] of Object.entries(jointTriples))
     pairs.forEach(([a, b, c], i) => {
       result[key as Exclude<Joint, 'spine'>][i === 0 ? 'left' : 'right'] = [a, b, c].every((n) =>
         reliable(p[n], threshold),
@@ -126,33 +156,65 @@ export function centerOfMass(p: Landmark[], threshold = 0.5): { x: number; y: nu
 }
 export class LandmarkFilter {
   private history: Landmark[][] = [];
-  apply(points: Landmark[], window: number, threshold = 0.5): Landmark[] {
+  apply(
+    points: Landmark[],
+    window: number,
+    threshold = 0.5,
+    favorRecent = false,
+    motionAspect?: number,
+  ): Landmark[] {
     this.history.push(points.map((p) => ({ ...p })));
     this.history = this.history.slice(-Math.max(1, Math.round(window)));
+    // Stretch the weights for longer windows so their older frames still
+    // contribute. The 3- and 5-frame presets use the same decay per frame.
+    const decay = favorRecent ? 0.4 ** (4 / Math.max(4, window - 1)) : 1;
+    const torso = motionAspect ? visibleTorsoLength(points, threshold, motionAspect) : 0;
     // Low confidence samples must not fabricate reliable coordinates by averaging.
     return points.map((p, i) => {
       if (!reliable(p, threshold)) return { ...p };
-      const samples: Landmark[] = [];
+      let x = 0,
+        y = 0,
+        z = 0,
+        visibility = 0,
+        total = 0,
+        weight = 1;
       // An occlusion breaks this landmark's smoothing history.
       for (let n = this.history.length - 1; n >= 0; n--) {
         const sample = this.history[n][i];
         if (!reliable(sample, threshold)) break;
-        samples.push(sample);
+        // Keep small movements smooth. Large offsets from the current frame
+        // should not pull a rapidly moving limb toward an earlier pose.
+        const displacement = torso
+          ? Math.hypot((p.x - sample.x) * motionAspect!, p.y - sample.y) / torso
+          : 0;
+        const motionWeight = Math.max(0, Math.min(1, (0.16 - displacement) / 0.12));
+        const contribution = weight * motionWeight;
+        x += contribution * sample.x;
+        y += contribution * sample.y;
+        z += contribution * sample.z;
+        visibility += contribution * sample.visibility;
+        total += contribution;
+        weight *= decay;
       }
       return {
-        x: samples.reduce((s, v) => s + v.x, 0) / samples.length,
-        y: samples.reduce((s, v) => s + v.y, 0) / samples.length,
-        z: samples.reduce((s, v) => s + v.z, 0) / samples.length,
-        visibility: Math.min(
-          p.visibility,
-          samples.reduce((s, v) => s + v.visibility, 0) / samples.length,
-        ),
+        x: x / total,
+        y: y / total,
+        z: z / total,
+        visibility: Math.min(p.visibility, visibility / total),
       };
     });
   }
   clear() {
     this.history = [];
   }
+}
+function visibleTorsoLength(points: Landmark[], threshold: number, aspect: number) {
+  const shoulders = [points[11], points[12]].filter((point) => reliable(point, threshold));
+  const hips = [points[23], points[24]].filter((point) => reliable(point, threshold));
+  if (!shoulders.length || !hips.length) return 0;
+  const shoulder = shoulders.length === 2 ? midpoint(shoulders[0], shoulders[1]) : shoulders[0];
+  const hip = hips.length === 2 ? midpoint(hips[0], hips[1]) : hips[0];
+  return Math.max(0.05, Math.hypot((shoulder.x - hip.x) * aspect, shoulder.y - hip.y));
 }
 export function varianceSummary(history: Landmark[][], threshold = 0.5): VarianceSummary {
   const variances: number[] = [],

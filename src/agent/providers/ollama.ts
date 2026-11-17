@@ -66,8 +66,21 @@ export class OllamaProvider implements ModelProvider {
   }
 
   static async models(address: string, signal: AbortSignal, fetcher: typeof fetch = fetch) {
+    return OllamaProvider.modelList(address, '/api/tags', signal, fetcher);
+  }
+
+  static async runningModels(address: string, signal: AbortSignal) {
+    return OllamaProvider.modelList(address, '/api/ps', signal, fetch);
+  }
+
+  private static async modelList(
+    address: string,
+    path: '/api/tags' | '/api/ps',
+    signal: AbortSignal,
+    fetcher: typeof fetch,
+  ) {
     const provider = new OllamaProvider(address, 'discovery', fetcher);
-    const data = await provider.request('/api/tags', signal);
+    const data = await provider.request(path, signal);
     if (!Array.isArray(data?.models)) throw new Error('OLLAMA_INVALID_MODELS');
     const models = new Set<string>();
     for (const item of data.models) {

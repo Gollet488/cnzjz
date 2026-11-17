@@ -23,14 +23,33 @@ test('Agent discovers native Ollama and compatible services on multiple loopback
   await page.route('http://127.0.0.1:11434/api/tags', (route) =>
     route.fulfill({ json: { models: [] } }),
   );
+  await page.route('http://localhost:11434/api/ps', (route) =>
+    route.fulfill({ json: { models: [{ name: 'local-cloud-study:latest' }] } }),
+  );
+  await page.route('http://localhost:11434/v1/models', (route) =>
+    route.fulfill({ json: { data: [{ id: 'duplicate-ollama' }] } }),
+  );
   await page.route('http://127.0.0.1:1234/v1/models', (route) =>
     route.fulfill({
-      json: { object: 'list', data: [{ id: 'shared/model' }, { id: 'shared/model' }, null] },
+      json: {
+        object: 'list',
+        data: [{ id: 'shared/model' }, { id: 'shared/model' }, { id: 'embedding-model' }, null],
+      },
+    }),
+  );
+  await page.route('http://127.0.0.1:1234/api/v1/models', (route) =>
+    route.fulfill({
+      json: { models: [{ key: 'embedding-model', type: 'embedding', loaded_instances: [] }] },
+    }),
+  );
+  await page.route('http://127.0.0.1:8080/v1/models', (route) =>
+    route.fulfill({
+      json: { object: 'list', data: [{ id: 'llama-model', owned_by: 'llamacpp' }] },
     }),
   );
   await page.route('http://127.0.0.1:8000/v1/models', (route) =>
     route.fulfill({
-      json: { object: 'list', data: [{ id: 'shared/model' }] },
+      json: { object: 'list', data: [{ id: 'shared/model', owned_by: 'vllm' }] },
     }),
   );
   await page.route('**/__local-model', (route) => route.fulfill({ status: 502 }));
@@ -39,14 +58,42 @@ test('Agent discovers native Ollama and compatible services on multiple loopback
   await page.getByRole('button', { name: 'AI Agent 分析' }).click();
   const model = page.getByRole('combobox', { name: '模型', exact: true });
   const choices = model.locator('optgroup[label="本地"] option');
-  await expect(choices).toHaveCount(3);
-  await expect(page.getByText('从 3 个本地服务发现 3 个模型。')).toBeVisible();
+  await expect(choices).toHaveText(['本地模型 · 检测与选择']);
+  await expect(page.getByText('从 4 个本地服务发现 4 个模型。')).toBeVisible();
+  await expect(page.getByRole('button', { name: '发送', exact: true })).toBeDisabled();
+  await model.selectOption('settings:local');
+  const localModels = page.getByLabel('检测到的本地模型');
+  await expect(localModels.locator('option:not([disabled])')).toContainText([
+    /Ollama.*已载入 Ollama/,
+    'LM Studio',
+    'llama.cpp',
+    'vLLM',
+  ]);
+  await expect(localModels.locator('option')).toHaveCount(5);
   const key = JSON.stringify(['ollama', 'local-cloud-study:latest', 'http://localhost:11434']);
-  await model.selectOption(key);
+  await localModels.selectOption(key);
+  await expect(choices).toHaveText(['本地模型 · 检测与选择']);
+  await expect(model).toHaveValue('settings:local');
+  await expect(page.getByText('当前本地模型', { exact: false })).toContainText(
+    'local-cloud-study:latest',
+  );
+  await page.evaluate(() =>
+    localStorage.setItem(
+      'kinetic-agent-model',
+      JSON.stringify({
+        provider: 'local-openai',
+        model: 'local-cloud-study:latest',
+        address: 'http://localhost:11434',
+      }),
+    ),
+  );
   await page.reload();
   await page.getByRole('button', { name: 'AI Agent 分析' }).click();
-  await expect(model).toHaveValue(key);
+  await expect(model).toHaveValue('settings:local');
   await expect(page.getByRole('button', { name: '发送', exact: true })).toBeEnabled();
+  expect(
+    await page.evaluate(() => JSON.parse(localStorage.getItem('kinetic-agent-model')!).provider),
+  ).toBe('ollama');
 });
 
 test('Agent can use a custom authenticated local service without upstream CORS', async ({
@@ -122,24 +169,26 @@ test('Agent can use a custom authenticated local service without upstream CORS',
     await page.getByRole('button', { name: 'AI Agent 分析' }).click();
     await page.getByRole('button', { name: '模型设置', exact: true }).click();
     const settings = page.getByRole('region', { name: '模型设置' });
-    await settings.getByLabel('模型设置供应商').selectOption('local-openai');
-    const endpoint = settings.getByLabel('本地兼容服务地址');
+    await expect(settings.getByLabel('模型设置供应商')).toHaveValue('local');
+    const endpoint = settings.getByLabel('本地服务地址');
     await endpoint.fill(`127.0.0.1:${bound.port}/v1/`);
     await settings.getByRole('button', { name: '应用地址' }).click();
     await expect(settings.getByText(`${address} 拒绝访问`, { exact: false })).toBeVisible();
+    await expect(settings.getByRole('button', { name: '测试连接', exact: true })).toBeDisabled();
     await settings.getByLabel('本地服务令牌（可选）').fill(token);
     await settings.getByRole('button', { name: '应用地址' }).click();
     const model = page.getByRole('combobox', { name: '模型', exact: true });
     const key = JSON.stringify(['local-openai', 'custom/model', address]);
-    await expect(model.locator('option').filter({ hasText: 'custom/model' })).toHaveCount(1);
-    await model.selectOption(key);
+    await settings.getByLabel('检测到的本地模型').selectOption(key);
+    await expect(model).toHaveValue('settings:local');
+    await expect(page.getByText('当前本地模型', { exact: false })).toContainText('custom/model');
     await settings.getByRole('button', { name: '测试连接', exact: true }).click();
     await expect(settings.getByText('结构化工具调用通过 · custom/model')).toBeVisible();
 
     exposeList = false;
     await settings.getByLabel('手动填写本地模型 ID').fill('manual/model');
     await settings.getByRole('button', { name: '选择此模型' }).click();
-    await expect(model).toHaveValue(JSON.stringify(['local-openai', 'manual/model', address]));
+    await expect(page.getByText('当前本地模型', { exact: false })).toContainText('manual/model');
     await settings.getByRole('button', { name: '测试连接', exact: true }).click();
     await expect(settings.getByText('结构化工具调用通过 · manual/model')).toBeVisible();
     expect(seen.filter((path) => path === 'POST /v1/chat/completions')).toHaveLength(2);
@@ -169,6 +218,7 @@ test('compatible chat uses the local relay when only the model list allows CORS'
       });
       return res.end(JSON.stringify({ data: [{ id: 'split-cors' }] }));
     }
+    if (req.url !== '/v1/chat/completions') return res.writeHead(404).end();
     chatRequests.push(req.method!);
     if (req.method !== 'POST') return res.writeHead(405).end();
     req.resume();
@@ -204,15 +254,80 @@ test('compatible chat uses the local relay when only the model list allows CORS'
     await page.getByRole('button', { name: 'AI Agent 分析' }).click();
     await page.getByRole('button', { name: '模型设置', exact: true }).click();
     const settings = page.getByRole('region', { name: '模型设置' });
-    await settings.getByLabel('模型设置供应商').selectOption('local-openai');
-    await settings.getByLabel('本地兼容服务地址').fill(address);
+    await settings.getByLabel('本地服务地址').fill(address);
     await settings.getByRole('button', { name: '应用地址' }).click();
     expect((await inventory).ok()).toBe(true);
-    const model = page.getByRole('combobox', { name: '模型', exact: true });
-    await model.selectOption(JSON.stringify(['local-openai', 'split-cors', address]));
+    await settings
+      .getByLabel('检测到的本地模型')
+      .selectOption(JSON.stringify(['local-openai', 'split-cors', address]));
     await settings.getByRole('button', { name: '测试连接', exact: true }).click();
     await expect(settings.getByText('结构化工具调用通过 · split-cors')).toBeVisible();
     expect(chatRequests).toEqual(['POST']);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+      server.closeAllConnections();
+    });
+  }
+});
+
+test('Ollama verifies structured calls through the relay after direct model discovery', async ({
+  page,
+}) => {
+  const seen: string[] = [];
+  let validArguments = false;
+  const server = createServer(async (req, res) => {
+    const send = (data: object, headers = {}) =>
+      res
+        .writeHead(200, { 'Content-Type': 'application/json', ...headers })
+        .end(JSON.stringify(data));
+    if (req.url === '/api/tags')
+      return send({ models: [{ name: 'split-ollama' }] }, { 'Access-Control-Allow-Origin': '*' });
+    if (req.url === '/api/ps') return send({ models: [] });
+    seen.push(`${req.method} ${req.url}`);
+    if (req.method !== 'POST') return res.writeHead(405).end();
+    const body = JSON.parse(Buffer.concat(await Array.fromAsync(req)).toString());
+    if (body.model !== 'split-ollama') return res.writeHead(404).end();
+    if (req.url === '/api/show') return send({ capabilities: ['tools'] });
+    if (req.url !== '/api/chat' || !body.format) return res.writeHead(400).end();
+    return send({
+      done: true,
+      message: {
+        role: 'assistant',
+        content: JSON.stringify({
+          calls: [
+            { tool: 'connection_check', values: { echo: validArguments ? 'kinetic' : 'wrong' } },
+          ],
+        }),
+      },
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const bound = server.address();
+    if (!bound || typeof bound === 'string') throw new Error('No TCP listener');
+    const address = `http://127.0.0.1:${bound.port}`;
+    await page.goto('/');
+    await page.getByRole('button', { name: 'AI Agent 分析' }).click();
+    await page.getByRole('button', { name: '模型设置', exact: true }).click();
+    const settings = page.getByRole('region', { name: '模型设置' });
+    const inventory = page.waitForResponse(`${address}/api/tags`);
+    await settings.getByLabel('本地服务地址').fill(`${address}/v1/`);
+    await settings.getByRole('button', { name: '应用地址' }).click();
+    expect((await inventory).ok()).toBe(true);
+    await settings
+      .getByLabel('检测到的本地模型')
+      .selectOption(JSON.stringify(['ollama', 'split-ollama', address]));
+    await expect(settings.locator('.connection-status')).toHaveText('待验证');
+    await expect(settings.getByText('测试目标', { exact: false })).toContainText(address);
+    expect(seen).toEqual([]);
+    const probe = settings.getByRole('button', { name: '测试连接', exact: true });
+    await probe.click();
+    await expect(settings.locator('.connection-status')).toHaveText('连接异常');
+    validArguments = true;
+    await probe.click();
+    await expect(settings.locator('.connection-status')).toHaveText('已连接');
+    expect(seen).toEqual(['POST /api/show', 'POST /api/chat', 'POST /api/show', 'POST /api/chat']);
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

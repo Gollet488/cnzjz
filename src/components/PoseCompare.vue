@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, triggerRef, watch, onBeforeUnmount } from 'vue';
 import { UploadCloud, Upload, ScanLine, RotateCcw, ArrowUpRight, Download } from 'lucide-vue-next';
-import type { PoseLandmarker } from '@mediapipe/tasks-vision';
+import { MAX_FRAMES } from '../config';
+import { SampleContinuity } from '../analysis/sampleTiming';
 import { renderPose } from '../utils/renderer';
 import {
   centerOfMass,
@@ -14,12 +15,13 @@ import {
 import type { Angles, Settings, Landmark } from '../types';
 import { download } from '../utils/download';
 import { stageSize } from '../utils/dimensions';
-import { prepareVideo, VIDEO_ACCEPT } from '../video/prepare';
-import { humanPose } from '../utils/humanPose';
+import { prepareVideo, VIDEO_ACCEPT, type PreparedVideo } from '../video/prepare';
+import { OfflineVideoJob, readVideoStill } from '../video/job';
 import {
   COMPARISON_MAX_SKEW,
   comparisonCSV,
   comparisonMeasurements as measurements,
+  comparisonPairs,
   comparisonReadings,
   comparisonSchedule,
   ComparisonSeries,
@@ -31,6 +33,7 @@ const emit = defineEmits<{ error: [message: string] }>();
 const videos: HTMLVideoElement[] = [];
 const canvases: HTMLCanvasElement[] = [];
 const files: HTMLInputElement[] = [];
+const preparedVideos: (PreparedVideo | undefined)[] = [];
 const previews = ref<HTMLElement>();
 const lanes = [0, 1] as const;
 const laneLabels = ['参考视频', '待测视频'];
@@ -39,7 +42,6 @@ const durations = ref([0, 0]);
 const transcoded = ref([false, false]);
 const names = ref(['', '']),
   running = ref(false),
-  busy = ref(false),
   finished = ref(false),
   failed = ref(false);
 const invalidVideos = ref([false, false]);
@@ -73,11 +75,8 @@ const overlap = computed(() =>
   Math.max(0, Math.min(...durations.value.map((d, i) => d - starts.value[i]))),
 );
 const schedule = computed(() => comparisonSchedule(overlap.value));
-const passedSlots = ref(0);
 const reachedSlots = computed(() =>
-  finished.value
-    ? schedule.value.slots
-    : Math.max(passedSlots.value, (latest.value?.slot ?? -1) + 1),
+  finished.value ? schedule.value.slots : (latest.value?.slot ?? -1) + 1,
 );
 const missed = computed(() => reachedSlots.value - sampleCount.value);
 const meanDistance = computed(() =>
@@ -90,21 +89,28 @@ const progress = computed(() => {
   return Math.min(1, time.value / overlap.value);
 });
 const sizes = ref([stageSize(), stageSize()]);
-const models: PoseLandmarker[] = [];
-const filters = [new LandmarkFilter(), new LandmarkFilter()];
 const trails: ({ x: number; y: number } | null)[][] = [[], []];
 const displayed: Landmark[][] = [[], []];
 const displayedAngles: (Angles | undefined)[] = [];
-const sampleTimes = [-1, -1];
-const presentedTimes: (number | undefined)[] = [];
-const videoCallbacks: (number | undefined)[] = [];
+const displayedImages: (ImageBitmap | undefined)[] = [];
+const sourceAspects: number[] = [];
+interface TrackedFrame {
+  image: ImageBitmap;
+  points: Landmark[];
+  rawAngles: Angles;
+  angles: Angles;
+  reliablePoints: number;
+  acknowledge?: () => void;
+}
+const activeRun = shallowRef<{
+  jobs: OfflineVideoJob[];
+  waiting: (TrackedFrame | undefined)[];
+}>();
 const urls: string[] = [];
 const preparations: (AbortController | undefined)[] = [];
 const preparing = ref([false, false]);
 const hints = ref(['', '']);
-let raf = 0,
-  disposed = false,
-  generation = 0;
+let disposed = false;
 let reviewController: AbortController | undefined;
 let exportController: AbortController | undefined;
 function draw(index: number) {
@@ -114,16 +120,27 @@ function draw(index: number) {
     canvases[index],
     displayed[index],
     props.settings,
-    video?.readyState >= 2 ? video : undefined,
+    displayedImages[index] ?? (video?.readyState >= 2 ? video : undefined),
     trails[index],
-    video?.videoWidth / video?.videoHeight,
+    sourceAspects[index] ||
+      (video?.videoWidth && video.videoWidth / video.videoHeight) ||
+      undefined,
     undefined,
     displayedAngles[index],
   );
 }
+function cancelRun() {
+  const run = activeRun.value;
+  activeRun.value = undefined;
+  running.value = false;
+  run?.jobs.forEach((job) => job.cancel());
+  run?.waiting.forEach((item) => {
+    item?.image.close();
+    item?.acknowledge?.();
+  });
+}
 function invalidate() {
-  pause();
-  models.splice(0).forEach((model) => model.close());
+  cancelRun();
   reviewController?.abort();
   reviewController = undefined;
   reviewing.value = false;
@@ -131,15 +148,14 @@ function invalidate() {
   frame.value = null;
   latest.value = null;
   series.value = new ComparisonSeries();
-  passedSlots.value = 0;
   finished.value = false;
   failed.value = false;
-  filters.forEach((filter, i) => {
-    filter.clear();
+  lanes.forEach((i) => {
     trails[i] = [];
     displayed[i] = [];
     displayedAngles[i] = undefined;
-    sampleTimes[i] = -1;
+    displayedImages[i]?.close();
+    displayedImages[i] = undefined;
     draw(i);
   });
 }
@@ -179,6 +195,8 @@ async function load(index: number, event: Event) {
   input.value = '';
   if (!file) return;
   invalidate();
+  preparedVideos[index] = undefined;
+  sourceAspects[index] = 0;
   starts.value[index] = 0;
   durations.value[index] = 0;
   transcoded.value[index] = false;
@@ -201,6 +219,7 @@ async function load(index: number, event: Event) {
       if (!disposed && !controller.signal.aborted) hints.value[index] = message;
     });
     if (disposed || controller.signal.aborted) return;
+    preparedVideos[index] = prepared;
     urls[index] = URL.createObjectURL(prepared.file);
     videos[index].src = urls[index];
     videos[index].load();
@@ -235,7 +254,7 @@ function videoError(index: number) {
 function primePreview(index: number) {
   const video = videos[index];
   // A loaded but hidden video can still lack a drawable first frame until it seeks.
-  if (!busy.value && !running.value && !reviewing.value && !frame.value && !video.seeking)
+  if (!activeRun.value && !reviewing.value && !frame.value && !video.seeking)
     video.currentTime = starts.value[index];
 }
 async function preview(index: number) {
@@ -257,306 +276,222 @@ function setStart(index: number, event: Event) {
   previewStarts();
 }
 function pause() {
-  if (running.value) trackPassedSlots();
-  generation++;
   running.value = false;
-  videos.forEach((video, i) => {
-    video.pause();
-    const callback = videoCallbacks[i];
-    if (callback !== undefined) video.cancelVideoFrameCallback(callback);
-    videoCallbacks[i] = undefined;
-    presentedTimes[i] = undefined;
-  });
-  cancelAnimationFrame(raf);
+  activeRun.value?.jobs.forEach((job) => job.pause());
 }
-function trackPassedSlots() {
-  const elapsed = Math.max(0, videos[0].currentTime - starts.value[0]);
-  const { interval, slots } = schedule.value;
-  passedSlots.value = Math.max(passedSlots.value, Math.min(slots, Math.floor(elapsed / interval)));
-}
-function trackPresentedFrames(index: number, operation: number) {
-  const video = videos[index];
-  if (typeof video.requestVideoFrameCallback !== 'function') return;
-  videoCallbacks[index] = video.requestVideoFrameCallback((_, { mediaTime }) => {
-    if (operation !== generation) return;
-    if (!video.seeking) presentedTimes[index] = mediaTime;
-    trackPresentedFrames(index, operation);
-  });
-}
-async function play(restart = true) {
+
+function play(restart = true) {
   if (running.value) {
     pause();
     return;
   }
+  const [reference, candidate] = preparedVideos;
   if (
     disposed ||
-    busy.value ||
     reviewing.value ||
     exporting.value ||
     preparing.value.some(Boolean) ||
     overlap.value <= 0 ||
     invalidVideos.value.some(Boolean) ||
-    !names.value.every(Boolean)
+    !reference ||
+    !candidate
   )
     return;
-  const resume = !restart && !finished.value && !failed.value ? latest.value : null;
-  if (!resume) invalidate();
-  const operation = generation;
-  const current = () => !disposed && operation === generation;
-  const created: PoseLandmarker[] = [];
-  busy.value = true;
-  try {
-    if (models.length !== 2) {
-      const { FilesetResolver, PoseLandmarker } = await import('@mediapipe/tasks-vision');
-      if (!current()) return;
-      const assets = `${import.meta.env.BASE_URL}mediapipe/`;
-      const wasm = await FilesetResolver.forVisionTasks(`${assets}wasm`);
-      if (!current()) return;
-      for (let i = 0; i < 2; i++) {
-        const model = await PoseLandmarker.createFromOptions(wasm, {
-          baseOptions: { modelAssetPath: `${assets}pose_landmarker_lite.task` },
-          runningMode: 'VIDEO',
-          numPoses: 1,
-          minPoseDetectionConfidence: 0.5,
-          minPosePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-        });
-        created.push(model);
-        if (!current()) return;
-      }
-      models.push(...created);
-      created.length = 0;
-    }
-    videos.forEach((video, i) => {
-      video.currentTime = resume?.times[i] ?? starts.value[i];
-      trackPresentedFrames(i, operation);
-    });
-    // Pause each late play completion before it can leave a replaced source playing.
-    const playback = await Promise.allSettled(
-      videos.map(async (v) => {
-        await v.play();
-        if (!current()) v.pause();
-      }),
-    );
-    if (!current()) return;
-    if (playback.some((result) => result.status === 'rejected')) throw new Error('PLAY_FAILED');
+  if (!restart && activeRun.value) {
     running.value = true;
-    raf = requestAnimationFrame(tick);
-  } catch {
-    if (current()) {
-      pause();
-      failed.value = true;
-      emit('error', '对比模型或视频加载失败，请检查模型资源或重新选择视频。');
-    }
-  } finally {
-    created.forEach((model) => model.close());
-    busy.value = false;
+    activeRun.value.jobs.forEach((job) => job.resume());
+    return;
   }
-}
-function tick() {
-  if (!running.value) return;
-  raf = requestAnimationFrame(tick);
-  const referenceClock = videos[0].currentTime - starts.value[0];
-  const candidateClock = videos[1].currentTime - starts.value[1];
-  if (videos[0].ended || referenceClock >= overlap.value) {
-    pause();
+
+  invalidate();
+  const sources = [reference, candidate];
+  const origins = [...starts.value];
+  const pairs = comparisonPairs(
+    sources.map(({ probe }) => probe.timestamps),
+    origins,
+    overlap.value,
+  );
+  if (!pairs.length) {
     finished.value = true;
     return;
   }
-  trackPassedSlots();
-  if (videos.some((v) => v.readyState < 2 || v.seeking || !v.videoWidth || !v.videoHeight)) return;
-  if (Math.abs(candidateClock - referenceClock) > COMPARISON_MAX_SKEW) {
-    // Keep the reference clock authoritative. Correct a drifted candidate;
-    // a candidate that reaches its end within tolerance can supply its last frame.
-    const video = videos[1];
-    try {
-      presentedTimes[1] = undefined;
-      video.currentTime = starts.value[1] + referenceClock;
-      if (video.paused) {
-        const operation = generation;
-        void video.play().then(
-          () => {
-            if (operation !== generation) video.pause();
-          },
-          () => {
-            if (operation === generation) stopWithError('待测视频无法继续播放，可重新分析。');
-          },
-        );
-      }
-    } catch {
-      stopWithError('无法重新对齐待测视频，可重新分析。');
-    }
-    return;
-  }
-  const timeBasis = videos.map((video) =>
-    typeof video.requestVideoFrameCallback === 'function' ? 'presented_frame' : 'playback_clock',
-  );
-  const [reference, candidate] = videos.map((video, i) =>
-    timeBasis[i] === 'presented_frame' ? presentedTimes[i] : video.currentTime,
-  );
-  if (reference === undefined || candidate === undefined) return;
-  const times = [reference, candidate];
-  const elapsed = reference - starts.value[0];
-  const candidateElapsed = candidate - starts.value[1];
-  const skew = candidateElapsed - elapsed;
-  if (
-    elapsed < 0 ||
-    elapsed >= overlap.value ||
-    candidateElapsed < 0 ||
-    candidateElapsed >= overlap.value ||
-    Math.abs(skew) > COMPARISON_MAX_SKEW ||
-    times.some((value, i) => value <= sampleTimes[i])
-  )
-    return;
-  const { interval, slots } = schedule.value;
-  const slot = Math.min(slots - 1, Math.floor(elapsed / interval + 1e-8));
-  const previousSlot = latest.value?.slot ?? -1;
-  if (slot <= previousSlot) return;
-  const points: Landmark[][] = [];
-  const angles: Angles[] = [];
-  const rawAngles: Angles[] = [];
-  const reliablePoints: number[] = [];
-  const threshold = props.settings.threshold;
-  const aspects = videos.map((video) => video.videoWidth / video.videoHeight);
-  if (slot > previousSlot + 1) {
-    filters.forEach((filter, i) => {
-      filter.clear();
-      trails[i] = [];
-    });
-  }
+
+  const run = { jobs: [] as OfflineVideoJob[], waiting: [] as (TrackedFrame | undefined)[] };
+  activeRun.value = run;
+  running.value = true;
+  const current = () => activeRun.value === run;
+  const { threshold, window } = props.settings;
+  let completed = 0;
   try {
-    for (let i = 0; i < 2; i++) {
-      const result = models[i].detectForVideo(videos[i], performance.now());
-      let p: Landmark[];
-      try {
-        p = humanPose(
-          result.landmarks[0]?.map((v) => ({
-            x: v.x,
-            y: v.y,
-            z: v.z,
-            visibility: v.visibility ?? 0,
-          })) ?? [],
-          aspects[i],
-        );
-      } finally {
-        result.close();
-      }
-      if (!p.length) {
-        filters[i].clear();
-        trails[i] = [];
-      }
-      const filtered = p.length ? filters[i].apply(p, props.settings.window, threshold) : [];
-      points.push(filtered);
-      const raw = jointAngles(p, threshold, aspects[i]);
-      const measured = filteredJointAngles(filtered, raw, threshold, aspects[i]);
-      rawAngles.push(raw);
-      reliablePoints.push(p.filter((point) => reliable(point, threshold)).length);
-      angles.push(measured);
-      if (props.settings.trajectory) {
-        trails[i].push(centerOfMass(filtered, threshold));
-        trails[i] = trails[i].slice(-120);
-      }
+    for (const i of lanes) {
+      const { file, probe } = sources[i];
+      const filter = new LandmarkFilter();
+      const continuity = new SampleContinuity();
+      let previous: number | undefined;
+      let received = 0;
+      const lastFrame = pairs.at(-1)!.frames[i];
+      // Match the acquisition module's full-file sampling schedule above its frame limit.
+      const clip = probe.timestamps.length <= MAX_FRAMES ? { start: 0, end: lastFrame } : undefined;
+      run.jobs.push(
+        new OfflineVideoJob(
+          file,
+          MAX_FRAMES,
+          {
+            metadata({ aspect }) {
+              if (!current()) return;
+              sourceAspects[i] = aspect;
+              sizes.value[i] = stageSize(aspect);
+            },
+            frame(value) {
+              if (!current()) return false;
+              const gap =
+                previous !== undefined && continuity.observe(value.time - previous, false);
+              previous = value.time;
+              const raw = value.points;
+              if (!raw.length || gap) filter.clear();
+              const aspect = sourceAspects[i];
+              const points = raw.length ? filter.apply(raw, window, threshold, true, aspect) : [];
+              const pair = pairs[received];
+              if (!pair || value.time < pair.times[i]) {
+                value.preview?.close();
+                return;
+              }
+              if (value.time !== pair.times[i] || !value.preview)
+                throw new Error('对比未取得所选源帧及其预览。');
+
+              received++;
+              const rawAngles = jointAngles(raw, threshold, aspect);
+              const waiting: TrackedFrame = {
+                image: value.preview,
+                points,
+                rawAngles,
+                angles: filteredJointAngles(points, rawAngles, threshold, aspect),
+                reliablePoints: raw.filter((point) => reliable(point, threshold)).length,
+              };
+              run.waiting[i] = waiting;
+              const [left, right] = run.waiting;
+              if (!left || !right) {
+                return new Promise<void>((resolve) => {
+                  waiting.acknowledge = resolve;
+                });
+              }
+
+              publishPair(pair, [left, right], origins, threshold);
+              run.waiting.length = 0;
+              left.acknowledge?.();
+              right.acknowledge?.();
+            },
+            state(state, detail) {
+              if (!current() || state === 'preparing' || state === 'paused' || state === 'running')
+                return;
+              if ((state !== 'completed' && state !== 'sampled') || received !== pairs.length) {
+                stopWithError(`${laneLabels[i]}逐帧分析中断：${detail || '未取得全部计划源帧。'}`);
+                return;
+              }
+              if (++completed === lanes.length) {
+                cancelRun();
+                finished.value = true;
+              }
+            },
+          },
+          clip,
+          'analysis',
+          pairs.map(({ frames }) => probe.timestamps[frames[i]]),
+        ),
+      );
     }
-    const sample: Sample = {
-      slot,
-      times,
-      timeBasis,
-      elapsed,
-      skew,
-      points,
-      angles,
-      rawAngles,
-      reliablePoints,
-      readings: comparisonReadings(angles),
-      distance: poseDistance(points[0], points[1], threshold, aspects[0], aspects[1]),
-    };
-    times.forEach((value, i) => (sampleTimes[i] = value));
-    series.value.append(sample);
-    triggerRef(series);
-    latest.value = frame.value = sample;
-    lanes.forEach((index) => {
-      displayed[index] = points[index];
-      displayedAngles[index] = angles[index];
-      draw(index);
-    });
-  } catch {
-    stopWithError('对比推理失败，可下载已采样数据后重新分析。');
+  } catch (error) {
+    stopWithError(error instanceof Error ? error.message : '无法启动对比分析。');
   }
 }
+
+function publishPair(
+  pair: Pick<Sample, 'slot' | 'frames' | 'times'>,
+  tracked: TrackedFrame[],
+  origins: number[],
+  threshold: number,
+) {
+  const points = tracked.map((value) => value.points);
+  const angles = tracked.map((value) => value.angles);
+  const elapsed = Math.max(0, pair.times[0] - origins[0]);
+  const sample: Sample = {
+    ...pair,
+    elapsed,
+    skew: pair.times[1] - origins[1] - elapsed,
+    points,
+    angles,
+    rawAngles: tracked.map((value) => value.rawAngles),
+    reliablePoints: tracked.map((value) => value.reliablePoints),
+    readings: comparisonReadings(angles),
+    distance: poseDistance(points[0], points[1], threshold, sourceAspects[0], sourceAspects[1]),
+  };
+  for (const i of lanes) {
+    const latestPoint = centerOfMass(points[i], threshold);
+    if (props.settings.trajectory) trails[i] = [...trails[i], latestPoint].slice(-120);
+    showFrame(i, sample, tracked[i].image);
+  }
+  series.value.append(sample);
+  triggerRef(series);
+  latest.value = frame.value = sample;
+}
+
+function showFrame(index: number, sample: Sample, image: ImageBitmap) {
+  displayedImages[index]?.close();
+  displayedImages[index] = image;
+  displayed[index] = sample.points[index];
+  displayedAngles[index] = sample.angles[index];
+  draw(index);
+}
+
 function stopWithError(message: string) {
-  pause();
+  cancelRun();
   finished.value = false;
   failed.value = true;
   emit('error', message);
 }
-function seekFrame(video: HTMLVideoElement, target: number, signal: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timeout);
-      video.removeEventListener('seeked', ready);
-      video.removeEventListener('loadeddata', ready);
-      video.removeEventListener('error', failed);
-      signal.removeEventListener('abort', failed);
-    };
-    const ready = () => {
-      if (video.seeking || video.readyState < 2) return;
-      cleanup();
-      resolve();
-    };
-    const failed = () => {
-      cleanup();
-      reject(new Error('无法定位到该时刻。'));
-    };
-    const timeout = setTimeout(failed, 8000);
-    video.addEventListener('seeked', ready);
-    video.addEventListener('loadeddata', ready);
-    video.addEventListener('error', failed);
-    signal.addEventListener('abort', failed);
-    try {
-      if (signal.aborted || video.error) return failed();
-      if (video.currentTime !== target || video.readyState < 2) video.currentTime = target;
-      ready();
-    } catch {
-      failed();
-    }
-  });
-}
+
 async function review(sample: Sample, scroll = true) {
-  if (busy.value || reviewing.value) return;
-  const wasRunning = running.value;
+  if (reviewing.value) return;
   pause();
-  if (
-    !wasRunning &&
-    frame.value === sample &&
-    videos.every((video, i) => video.currentTime === sample.times[i])
-  ) {
+  if (frame.value === sample) {
     if (scroll) previews.value?.scrollIntoView({ block: 'start' });
     return;
   }
   const controller = new AbortController();
   reviewController = controller;
   reviewing.value = true;
-  try {
-    await Promise.all(
-      videos.map((video, i) => seekFrame(video, sample.times[i], controller.signal)),
-    );
-    if (controller.signal.aborted) return;
-    sample.points.forEach((points, i) => {
-      displayed[i] = points;
-      displayedAngles[i] = sample.angles[i];
-      trails[i] = [];
-      draw(i);
+  const images = await Promise.allSettled(
+    lanes.map((i) =>
+      readVideoStill(
+        preparedVideos[i]!.file,
+        sample.frames[i],
+        sample.times[i],
+        controller.signal,
+      ).catch((error) => {
+        if (!controller.signal.aborted) emit('error', '回看定位失败，请重试。');
+        controller.abort();
+        throw error;
+      }),
+    ),
+  );
+  if (
+    !controller.signal.aborted &&
+    images[0].status === 'fulfilled' &&
+    images[1].status === 'fulfilled'
+  ) {
+    trails.forEach((trail) => {
+      trail.length = 0;
     });
+    showFrame(0, sample, images[0].value);
+    showFrame(1, sample, images[1].value);
     frame.value = sample;
     if (scroll) previews.value?.scrollIntoView({ block: 'start' });
-  } catch {
-    if (!controller.signal.aborted) emit('error', '回看定位失败，请重试。');
-  } finally {
-    if (reviewController === controller) {
-      controller.abort();
-      reviewController = undefined;
-      reviewing.value = false;
-    }
+  } else {
+    for (const image of images) if (image.status === 'fulfilled') image.value.close();
+  }
+  if (reviewController === controller) {
+    reviewController = undefined;
+    reviewing.value = false;
   }
 }
 function reviewAt(event: Event) {
@@ -569,8 +504,7 @@ function percentage(count: number, total: number) {
   return total ? `${((count / total) * 100).toFixed(1)}%` : '—';
 }
 async function exportSamples() {
-  if (!reachedSlots.value || exporting.value || running.value || busy.value || reviewing.value)
-    return;
+  if (!reachedSlots.value || exporting.value || running.value || reviewing.value) return;
   const controller = new AbortController();
   exportController = controller;
   exporting.value = true;
@@ -614,7 +548,6 @@ onBeforeUnmount(() => {
   disposed = true;
   preparations.forEach((controller) => controller?.abort());
   invalidate();
-  models.forEach((m) => m.close());
   urls.forEach((u) => URL.revokeObjectURL(u));
 });
 </script>
@@ -687,7 +620,7 @@ onBeforeUnmount(() => {
               :max="maxStart(index)"
               step="0.01"
               :value="starts[index]"
-              :disabled="running || busy || reviewing || !maxStart(index)"
+              :disabled="running || reviewing || !maxStart(index)"
               :aria-label="`${laneLabels[index]}对齐起点`"
               :aria-valuetext="`${starts[index].toFixed(2)} 秒`"
               @input="setStart(index, $event)"
@@ -709,10 +642,16 @@ onBeforeUnmount(() => {
         label="对比播放器"
         progress-label="对比进度"
         :toggle-label="
-          running ? '暂停对比' : finished || failed ? '重新分析' : latest ? '继续分析' : '开始对比'
+          running
+            ? '暂停对比'
+            : finished || failed
+              ? '重新分析'
+              : activeRun
+                ? '继续分析'
+                : '开始对比'
         "
         :playing="running"
-        :busy="busy"
+        :busy="false"
         :disabled="
           overlap <= 0 ||
           !names.every(Boolean) ||
@@ -727,10 +666,10 @@ onBeforeUnmount(() => {
       />
       <div class="transport-main compare-controls">
         <button
-          v-if="latest && !running && !finished && !failed"
+          v-if="activeRun && !running"
           type="button"
           class="text-button"
-          :disabled="busy || reviewing || exporting"
+          :disabled="reviewing || exporting"
           @click="play()"
         >
           <RotateCcw :size="14" aria-hidden="true" />从对齐点重来
@@ -754,7 +693,7 @@ onBeforeUnmount(() => {
             >参考 {{ frame.times[0].toFixed(2) }} s · 待测 {{ frame.times[1].toFixed(2) }} s</span
           >
         </span>
-        <span v-else-if="running">正在分析画面…</span>
+        <span v-else-if="running">正在逐帧分析视频…</span>
         <span v-else-if="finished">重叠区间内未取得同步画面，可将起点提前后重试。</span>
         <span v-else-if="failed">分析中断，请重试或更换视频。</span>
         <span v-else-if="overlap > 0">可对比 {{ overlap.toFixed(2) }} s</span>
@@ -770,11 +709,7 @@ onBeforeUnmount(() => {
       <div class="compare-data">
         <div class="compare-data-heading">
           <h2 id="compare-data-heading">对比区间数据</h2>
-          <el-button
-            :disabled="running || reviewing || busy"
-            :loading="exporting"
-            @click="exportSamples"
-          >
+          <el-button :disabled="running || reviewing" :loading="exporting" @click="exportSamples">
             <Download :size="14" aria-hidden="true" />下载对比 CSV
           </el-button>
         </div>
@@ -784,7 +719,7 @@ onBeforeUnmount(() => {
             <dd>{{ sampleCount }} / {{ schedule.slots }}</dd>
           </div>
           <div>
-            <dt>已错过采样点</dt>
+            <dt>未配对采样点</dt>
             <dd>{{ missed }}</dd>
           </div>
           <div>
@@ -816,7 +751,7 @@ onBeforeUnmount(() => {
             min="1"
             :max="sampleCount"
             :value="frameIndex + 1"
-            :disabled="running || reviewing || busy"
+            :disabled="running || reviewing"
             aria-label="回看已采样画面"
             :aria-valuetext="`第 ${frameIndex + 1} 个样本，对齐后 ${time.toFixed(2)} 秒`"
             @change="reviewAt"
@@ -837,7 +772,7 @@ onBeforeUnmount(() => {
             >
           </div>
           <el-button
-            :disabled="reviewing || busy || (frame === greatest.sample && !running)"
+            :disabled="reviewing || (frame === greatest.sample && !running)"
             @click="review(greatest.sample)"
           >
             {{ frame === greatest.sample && !running ? '当前画面' : '回看最大差异' }}
@@ -889,7 +824,7 @@ onBeforeUnmount(() => {
                     v-if="peaks[index]"
                     class="compare-jump"
                     :aria-label="`回看${label}最大差异`"
-                    :disabled="reviewing || busy || (frame === peaks[index] && !running)"
+                    :disabled="reviewing || (frame === peaks[index] && !running)"
                     @click="review(peaks[index]!)"
                     >{{ degrees(Math.abs(peaks[index]!.readings[index].delta!)) }}
                     <ArrowUpRight :size="12"
@@ -911,8 +846,8 @@ onBeforeUnmount(() => {
       </template>
     </section>
     <div class="info-line">
-      尽量使用相近的拍摄视角和动作节奏。系统在两段视频的重叠区间按最多约 10 Hz
-      采样，按对齐后的时间比较二维投影角度。遮挡会减少可比关节，缺失角度留空。
+      尽量使用相近的拍摄视角和动作节奏。系统先按源帧时间逐帧追踪，再在重叠区间按最多约 10 Hz
+      配对比较二维投影角度。超长视频沿用采集模块的帧数上限与全段抽样。遮挡会减少可比关节，缺失角度留空。
     </div>
   </section>
 </template>

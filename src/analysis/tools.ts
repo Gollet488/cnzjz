@@ -1,6 +1,16 @@
-import type { Channel, Joint, PoseFrame } from '../types.ts';
+import {
+  WEIGHTED_OFFLINE_METRIC_VERSION,
+  type Channel,
+  type Joint,
+  type PoseFrame,
+} from '../types.ts';
 import { angleValue, channels, JOINT_KEYS } from '../utils/poseMath.ts';
-import { AnalysisSession, METRIC_VERSION, modelSessionInfo } from './session.ts';
+import {
+  AnalysisSession,
+  METRIC_VERSION,
+  OFFLINE_METRIC_VERSION,
+  modelSessionInfo,
+} from './session.ts';
 import { median } from './sampleTiming.ts';
 import { intervalFrames, timeBound } from './frameIndex.ts';
 import { csvHeader } from '../utils/csv.ts';
@@ -25,7 +35,12 @@ const parametersSchema = object({
   window: { type: 'integer', minimum: 1, maximum: 120 },
   aspect: number,
   // The frozen evaluation snapshot can still be read under its original version.
-  metricVersion: enumeration(METRIC_VERSION, '2.0'),
+  metricVersion: enumeration(
+    METRIC_VERSION,
+    WEIGHTED_OFFLINE_METRIC_VERSION,
+    OFFLINE_METRIC_VERSION,
+    '2.0',
+  ),
 });
 const reference = { sessionId: string, revision: integer };
 const acquisitionSchema = nullable(
@@ -363,7 +378,9 @@ function evidence(session: AnalysisSession, interval: Interval, basis: Basis, fr
     sampledRange: frames.length ? [frames[0].time, frames.at(-1)!.time] : null,
     limitations: [
       ...LIMITATIONS,
-      ...(info.parameters.metricVersion === METRIC_VERSION
+      ...([METRIC_VERSION, WEIGHTED_OFFLINE_METRIC_VERSION, OFFLINE_METRIC_VERSION].includes(
+        info.parameters.metricVersion,
+      )
         ? [
             '关节投影线段短于画面高度的 0.5% 时角度留空；滤波不能恢复原始帧无效的角度。角速度不跨采样中断。',
           ]
@@ -577,7 +594,9 @@ function quality(session: AnalysisSession, interval: Interval, selected?: LocalS
       limitations: [
         ...ev.limitations,
         '全点可靠率和置信度按 raw 点统计；局部可用性严格按选中口径的有效投影角计算，检测到但不可用也可能源于退化几何，不等同全部低置信。',
-        ...(ev.parameters.metricVersion === METRIC_VERSION
+        ...([METRIC_VERSION, WEIGHTED_OFFLINE_METRIC_VERSION, OFFLINE_METRIC_VERSION].includes(
+          ev.parameters.metricVersion,
+        )
           ? [
               '连续段仅表示相邻已采样帧同为有效/无效；采集时按前至多 9 个源时间间隔的中位数×3 判定中断（下限 0.1 秒，摄像头上限 0.5 秒）。段长为末样本时间减首样本时间；不证明未采样时间有人体追踪。',
             ]

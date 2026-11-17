@@ -3,20 +3,15 @@ import type { ModelProvider } from '../provider.ts';
 
 export type LocalProviderId = 'ollama' | 'local-openai';
 export const localHosts = ['127.0.0.1', 'localhost', '[::1]'];
-export const localDefaults = {
-  ollama: 'http://127.0.0.1:11434',
-  'local-openai': 'http://127.0.0.1:1234',
-};
+export const localInventoryPaths = ['/api/tags', '/api/ps', '/v1/models', '/api/v1/models'];
 export const localPaths = [
-  '/api/tags',
+  ...localInventoryPaths,
   '/api/show',
   '/api/chat',
-  '/v1/models',
   '/v1/chat/completions',
 ];
 export const localReplyLimit = 1_000_000;
 export const localModelRoute = '/__local-model';
-const relayedAddresses = new Set<string>();
 let relayAvailable: boolean | undefined;
 
 export function localModelAddress(value: string, compatible = false): string {
@@ -73,8 +68,7 @@ export async function localRequest(
     await response.body?.cancel();
     throw new TypeError('Failed to fetch local model service');
   };
-  if (body !== undefined && canRelay && relayedAddresses.has(address)) return relay();
-  if (body !== undefined && canRelay && path === '/v1/chat/completions') {
+  if (body !== undefined && canRelay) {
     // The inventory and chat endpoints can have different CORS policies.
     // Discover the proxy before sending the model request, so inference runs only once.
     if (relayAvailable === undefined) {
@@ -85,7 +79,7 @@ export async function localRequest(
     if (relayAvailable) return relay();
   }
   try {
-    const response = await fetcher(address + path, {
+    return await fetcher(address + path, {
       ...init,
       method: body === undefined ? 'GET' : 'POST',
       headers: {
@@ -95,15 +89,11 @@ export async function localRequest(
       body: body === undefined ? undefined : JSON.stringify(body),
       cache: 'no-store',
     });
-    if (body === undefined) relayedAddresses.delete(address);
-    return response;
   } catch (error) {
     signal.throwIfAborted();
     // Only inventory reads are safe to retry after an ambiguous network error.
     if (!(error instanceof TypeError) || !canRelay || body !== undefined) throw error;
-    const response = await relay();
-    relayedAddresses.add(address);
-    return response;
+    return relay();
   }
 }
 
@@ -179,6 +169,6 @@ export async function probeLocalTools(provider: ModelProvider, signal: AbortSign
     call.name !== 'connection_check' ||
     JSON.stringify(call.arguments) !== '{"echo":"kinetic"}'
   )
-    throw new Error('模型未通过真实结构化工具探测。');
+    throw new Error('LOCAL_TOOL_PROBE：模型未通过真实结构化工具探测。');
   return { usage: reply.usage, requests: 1, response: reply.response };
 }

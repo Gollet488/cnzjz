@@ -119,11 +119,13 @@ function changeTime(bound: 'start' | 'end', event: Event) {
 
 <style scoped>
 .video-clip-controls {
-  margin: 12px 18px;
+  margin: 12px 0 0;
   min-inline-size: 0;
   padding: 8px 12px 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--panel-radius);
+  background: var(--capture-surface);
+  box-shadow: var(--capture-raised);
   font-size: 12px;
 }
 .video-clip-controls legend {
@@ -160,13 +162,23 @@ function changeTime(bound: 'start' | 'end', event: Event) {
 .clip-control-row input,
 .clip-control-row select,
 .clip-control-row button {
-  min-height: 32px;
+  min-height: 34px;
   color: inherit;
-  background: transparent;
+  background: var(--capture-surface);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--control-radius);
   padding: 3px 8px;
   font: inherit;
+}
+.clip-control-row :is(input, select) {
+  box-shadow: var(--capture-recessed);
+}
+.clip-control-row button:enabled {
+  box-shadow: var(--capture-raised);
+  cursor: pointer;
+}
+.clip-control-row button:enabled:active {
+  box-shadow: var(--capture-recessed);
 }
 .clip-control-row select option {
   color: var(--ink);
@@ -174,9 +186,6 @@ function changeTime(bound: 'start' | 'end', event: Event) {
 }
 .clip-control-row input {
   width: 106px;
-}
-.clip-control-row button:enabled {
-  cursor: pointer;
 }
 .clip-control-row button:disabled,
 .clip-control-row input:disabled,
