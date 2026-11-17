@@ -15,7 +15,7 @@ import {
 } from './modelCatalog.ts';
 import type { CloudModelConfig, CloudProviderId, ProviderId } from './modelCatalog.ts';
 import { CloudPageProvider, cloudUnavailable, modelError } from './providers/cloudPage.ts';
-import { OllamaProvider } from './providers/ollama.ts';
+import { OllamaProvider, resolveOllamaModel } from './providers/ollama.ts';
 import { LocalOpenAIProvider } from './providers/localOpenAI.ts';
 import { localModelAddress, localModelId } from './providers/localModel.ts';
 import type { LocalProviderId } from './providers/localModel.ts';
@@ -162,16 +162,16 @@ export function useAgentModels() {
       return [...models].map((model): ModelChoice => ({ provider, model }));
     }),
   );
-  const localOptions = computed<ModelChoice[]>(() => {
-    const options = localServices.value.flatMap(({ provider, address, models }) =>
+  const localOptions = computed<ModelChoice[]>(() =>
+    localServices.value.flatMap(({ provider, address, models }) =>
       models.map((model): ModelChoice => ({ provider, model, address })),
-    );
-    const manual = choice.value;
-    if (manual?.manual && !options.some((item) => choiceKey(item) === choiceKey(manual)))
-      options.push(manual);
-    return options;
-  });
-  const options = computed<ModelChoice[]>(() => [...localOptions.value, ...cloudOptions.value]);
+    ),
+  );
+  const options = computed<ModelChoice[]>(() => [
+    ...localOptions.value,
+    ...(choice.value?.manual ? [choice.value] : []),
+    ...cloudOptions.value,
+  ]);
   const selected = computed(
     () =>
       choice.value && options.value.find((item) => choiceKey(item) === choiceKey(choice.value!)),
@@ -341,14 +341,15 @@ export function useAgentModels() {
         result.status === 'fulfilled' ? [result.value] : [],
       );
       const current = choice.value;
-      if (
-        current?.provider === 'local-openai' &&
-        localServices.value.some(
-          ({ address, provider, models }) =>
-            provider === 'ollama' && address === current.address && models.includes(current.model),
-        )
-      )
-        rememberChoice({ provider: 'ollama', address: current.address, model: current.model });
+      if (current?.provider === 'local-openai') {
+        const service = localServices.value.find(
+          ({ address, provider }) => provider === 'ollama' && address === current.address,
+        );
+        const model =
+          service && resolveOllamaModel(current.model, service.models, service.modelDigests);
+        if (service && model)
+          rememberChoice({ provider: 'ollama', address: service.address, model });
+      }
 
       const preferredIndex = groups.findIndex(
         (group) => !!configured && group.includes(configured),

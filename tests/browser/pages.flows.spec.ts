@@ -35,6 +35,31 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
       expect((await request.get(path)).status(), path).toBe(404);
   });
 
+  test('HTTPS Pages explains how to allow its origin when local discovery fails', async ({
+    page,
+    request,
+  }) => {
+    const origin = 'https://pose-review.example';
+    await page.route(`${origin}/**`, async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      await route.fulfill({ response: await request.get(path) });
+    });
+    await page.route(
+      /^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(?:11434|1234|8080|8000)\//,
+      (route) => route.abort(),
+    );
+    await page.goto(`${origin}/cnzjz/`);
+    await page.getByRole('button', { name: 'AI Agent 分析' }).click();
+    await page.getByRole('button', { name: '模型设置', exact: true }).click();
+    const help = page
+      .getByRole('region', { name: '模型设置' })
+      .locator('p')
+      .filter({ hasText: 'OLLAMA_ORIGINS' });
+    await expect(help).toContainText('允许访问本地网络');
+    await expect(help).toContainText(origin);
+    await expect(help).toContainText('重启 Ollama');
+  });
+
   test('two-video comparison survives a slow FFmpeg WASM response', async ({ page }, info) => {
     const wasm = '**/ffmpeg/ffmpeg-core.wasm';
     const start = Date.now();

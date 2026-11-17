@@ -52,18 +52,29 @@ pnpm preview
 
 ## Ollama
 
-1. 安装 [Ollama for Windows](https://docs.ollama.com/windows)。退出系统托盘中已运行的 Ollama，再从 PowerShell 启动回环服务。当前候选的 Pages 来源为 `https://gollet488.github.io`，本机生产预览来源为 `http://127.0.0.1:4173`。
+1. 安装并启动 [Ollama for Windows](https://docs.ollama.com/windows)。本机 `pnpm dev` 和 `pnpm preview` 提供同源代理，可直接使用默认的 Ollama 回环服务。使用 GitHub Pages 时，先退出系统托盘中已运行的 Ollama，再从下列一种终端启动服务。
+
+   Windows 命令提示符（CMD）
+
+   ```cmd
+   set "OLLAMA_HOST=127.0.0.1:11434"
+   set "OLLAMA_ORIGINS=https://gollet488.github.io"
+   set "OLLAMA_NO_CLOUD=1"
+   ollama serve
+   ```
+
+   PowerShell
 
    ```powershell
    $env:OLLAMA_HOST='127.0.0.1:11434'
-   $env:OLLAMA_ORIGINS='https://gollet488.github.io,http://127.0.0.1:4173'
+   $env:OLLAMA_ORIGINS='https://gollet488.github.io'
    $env:OLLAMA_NO_CLOUD='1'
    ollama serve
    ```
 
-   将实际页面的协议、主机和端口填入 `OLLAMA_ORIGINS`，不带 `/cnzjz/` 或末尾斜线。使用开发服务时可改为 `http://127.0.0.1:5173`。变量由 Ollama 启动进程读取。每次修改后重新启动该进程。
+   保持运行 `ollama serve` 的窗口打开。自托管时将实际页面的协议、主机和端口填入 `OLLAMA_ORIGINS`，值中省略 `/cnzjz/` 和末尾斜线。修改后重新启动 Ollama 进程。
 
-2. 在另一终端安装本轮通过结构化连接探测的 Qwen2.5-7B-Instruct-1M Q4_K_M。下载 GGUF 后核对 SHA-256，再创建本机标签 `qwen2.5:7b-instruct`。该配置的连接探测已通过，完整三轮任务在来源声明校验处停止。模型清单中的 tools 标记用于初筛，实际工具能力由任务或设置里的主动测试确认。[模型文件](https://huggingface.co/second-state/Qwen2.5-7B-Instruct-1M-GGUF/blob/main/Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf)
+2. 在另一终端运行 `ollama list`。已有 `qwen2.5:7b-instruct` 可直接进行连接测试。需要安装项目验收使用的 Qwen2.5-7B-Instruct-1M Q4_K_M 时，下载 GGUF 后核对 SHA-256，再创建本机标签。模型清单中的 `tools` 标记用于初筛，在网页点击「测试连接」验证实际工具调用。三轮任务的结果见[当前交付状态](delivery-status.md)。[模型文件](https://huggingface.co/second-state/Qwen2.5-7B-Instruct-1M-GGUF/blob/main/Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf)
 
    ```powershell
    $file = 'Qwen2.5-7B-Instruct-1M-Q4_K_M.gguf'
@@ -82,14 +93,14 @@ pnpm preview
 
    本轮连接实测使用 Ollama 0.40.13。运行 `ollama list` 可核对标签。安装约需 4.7 GB 模型文件及足够的可用内存。
 
-3. 打开 [Pages 站点](https://gollet488.github.io/cnzjz/) 的「AI Agent 分析」。在「模型」的「本地」组选择已安装模型，输入任务并点击「发送」。Chrome 请求访问回环网络时选择允许。拒绝后可在地址栏的站点设置中重新允许回环网络。地址与「刷新模型列表」「测试连接」在「模型设置」中。
+3. 打开 [Pages 站点](https://gollet488.github.io/cnzjz/) 的「AI Agent 分析」，在「模型设置」点击「刷新模型列表」。Chrome 请求访问本地网络时选择允许。拒绝后可在地址栏的站点设置中重新授权。选择 `ollama list` 的 `NAME` 列对应的模型，点击「测试连接」，通过后发送分析任务。
 
 4. 如果浏览器或管理策略无法开放回环权限，克隆代码并按本页安装依赖，执行 `pnpm build` 后运行 `pnpm preview --port 4173 --strictPort`，从 `http://127.0.0.1:4173/` 进入 Agent。新会话请在该地址重新导入视频或使用合成演示。
 
 | 现象 | 检查 |
 | --- | --- |
 | 服务离线 | 在本机访问 `http://127.0.0.1:11434/api/tags`。若连接被拒绝，检查 Ollama 终端是否仍在运行及地址端口是否一致 |
-| 页面无法读取模型，但终端可以 | 确认浏览器回环权限和启动进程中的精确 `OLLAMA_ORIGINS`，重新加载页面 |
+| 页面无法读取模型，但终端可以 | 运行 `curl.exe -i -H "Origin: https://gollet488.github.io" http://127.0.0.1:11434/api/tags`。若返回 `403`，用正确的 `OLLAMA_ORIGINS` 重启 Ollama。若返回 `200` 且有对应的 `Access-Control-Allow-Origin`，检查浏览器的本地网络权限 |
 | 模型不显示或探测失败 | 用 `ollama list` 核对标签。选择实际支持 tools 的本地模型，查看 Ollama 终端错误和内存状况 |
 
 浏览器通过回环向 Ollama 发送指令和有界工具反馈。Chrome 的回环权限和 Ollama 的 CORS 是两道独立检查。[Chrome Local Network Access](https://developer.chrome.com/docs/modern-web-guidance/guides/security/local-network-access)

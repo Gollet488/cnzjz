@@ -11,6 +11,7 @@ export interface LocalService {
   provider: LocalProviderId;
   deployment: string;
   models: string[];
+  modelDigests?: ReadonlyMap<string, string | undefined>;
   runningModels?: string[];
 }
 
@@ -40,12 +41,11 @@ export async function discoverLocalService(
 ): Promise<LocalService> {
   async function read(address: string, timeout: number): Promise<LocalService> {
     const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
-    const native = await OllamaProvider.models(
+    const native = await OllamaProvider.inventory(
       address,
       AbortSignal.any([requestSignal, AbortSignal.timeout(2000)]),
     ).catch((error: unknown) => ({ error }));
-    if (Array.isArray(native))
-      return { address, provider: 'ollama', deployment: 'Ollama', models: native };
+    if ('models' in native) return { address, provider: 'ollama', deployment: 'Ollama', ...native };
     requestSignal.throwIfAborted();
     try {
       const inventory = await LocalOpenAIProvider.inventory(
