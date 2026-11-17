@@ -1,12 +1,12 @@
 # 文档索引
 
-2026-11-13 本机候选通过隔离检出验签、冻结安装、固定资源校验和两套生产构建。沿用产物一致的本机 Pages 12/12 及真人 Qwen 独立质量查询 1/1。发布验收等待获授权的候选 SHA。[本机验收与证据版本](evidence/20261113-release-candidate/review.md)
+Web 发布候选的通过项和剩余验证范围见 [当前交付状态](delivery-status.md)。
 
 | 入口 | 内容 |
 | --- | --- |
 | [项目 README](../README.md) | 安装、启动、基本使用与目录 |
 | [构建与交付](delivery.md) | 本轮检查、上传步骤、部署边界和已知限制 |
-| [候选清单](evidence/20261113-release-candidate/manifest.json) | 当前源码、固定资源、配置与选定证据的字节指纹 |
+| [2026-11-13 候选清单](evidence/20261113-release-candidate/manifest.json) | 历史发布的源码、固定资源、配置与选定证据的字节指纹 |
 | [仓库提交清单](submission-checklist.md) | 截图要求逐项核对、已补齐内容及上传前待办 |
 | [环境配置](environment.md) | 依赖、环境变量模板、模型连接与排错 |
 | [系统架构](architecture.md) | 技术栈、模块职责、数据流与部署结构 |

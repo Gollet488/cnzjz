@@ -72,6 +72,52 @@ test('absolute windows and the derived chart are bound separately from CSV', () 
   );
 });
 
+test('delivery follow-ups retain the comparison and honor the requested chart and CSV ranges', () => {
+  const session = evaluationSession();
+  const initial = bindRomIntent(parseRomIntent(first)!, first, session.info(), session.frames);
+  const prior = (goal: string, bound: typeof initial) => ({
+    input: bound.review.input,
+    task: {
+      runId: 'previous',
+      goal,
+      spec: bound.review.proposed,
+      validation: 'structure_and_provenance_only' as const,
+    },
+  });
+  const revise = prior(first, initial);
+  const revised = bindRomIntent(
+    parseRomIntent(second, revise.input)!,
+    second,
+    session.info(),
+    session.frames,
+    revise,
+  );
+  const previous = prior(second, revised);
+  const goal =
+    '准备当前比较的右膝 filtered 报告，包含前段和已修改的第二段，并准备 0–17 秒 CSV，展示覆盖两段 0–18 秒的右膝 filtered 图表';
+  const { proposed } = bindRomIntent(
+    parseRomIntent(goal, previous.input)!,
+    goal,
+    session.info(),
+    session.frames,
+    previous,
+  ).review;
+  assert.deepEqual(proposed.interval, [0, 5]);
+  assert.deepEqual(proposed.comparison?.second, [12, 17]);
+  assert.equal(proposed.deliveries.report, true);
+  assert.deepEqual(proposed.deliveries.export?.interval, [0, 17]);
+  assert.deepEqual(proposed.deliveries.view?.interval, [0, 18]);
+  assert.equal(parseRomIntent(goal.replaceAll('右膝', '左膝'), previous.input), undefined);
+  assert.equal(
+    parseRomIntent(goal.replace('右膝 filtered 图表', '右膝 raw 图表'), previous.input),
+    undefined,
+  );
+  assert.equal(
+    parseRomIntent('沿用上一轮比较和图表。准备报告，并准备 0–17 秒 CSV。', previous.input)?.kind,
+    'deliver',
+  );
+});
+
 test('real anchors resolve against the sampled range while ambiguous prose stays unbound', () => {
   const session = evaluationSession();
   const goal = first.replace('0–5 秒', '采样开头 3 秒').replace('绝对 15–20 秒', '采样末尾 4 秒');

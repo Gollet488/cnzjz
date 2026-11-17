@@ -22,6 +22,7 @@ import {
   replayCSV,
   replayFullCSV,
   rom,
+  selectOllamaModel,
   verifyAudit,
 } from './files.ts';
 
@@ -345,11 +346,14 @@ test('playback transport advances while running and retracts on pause', async ({
   await player.screenshot({ path: info.outputPath('playback-mobile-paused.png') });
 });
 
-test('chart scrub snaps to source samples and links the selected frame', async ({ page }, info) => {
+test('chart scrub snaps to source samples and links the selected frame @pages', async ({
+  page,
+}, info) => {
   const rows = await fullCSV(page, info, 'chart-cursor-source.csv');
   const samples = rows.map((row) => ({
     time: Number(row.time_s),
     angle: Number(row.filtered_knee_left_deg),
+    rawAngle: Number(row.raw_knee_left_deg),
     center: Number(row.center_y),
   }));
   await page.locator('nav').getByRole('button', { name: '采集与分析' }).click();
@@ -390,6 +394,17 @@ test('chart scrub snaps to source samples and links the selected frame', async (
   await slider.press('Enter');
   await expect(timeline).toHaveText(seconds(samples[1].time));
 
+  const basis = page.getByRole('combobox', { name: '角度口径' });
+  await basis.selectOption('raw');
+  await expect(plot.locator('.chart-reading').nth(1).locator('strong')).toHaveText(
+    `${samples[1].rawAngle.toFixed(1)}°`,
+  );
+  await expect(timeline).toHaveText(seconds(samples[1].time));
+  await basis.selectOption('filtered');
+  await expect(plot.locator('.chart-reading').nth(1).locator('strong')).toHaveText(
+    `${samples[1].angle.toFixed(1)}°`,
+  );
+
   await page.setViewportSize({ width: 320, height: 844 });
   await plot.scrollIntoViewIfNeeded();
   const [reading, canvas] = await Promise.all([
@@ -401,6 +416,39 @@ test('chart scrub snaps to source samples and links the selected frame', async (
     await readout.evaluate((element) => element.clientWidth),
   );
   await plot.screenshot({ path: info.outputPath('chart-cursor-mobile.png') });
+});
+
+test('fast motion preset recalculates filtered values from the same samples @pages', async ({
+  page,
+}, info) => {
+  const original = await fullCSV(page, info, 'before-fast-motion.csv');
+  await page.setViewportSize({ width: 320, height: 700 });
+  const openSettings = page.getByRole('button', { name: '分析设置', exact: true });
+  const dialog = page.getByRole('dialog', { name: '分析与显示设置' });
+  const fast = dialog.getByRole('button', { name: '快速动作（3 帧）', exact: true });
+  const standard = dialog.getByRole('button', { name: '默认（5 帧）', exact: true });
+  await openSettings.click();
+  await expect(standard).toHaveAttribute('aria-pressed', 'true');
+  await fast.click();
+  await expect(fast).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+
+  const changed = await fullCSV(page, info, 'fast-motion.csv');
+  expect(Number(changed[0].session_revision)).toBeGreaterThan(Number(original[0].session_revision));
+  expect(changed.map((row) => [row.session_id, row.time_s, row.raw_knee_left_deg])).toEqual(
+    original.map((row) => [row.session_id, row.time_s, row.raw_knee_left_deg]),
+  );
+  expect(changed.every((row) => row.filter_window_frames === '3')).toBe(true);
+  expect(
+    changed.some(
+      (row, index) => row.filtered_knee_left_deg !== original[index].filtered_knee_left_deg,
+    ),
+  ).toBe(true);
+
+  await openSettings.click();
+  await standard.click();
+  await expect(standard).toHaveAttribute('aria-pressed', 'true');
 });
 
 for (const fixture of [
@@ -434,7 +482,13 @@ for (const fixture of [
     const rows = await fullCSV(page, info, `${fixture}.csv`);
     expect(rows.length).toBe(30);
     expect(rows[0].acquisition_mode).toBe(
-      fixture === 'format.mov' ? 'webcodecs' : 'webcodecs-transcoded',
+      fixture === 'format.mov'
+        ? 'webcodecs'
+        : fixture === 'format-hevc.mp4'
+          ? /^(hvc1|hev1)\./.test(rows[0].source_codec)
+            ? 'webcodecs'
+            : 'webcodecs-transcoded'
+          : 'webcodecs-transcoded',
     );
     expect(rows.at(-1)!.acquisition_status).toBe('completed');
     expect(
@@ -453,9 +507,51 @@ for (const fixture of [
   });
 }
 
-test('video formats: comparison accepts two converted formats and plays both @pages', async ({
+test('video clip previews by source frame and exports only inclusive VFR selection', async ({
   page,
 }, info) => {
+  await page.getByRole('button', { name: '上传视频', exact: true }).click();
+  await page
+    .locator('.pose-stage input[type=file]')
+    .setInputFiles(resolve('tests/fixtures/vfr.mp4'));
+  const clip = page.getByRole('group', { name: '视频片段' });
+  const start = clip.getByRole('spinbutton', { name: '起点（秒）' });
+  const end = clip.getByRole('spinbutton', { name: '终点（秒）' });
+  const scrubber = clip.getByRole('slider', { name: '源视频帧时间轴' });
+  await clip.getByRole('button', { name: '下一帧' }).click();
+  await expect(scrubber).toHaveValue('1');
+  await start.fill('0.199999');
+  await start.press('Tab');
+  await expect(start).toHaveValue('0.200000');
+  await scrubber.fill('16');
+  await clip.getByRole('button', { name: '设为终点' }).click();
+  await expect(end).toHaveValue('0.566667');
+  await clip.getByRole('combobox', { name: '预览倍速' }).selectOption('0.25');
+  const player = page.locator('.pose-stage video');
+  await clip.getByRole('button', { name: '播放片段' }).click();
+  await expect(player).toHaveJSProperty('playbackRate', 0.25);
+  await expect(clip.getByRole('button', { name: '暂停预览' })).toBeVisible();
+  await expect(clip.getByRole('button', { name: '播放片段' })).toBeVisible();
+  await expect(scrubber).toHaveValue('16');
+  await clip.getByRole('button', { name: '分析所选范围' }).click();
+  await expect(page.locator('.offline-progress')).toContainText('11 / 11 帧');
+  await expect(page.locator('.offline-progress')).toContainText('全部完成');
+  const rows = await fullCSV(page, info, 'vfr-clip.csv');
+  const oracle = JSON.parse(await readFile(resolve('tests/fixtures/vfr.json'), 'utf8'));
+  expect(rows.map((row) => Number(row.time_s))).toEqual(
+    oracle.ptsSeconds.slice(6, 17).map((time: number) => Math.round(time * 1e6) / 1e6),
+  );
+  expect(rows.every((row) => row.acquisition_mode === 'webcodecs-clip')).toBe(true);
+  expect(rows[0].source_expected_frames).toBe('11');
+
+  await page.locator('nav').getByRole('button', { name: '采集与分析' }).click();
+  await clip.getByRole('button', { name: '选择全片' }).click();
+  await clip.getByRole('button', { name: '分析所选范围' }).click();
+  await expect(page.locator('.offline-progress')).toContainText('30 / 30 帧');
+  await expect(page.locator('.offline-progress')).toContainText('全部完成');
+});
+
+test('video formats: comparison analyzes two converted formats @pages', async ({ page }, info) => {
   const checkAssets = trackPagesAssets(page, info);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -471,12 +567,7 @@ test('video formats: comparison accepts two converted formats and plays both @pa
   await expect(videos.nth(0)).toHaveJSProperty('videoWidth', 64);
   await expect(videos.nth(1)).toHaveJSProperty('videoWidth', 64);
   await page.getByRole('button', { name: '开始对比', exact: true }).click();
-  await expect
-    .poll(() => videos.nth(0).evaluate((v: HTMLVideoElement) => v.currentTime))
-    .toBeGreaterThan(0.1);
-  await expect
-    .poll(() => videos.nth(1).evaluate((v: HTMLVideoElement) => v.currentTime))
-    .toBeGreaterThan(0.1);
+  await expect(page.locator('.comparison-panel .compare-playhead')).toContainText('对比结束');
   expect(errors).toEqual([]);
   await checkAssets(/\/mediapipe\/wasm\/[^/]+\.wasm$/, /\/mediapipe\/pose_landmarker_lite\.task$/);
 });
@@ -486,6 +577,17 @@ test('comparison lifecycle: settings pause/reset real preview and source replace
 }, info) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      postMessage(message: any, options?: any) {
+        if (message.type === 'ack') {
+          setTimeout(() => super.postMessage(message, options), 180);
+        } else super.postMessage(message, options);
+      }
+    };
+  });
+  await page.reload();
   await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
   const panel = page.locator('.comparison-panel');
   const player = panel.getByRole('group', { name: '对比播放器' });
@@ -501,11 +603,6 @@ test('comparison lifecycle: settings pause/reset real preview and source replace
   await expect
     .poll(() => videos.evaluateAll((vs: HTMLVideoElement[]) => vs.every((v) => v.readyState >= 2)))
     .toBe(true);
-  await videos.evaluateAll((vs: HTMLVideoElement[]) =>
-    vs.forEach((v) => {
-      v.playbackRate = 0.1;
-    }),
-  );
   const start = () => page.getByRole('button', { name: '开始对比', exact: true }).click();
   const playhead = panel.locator('.compare-playhead');
   const alignment = panel.getByRole('slider', { name: '待测视频对齐起点' });
@@ -536,11 +633,8 @@ test('comparison lifecycle: settings pause/reset real preview and source replace
   await expect(progress).toHaveAttribute('aria-valuenow', /^[1-9]\d*$/);
   await expect(panel).toContainText('双路可比 0 / 13 项');
   await expect(panel).toContainText('当前画面缺少两路都清晰可见的关节');
-  await expect
-    .poll(() =>
-      videos.evaluateAll((vs: HTMLVideoElement[]) => vs[1].currentTime - vs[0].currentTime),
-    )
-    .toBeCloseTo(0.4, 1);
+  const times = (await playhead.innerText()).match(/参考 (\d+\.\d+) s · 待测 (\d+\.\d+) s/)!;
+  expect(Number(times[2]) - Number(times[1])).toBeCloseTo(0.4, 1);
   await page.getByRole('button', { name: /^分析设置/ }).click();
   const drawer = page.getByRole('dialog', { name: '分析与显示设置' });
   const numbers = drawer.getByRole('spinbutton');
@@ -586,8 +680,55 @@ test('comparison lifecycle: settings pause/reset real preview and source replace
   expect(errors).toEqual([]);
 });
 
+test('comparison exports paired media timestamps and keeps missing pose values empty', async ({
+  page,
+}, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
+  const panel = page.locator('.comparison-panel');
+  const inputs = panel.locator('input[type=file]');
+  await inputs.nth(0).setInputFiles(resolve('tests/fixtures/30fps.mp4'));
+  await inputs.nth(1).setInputFiles(resolve('tests/fixtures/60fps.mp4'));
+  await panel.getByRole('slider', { name: '待测视频对齐起点' }).fill('0.2');
+  await panel.getByRole('button', { name: '开始对比', exact: true }).click();
+  await expect(panel.getByRole('button', { name: '重新分析', exact: true })).toBeVisible();
+  const { bytes } = await downloadFile(
+    page,
+    info,
+    panel.getByRole('button', { name: '下载对比 CSV', exact: true }),
+    'kinetic-video-comparison.csv',
+  );
+  const rows = parseCSV(bytes, null);
+  expect(rows).toHaveLength(8);
+  const paired = rows.filter((row) => row.sample_status === 'paired');
+  expect(paired).toHaveLength(8);
+  expect(rows.every((row) => ['paired', 'missed'].includes(row.sample_status))).toBe(true);
+  expect(rows.every((row) => row.analysis_status === 'completed')).toBe(true);
+  for (const row of paired) {
+    expect(row.reference_time_basis).toBe('decoded_frame');
+    expect(row.candidate_time_basis).toBe('decoded_frame');
+    expect(Math.abs(Number(row.candidate_minus_reference_aligned_s))).toBeLessThanOrEqual(0.1);
+    expect(row.reference_pose_detected).toBe('false');
+    expect(row.candidate_pose_detected).toBe('false');
+    expect(row.raw_knee_left_reference_deg).toBe('');
+    expect(row.filtered_knee_left_delta_deg).toBe('');
+    expect(row.candidate_start_s).toBe('0.2');
+  }
+  const slider = panel.getByRole('slider', { name: '回看已采样画面' });
+  await slider.focus();
+  await slider.press('Home');
+  await expect(slider).toHaveValue('1');
+  await expect(panel.locator('.compare-playhead')).toContainText(
+    `参考 ${Number(paired[0].reference_time_s).toFixed(2)} s · 待测 ${Number(paired[0].candidate_time_s).toFixed(2)} s`,
+  );
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(390);
+  await page.screenshot({ path: info.outputPath('comparison-data-mobile.png'), fullPage: true });
+});
+
 for (const action of ['replace', 'unmount'] as const) {
-  test(`comparison lifecycle: late real model load after ${action} never starts playback`, async ({
+  test(`comparison lifecycle: late real model load after ${action} never publishes a pair`, async ({
     page,
   }) => {
     const errors: string[] = [];
@@ -599,10 +740,12 @@ for (const action of ['replace', 'unmount'] as const) {
     const seen = new Promise<void>((resolve) => {
       requested = resolve;
     });
+    const { promise: settled, resolve: finishRoute } = Promise.withResolvers<void>();
     await page.route('**/mediapipe/pose_landmarker_lite.task', async (route) => {
       requested();
       await held;
       await route.continue().catch(() => {});
+      finishRoute();
     });
     await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
     const panel = page.locator('.comparison-panel');
@@ -615,16 +758,8 @@ for (const action of ['replace', 'unmount'] as const) {
       await inputs.nth(0).setInputFiles(resolve('tests/fixtures/rotate.mp4'));
     else await page.locator('nav').getByRole('button', { name: '采集与分析' }).click();
     release();
-    // This is the old component's real model network completion, not a mock result.
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          performance
-            .getEntriesByType('resource')
-            .some((r) => r.name.endsWith('/mediapipe/pose_landmarker_lite.task')),
-        ),
-      )
-      .toBe(true);
+    // The real model requests can settle after their parent analysis is cancelled.
+    await settled;
     if (action === 'unmount') {
       await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
       await expect(panel.locator('.compare-title span')).toHaveText(['尚未选择', '尚未选择']);
@@ -642,6 +777,22 @@ for (const action of ['replace', 'unmount'] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+test('comparison recovers from one interrupted pose model download @pages', async ({ page }) => {
+  let attempts = 0;
+  await page.route('**/mediapipe/pose_landmarker_lite.task', (route) =>
+    ++attempts === 1 ? route.abort('failed') : route.continue(),
+  );
+  await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
+  const panel = page.locator('.comparison-panel');
+  const inputs = panel.locator('input[type=file]');
+  await inputs.nth(0).setInputFiles(resolve('tests/fixtures/30fps.mp4'));
+  await inputs.nth(1).setInputFiles(resolve('tests/fixtures/60fps.mp4'));
+  await panel.getByRole('button', { name: '开始对比', exact: true }).click();
+  await expect(panel.locator('.compare-playhead')).toContainText('对比结束');
+  await expect(panel.getByRole('button', { name: '下载对比 CSV', exact: true })).toBeEnabled();
+  expect(attempts).toBe(3);
+});
 
 test('video formats: cancel preparation and replace file without late writes @pages', async ({
   page,
@@ -1085,6 +1236,18 @@ test('synthetic camera rewind exports blue pixels at the selected time and rejec
   const lastRedTime = await seconds();
   await rewind();
   const reviewedRGB = await stageRGB(page);
+  await page.getByRole('button', { name: '复核当前帧', exact: true }).click();
+  const review = page.getByRole('dialog', { name: '逐帧角度复核' });
+  const reviewFrame = review.getByLabel('复核原始画面');
+  await expect(reviewFrame).toBeVisible();
+  await expect(review).toContainText('0.000000 s');
+  expect(
+    await reviewFrame.evaluate((canvas: HTMLCanvasElement) =>
+      Array.from(canvas.getContext('2d')!.getImageData(10, 10, 1, 1).data).slice(0, 3),
+    ),
+  ).toEqual([0, 0, 255]);
+  await page.keyboard.press('Escape');
+  await expect(review).toBeHidden();
   await page
     .locator('.pose-stage')
     .screenshot({ path: info.outputPath('reviewed-blue-stage.png') });
@@ -1465,13 +1628,21 @@ test('center fluctuation follows the session, clip and linked chart range', asyn
   async function selectClip(interval: [number, number]) {
     await nav('采集与分析');
     const runway = page.locator('.timeline-row .el-slider__runway');
-    const { width, height } = (await runway.boundingBox())!;
-    const [start, end] = interval;
-    await runway.click({ position: { x: (start / full[1]) * width, y: height / 2 } });
-    await expect(page.locator('.timeline-row > span')).toHaveText(`${start.toFixed(2)} s`);
+    const slider = page.getByRole('slider', { name: '历史帧时间轴' });
+    const time = page.locator('.timeline-row > span');
+    async function seekSample(seconds: number) {
+      const { width, height } = (await runway.boundingBox())!;
+      const x = (seconds / full[1]) * width;
+      const y = height / 2;
+      await runway.click({ position: { x, y } });
+      const snapped = parseFloat(await time.innerText());
+      // The pointer can land on an adjacent sample. An arrow moves exactly one frame.
+      if (snapped !== seconds) await slider.press(snapped < seconds ? 'ArrowRight' : 'ArrowLeft');
+      await expect(time).toHaveText(`${seconds.toFixed(2)} s`);
+    }
+    await seekSample(interval[0]);
     await page.getByRole('button', { name: '截取片段', exact: true }).click();
-    await runway.click({ position: { x: (end / full[1]) * width, y: height / 2 } });
-    await expect(page.locator('.timeline-row > span')).toHaveText(`${end.toFixed(2)} s`);
+    await seekSample(interval[1]);
     await page.getByRole('button', { name: '完成截取', exact: true }).click();
     await expect(page.locator('.clip-banner')).toContainText(timeLabel(interval));
     await nav('时序可视化');
@@ -1632,20 +1803,33 @@ test('camera keeps partially visible joints and resumes after loss and a Worker 
   await installColorCamera(page, true);
   await page.evaluate(() => {
     const qa = ((window as any).trackingQA = { mode: 'visible', redetections: 0, workers: 0 });
+    const joints: Record<number, [number, number]> = {
+      11: [0.44, 0.2],
+      12: [0.56, 0.2],
+      23: [0.44, 0.4],
+      24: [0.56, 0.4],
+      25: [0.5, 0.55],
+      27: [0.65, 0.75],
+    };
     const send = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (message, transfer) {
       if (message.type === 'init') qa.workers++;
       if (message.type === 'detect') {
-        qa.redetections += Number(message.redetect);
+        qa.redetections += Number(Boolean(message.redetect));
         message.fail = qa.mode === 'fail';
         message.points =
-          qa.mode === 'lost'
+          qa.mode === 'lost' || (qa.mode === 'recover' && !message.redetect)
             ? []
             : Array.from({ length: 33 }, (_, i) => ({
-                x: i === 27 ? 0.7 : 0.5,
-                y: i === 23 ? 0.3 : i === 27 ? 0.75 : 0.5,
+                x: qa.mode === 'short' && i === 27 ? 0.5 : (joints[i]?.[0] ?? 0.5),
+                y: qa.mode === 'short' && i === 27 ? 0.58 : (joints[i]?.[1] ?? 0.5),
                 z: 0,
-                visibility: [23, 25, 27].includes(i) ? 0.95 : 0,
+                visibility:
+                  qa.mode === 'partial' && !message.redetect && i === 27
+                    ? 0.4
+                    : joints[i]
+                      ? 0.95
+                      : 0,
               }));
       }
       return send.call(this, message, transfer);
@@ -1666,24 +1850,42 @@ test('camera keeps partially visible joints and resumes after loss and a Worker 
   };
   await page.getByRole('button', { name: '开始分析', exact: true }).click();
   await count(1);
-  await expect(counter).toContainText('当前帧可用 3 / 33');
+  await expect(counter).toContainText('当前帧可用 6 / 33');
+  const advice = page.getByText('左侧膝关节投影较短', { exact: false });
+  await expect(advice).toBeHidden();
   await step(2, 'lost');
   await expect(page.locator('.status-message').filter({ hasText: '仍在采集' })).toBeVisible();
   await step(3, 'visible');
   await step(4, 'fail');
   await expect.poll(() => page.evaluate(() => (window as any).trackingQA.workers)).toBe(2);
   await step(5, 'visible');
-  expect(await page.evaluate(() => (window as any).trackingQA.redetections)).toBe(1);
+  await step(6, 'recover');
+  expect(await page.evaluate(() => (window as any).trackingQA.redetections)).toBe(2);
+  // Jump the inference clock past the retry cooldown while preserving media time.
+  await page.evaluate(() => {
+    const now = performance.now.bind(performance);
+    performance.now = () => now() + 350;
+  });
+  await step(7, 'partial');
+  expect(await page.evaluate(() => (window as any).trackingQA.redetections)).toBe(3);
+  await step(8, 'short');
+  await expect(advice).toBeVisible();
   await page.getByRole('button', { name: '暂停分析', exact: true }).click();
   const rows = await fullCSV(page, info, 'reacquired.csv');
-  expect(rows.map((r) => Number(r.time_s))).toEqual([0, 0.125, 0.25, 0.375, 0.5]);
+  expect(rows.map((r) => Number(r.time_s))).toEqual([
+    0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875,
+  ]);
   expect(rows.map((r) => Boolean(r.filtered_knee_left_deg))).toEqual([
     true,
     false,
     true,
     false,
     true,
+    true,
+    true,
+    true,
   ]);
+  expect(rows.at(-1)?.raw_knee_left_deg).not.toBe('');
   expect(rows.every((r) => !r.filtered_knee_right_deg)).toBe(true);
 });
 
@@ -1829,6 +2031,17 @@ test('correction camera cues settle on sample time and review uses the selected 
   await expect(status).toHaveText('等待采样');
 });
 
+test('success notifications leave navigation available while visible @pages', async ({ page }) => {
+  await page.getByRole('button', { name: '手动打点', exact: true }).click();
+  const message = page.getByRole('alert').filter({ hasText: '已添加' });
+  await expect(message).toBeVisible();
+  await expect(message).toHaveCSS('pointer-events', 'none');
+
+  const tab = page.locator('nav').getByRole('button', { name: '时序可视化' });
+  await tab.click();
+  await expect(tab).toHaveAttribute('aria-current', 'page');
+});
+
 test('clip, quoted marker, recalculate preserve snapshot and downloadable CSV @pages', async ({
   page,
 }, info) => {
@@ -1903,11 +2116,11 @@ for (const provider of ['ollama', 'deepseek'] as const)
     expect(material).toBe(FIXED_ROM_FINGERPRINT);
     replayCSV(rows);
     await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
-    const choice =
-      provider === 'deepseek'
-        ? ['deepseek', 'deepseek-flash', '']
-        : ['ollama', 'scripted-protocol-only', 'http://127.0.0.1:11434'];
-    await page.getByLabel('模型', { exact: true }).selectOption(JSON.stringify(choice));
+    if (provider === 'deepseek')
+      await page
+        .getByLabel('模型', { exact: true })
+        .selectOption(JSON.stringify(['deepseek', 'deepseek-flash', '']));
+    else await selectOllamaModel(page, 'scripted-protocol-only');
     expect(requests).toHaveLength(0);
     const nav = (name: string) => page.locator('nav').getByRole('button', { name }).click();
     const chart = page.locator('#agent-chart-view');
@@ -2336,6 +2549,9 @@ test('Agent model setup, failure, restored preference and unavailable manual ana
   let installed = true;
   let requests = 0;
   let probes = 0;
+  await page.route(/^http:\/\/(?:localhost|\[::1\]):11434\/api\/tags$/, (route) =>
+    route.fulfill({ json: { models: [] } }),
+  );
   await page.route('http://127.0.0.1:11434/api/tags', (route) =>
     route.fulfill({
       json: {
@@ -2412,11 +2628,11 @@ test('Agent model setup, failure, restored preference and unavailable manual ana
   await expect(settings.locator('.connection-status')).toHaveText('已连接');
   expect([requests, probes]).toEqual([1, 1]);
 
-  const local = JSON.stringify(['ollama', 'installed-local', 'http://127.0.0.1:11434']);
-  await model.selectOption(local);
+  await selectOllamaModel(page, 'installed-local');
   await page.reload();
   await openAgent();
-  await expect(model).toHaveValue(local);
+  await expect(model).toHaveValue('settings:local');
+  await expect(page.getByText('当前本地模型', { exact: false })).toContainText('installed-local');
   await expect(send).toBeEnabled();
   expect([requests, probes]).toEqual([1, 1]);
 
@@ -2425,7 +2641,7 @@ test('Agent model setup, failure, restored preference and unavailable manual ana
   await settings.getByRole('button', { name: '刷新模型列表' }).click();
   await expect(page.getByText('上次选择的模型当前不可用', { exact: false })).toBeVisible();
   await expect(settings).toContainText('ollama list');
-  await expect(model).toHaveValue(local);
+  await expect(model).toHaveValue('settings:local');
   await expect(send).toBeDisabled();
   await page.getByRole('button', { name: '前往采集与分析', exact: true }).click();
   await expect(page.getByRole('button', { name: '手动打点', exact: true })).toBeVisible();

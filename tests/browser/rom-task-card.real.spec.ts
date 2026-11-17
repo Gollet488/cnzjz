@@ -2,7 +2,13 @@ import { expect, test } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import type { RomDraftAudit } from '../../src/agent/romTaskCard.ts';
-import { downloadFile, realAgentBudget } from './files.ts';
+import {
+  downloadFile,
+  localChatURL,
+  ollamaChatBody,
+  realAgentBudget,
+  selectOllamaModel,
+} from './files.ts';
 import {
   confirmRom,
   finishRomDelivery,
@@ -17,6 +23,7 @@ const manifest = '063edb72580111bfb8d60517fce4744732d2c2d06106da86b60535993fc083
 const weight = '6dba997502a27b5f0c840346f45d9d62c0a04e6eb3cf72adc6c7ceb18804f380';
 
 test('REAL ROM task card: one fixed Qwen draft, review and local delivery', async ({
+  baseURL,
   page,
   request,
 }, info) => {
@@ -34,7 +41,7 @@ test('REAL ROM task card: one fixed Qwen draft, review and local delivery', asyn
   const wire: { kind: string; payload: any; status?: number; reply?: any; ms?: number }[] = [];
   const summary: any = {
     browser: page.context().browser()!.version(),
-    origin: 'http://127.0.0.1:5187',
+    origin: baseURL,
     version,
     model,
     wire,
@@ -55,8 +62,9 @@ test('REAL ROM task card: one fixed Qwen draft, review and local delivery', asyn
   });
   let probes = 0;
   let businessOpen = false;
-  await page.route(address + '/api/chat', (route) => {
-    const payload = route.request().postDataJSON();
+  await page.route(localChatURL(address), (route) => {
+    const payload = ollamaChatBody(route.request(), address);
+    if (!payload) return route.continue();
     const kind = payload.tools?.[0]?.function?.name;
     if (kind === 'connection_check' && probes++ === 0) {
       wire.push({ kind: 'probe', payload });
@@ -71,7 +79,7 @@ test('REAL ROM task card: one fixed Qwen draft, review and local delivery', asyn
   });
   const pending: Promise<void>[] = [];
   page.on('response', (response) => {
-    if (response.url() !== address + '/api/chat' || response.request().method() !== 'POST') return;
+    if (!ollamaChatBody(response.request(), address)) return;
     const entry = wire.find((item) => item.status === undefined);
     if (!entry) return;
     entry.status = response.status();
@@ -87,9 +95,7 @@ test('REAL ROM task card: one fixed Qwen draft, review and local delivery', asyn
     await page.locator('.csv-status').getByRole('button', { name: '关闭', exact: true }).click();
     summary.fixedSampleFingerprint = material;
     expect(material).toBe(preflight.fixedSampleFingerprint);
-    await page
-      .getByLabel('模型', { exact: true })
-      .selectOption(JSON.stringify(['ollama', fixedTag, 'http://127.0.0.1:11434']));
+    await selectOllamaModel(page, fixedTag);
     await card.getByRole('button', { name: '用当前模型草拟' }).click();
     await card.getByLabel('模型草拟指令').fill(romGoal);
     budget.startTarget();

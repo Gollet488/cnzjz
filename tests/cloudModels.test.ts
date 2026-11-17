@@ -61,11 +61,15 @@ test('cloud retry stops when the user cancels and does not retry ambiguous trans
 });
 
 test('a server key alone enables the default preset; invalid region endpoints are never silently replaced', () => {
-  const config = cloudConfiguration(tmpdir(), () => '', {
-    OPENAI_API_KEY: 'example-configured-key',
-    ZHIPU_API_KEY: 'example-glm-key',
-    ZHIPU_ENDPOINT: 'https://api.z.ai/incorrect',
-  });
+  const config = cloudConfiguration(
+    tmpdir(),
+    {
+      OPENAI_API_KEY: 'example-configured-key',
+      ZHIPU_API_KEY: 'example-glm-key',
+      ZHIPU_ENDPOINT: 'https://api.z.ai/incorrect',
+    },
+    () => ({}),
+  );
   const openai = config.catalog.providers.find((p) => p.provider === 'openai')!;
   assert.equal(openai.models.length, 1);
   assert(config.create('openai', openai.models[0]));
@@ -75,6 +79,80 @@ test('a server key alone enables the default preset; invalid region endpoints ar
       ?.missing.includes('ZHIPU_ENDPOINT'),
   );
   assert.equal(config.create('zhipu', 'glm-5.3', 'example-temporary-key'), undefined);
+});
+
+test('Windows user keys enable every provider on the server and respect configuration precedence', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'kinetic-user-keys-'));
+  const envFile = join(root, '.env');
+  writeFileSync(envFile, 'OPENAI_API_KEY=file-openai-key\nANTHROPIC_API_KEY=\n');
+  t.after(() => {
+    unlinkSync(envFile);
+    rmdirSync(root);
+  });
+  const userKeys = {
+    DEEPSEEK_API_KEY: 'user-deepseek-key',
+    OPENAI_API_KEY: 'user-openai-key',
+    ANTHROPIC_API_KEY: 'user-claude-key',
+    ZHIPU_API_KEY: 'user-glm-key',
+    MOONSHOT_API_KEY: 'user-kimi-key',
+  };
+  const nameLists: string[][] = [];
+  const readUserKeys = (names: (keyof typeof userKeys)[]) => {
+    nameLists.push(names);
+    return Object.fromEntries(names.map((name) => [name, userKeys[name]]));
+  };
+  const fromUser = cloudConfiguration(join(root, 'without-env-file'), {}, readUserKeys);
+  for (const { provider, models, missing } of fromUser.catalog.providers) {
+    assert.deepEqual(missing, []);
+    assert.equal(models.length, 1);
+    assert(fromUser.create(provider, models[0]));
+  }
+  for (const key of Object.values(userKeys))
+    assert(!JSON.stringify(fromUser.catalog).includes(key));
+
+  const fromFile = cloudConfiguration(root, {}, readUserKeys);
+  const fromProcess = cloudConfiguration(
+    root,
+    { OPENAI_API_KEY: 'process-openai-key' },
+    readUserKeys,
+  );
+  assert.deepEqual(nameLists, [
+    Object.keys(userKeys),
+    ['DEEPSEEK_API_KEY', 'ZHIPU_API_KEY', 'MOONSHOT_API_KEY'],
+    ['DEEPSEEK_API_KEY', 'ZHIPU_API_KEY', 'MOONSHOT_API_KEY'],
+  ]);
+  assert.deepEqual(
+    fromFile.catalog.providers.find(({ provider }) => provider === 'anthropic')?.missing,
+    ['ANTHROPIC_API_KEY'],
+  );
+
+  const authorization: (string | null)[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    assert.equal(url, 'https://api.openai.com/v1/responses');
+    authorization.push(new Headers(options.headers).get('authorization'));
+    return Response.json({
+      id: 'response-test',
+      model: 'gpt-test',
+      status: 'completed',
+      output: [
+        {
+          type: 'function_call',
+          name: 'connection_check',
+          call_id: 'call_test',
+          arguments: '{"echo":"kinetic"}',
+        },
+      ],
+    });
+  });
+  for (const config of [fromUser, fromFile, fromProcess]) {
+    const model = config.catalog.providers.find(({ provider }) => provider === 'openai')!.models[0];
+    await config.create('openai', model)!.probe(signal);
+  }
+  assert.deepEqual(authorization, [
+    'Bearer user-openai-key',
+    'Bearer file-openai-key',
+    'Bearer process-openai-key',
+  ]);
 });
 
 test('GPT probe forces a real tool call without adding its response to analysis context', async () => {
@@ -333,11 +411,15 @@ test('Node proxy uses temporary credentials only for their task and official end
     join(root, '.env'),
     'OPENAI_API_KEY=file-test-secret\nOPENAI_MODELS=gpt-test,gpt-second,gpt-test\n',
   );
-  const config = cloudConfiguration(root, () => '', {
-    ZHIPU_API_KEY: 'glm-test-secret',
-    ZHIPU_MODELS: 'glm-test',
-    ZHIPU_ENDPOINT: 'https://api.z.ai/api/paas/v4/chat/completions',
-  });
+  const config = cloudConfiguration(
+    root,
+    {
+      ZHIPU_API_KEY: 'glm-test-secret',
+      ZHIPU_MODELS: 'glm-test',
+      ZHIPU_ENDPOINT: 'https://api.z.ai/api/paas/v4/chat/completions',
+    },
+    () => ({}),
+  );
   assert.equal(config.catalog.envFile, join(root, '.env'));
   assert(!JSON.stringify(config.catalog).includes('file-test-secret'));
   assert.deepEqual(config.catalog.providers.find((p) => p.provider === 'openai')?.models, [

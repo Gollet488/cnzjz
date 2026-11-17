@@ -38,22 +38,23 @@ export async function readMP4(file: Blob, checkpoint: () => Promise<void> = asyn
   if (movie.isFragmented) throw new Error('暂不支持 fragmented MP4，请转为普通 H.264 MP4。');
   if (movie.videoTracks.length !== 1) throw new Error('需要且仅支持一个视频轨道。');
   const track = movie.videoTracks[0];
-  if (!/^avc1\./.test(track.codec))
-    throw new Error(
-      `不支持编码 ${track.codec}；目前仅支持 H.264 avc1 MP4，WebM/MOV/HEVC 不降级采样。`,
-    );
   const samples = parser.getTrackSamplesInfo(track.id);
   if (!samples.length || samples.length > 500000)
     throw new Error('视频为空或样本索引超过 500,000 条限制。');
   const entry = samples[0].description as VisualSampleEntry;
-  if (!entry.avcC || samples.some((s) => s.description !== entry))
-    throw new Error('缺少 AVC 配置或视频在中途切换编码参数。');
+  const configuration = /^avc1\./.test(track.codec)
+    ? entry.avcC
+    : /^(hvc1|hev1)\./.test(track.codec)
+      ? entry.hvcC
+      : undefined;
+  if (!configuration || samples.some((s) => s.description !== entry))
+    throw new Error(`缺少受支持的 ${track.codec} 解码配置，或视频在中途切换编码参数。`);
   if (entry.boxes?.some((b) => ['sinf', 'clap'].includes(b.type)))
     throw new Error('暂不支持加密或 clean aperture 视频，请转为普通 H.264 MP4。');
   if (samples.some((s) => s.offset + s.size > file.size || s.size > 16 * 1024 * 1024))
     throw new Error('视频样本越界或单帧压缩数据超过 16 MB。');
   const stream = new MultiBufferStream();
-  entry.avcC.write(stream);
+  configuration.write(stream);
   const description = new Uint8Array(stream.buffer, 8);
   const timeline = sourceTimeline(samples, track.timescale, movie.timescale, track.edits as Edit[]);
   const rotation = trackRotation(track.matrix);

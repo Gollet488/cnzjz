@@ -3,6 +3,16 @@ import { test } from 'node:test';
 import { AnalysisSession } from '../src/analysis/session.ts';
 import type { Landmark } from '../src/types.ts';
 import { humanPose } from '../src/utils/humanPose.ts';
+import { jointAngles } from '../src/utils/poseMath.ts';
+import {
+  hasCollapsedBodySegment,
+  hasForeshortenedTorso,
+  hasUprightTorso,
+  keepConsistentJoints,
+  recoverCollapsedSegments,
+  sameBodyRegion,
+  VideoPoseTrack,
+} from '../src/utils/poseRecovery.ts';
 
 const settings = { threshold: 0.5, window: 4, aspect: 1, metricVersion: '2.1' as const };
 function sideView(kneeX = 0.5) {
@@ -76,4 +86,88 @@ test('loss and reacquisition keep ordered samples and do not invent motion acros
   assert.equal(session.frames[3].points[25].x, first[25].x);
   session.recalculate(settings);
   assert.equal(session.frames[3].velocity.knee.left, null);
+});
+
+test('a same-frame observation can recover a collapsed segment without losing a neighboring angle', () => {
+  const points = sideView();
+  points[11] = { x: 0.45, y: 0.2, z: 0, visibility: 0.9 };
+  points[25] = { ...points[23], x: 0.452 };
+  const retry = sideView();
+  assert(hasCollapsedBodySegment(points, 1));
+  assert.equal(jointAngles(points).knee.left, null);
+  const recovered = recoverCollapsedSegments(points, retry, 1);
+  assert.notEqual(jointAngles(recovered).knee.left, null);
+  assert.strictEqual(recovered[27], points[27]);
+
+  retry[25] = { ...points[27] };
+  assert.strictEqual(recoverCollapsedSegments(points, retry, 1), points);
+  retry[25] = { ...sideView()[25], visibility: 0.1 };
+  assert.strictEqual(recoverCollapsedSegments(points, retry, 1), points);
+});
+
+test('a compact video track needs consecutive evidence before it becomes a recovery target', () => {
+  const track = new VideoPoseTrack();
+  const compact = sideView().map((p) => ({ ...p, x: 0.4 + p.x / 4, y: 0.4 + p.y / 4 }));
+  const elsewhere = compact.map((p) => ({ ...p, x: p.x - 0.3 }));
+  assert(!track.accept(compact, 0, 1));
+  assert(!track.accept(compact, 33, 1));
+  assert(!track.accept([], 66, 1));
+  assert.equal(track.recent(66), undefined);
+  assert(!track.accept(compact, 100, 1));
+  assert(!track.accept(elsewhere, 200, 1));
+  assert(!track.accept(elsewhere, 250, 1));
+  assert(track.accept(elsewhere, 300, 1));
+  assert.strictEqual(track.recent(700), elsewhere);
+  assert.equal(track.recent(701), undefined);
+  assert(track.accept(sideView(), 702, 1));
+});
+
+test('a same-region retry blanks uncertain joints in a deep bend while preserving agreed joints', () => {
+  const points = sideView();
+  points[11] = { x: 0.45, y: 0.45, z: 0, visibility: 0.9 };
+  points[12] = { ...points[11], x: 0.55 };
+  points[24] = { ...points[23], x: 0.55 };
+  points[31] = { ...points[27], y: 0.82 };
+  assert(hasForeshortenedTorso(points, 1));
+  assert(!hasForeshortenedTorso(sideView(), 1));
+  const other = points.map((p) => ({ ...p, x: p.x + 0.3 }));
+  assert(!sameBodyRegion(points, other, 1));
+  assert.strictEqual(keepConsistentJoints(points, other, 1), points);
+  const crop = points.slice();
+  crop[27] = { ...points[27], x: 0.5 };
+  const checked = keepConsistentJoints(points, crop, 1);
+  assert.strictEqual(checked[25], points[25]);
+  assert.equal(checked[27].visibility, 0);
+  assert.equal(checked[31].visibility, 0);
+  assert.equal(jointAngles(checked, 0).knee.left, null);
+
+  const lifting = points.slice();
+  lifting[11] = { ...points[11], y: 0.38 };
+  lifting[12] = { ...points[12], y: 0.38 };
+  lifting[0] = { ...points[11], y: 0.42 };
+  assert(!hasForeshortenedTorso(lifting, 1));
+  assert(!hasUprightTorso(lifting, 1));
+  lifting[11] = { ...lifting[11], y: 0.29 };
+  lifting[12] = { ...lifting[12], y: 0.29 };
+  assert(hasUprightTorso(lifting, 1));
+});
+
+test('two same-frame retries can recover a joint that the video tracker and first retry disagree on', () => {
+  const points = sideView();
+  points[11] = { ...points[23], y: 0.45 };
+  points[12] = { ...points[11], x: 0.55 };
+  points[24] = { ...points[23], x: 0.55 };
+  const crop = points.slice();
+  crop[27] = { ...points[27], x: 0.5 };
+  const mirrored = crop.slice();
+  mirrored[27] = { ...crop[27], x: 0.51 };
+
+  assert.equal(keepConsistentJoints(points, crop, 1)[27].visibility, 0);
+  assert.strictEqual(keepConsistentJoints(points, crop, 1, mirrored)[27], crop[27]);
+  assert.strictEqual(keepConsistentJoints(points, crop, 1, points)[27], points[27]);
+
+  const differentSubject = mirrored.map((p) => ({ ...p, x: p.x + 0.3 }));
+  assert.equal(keepConsistentJoints(points, crop, 1, differentSubject)[27].visibility, 0);
+  mirrored[27] = { ...mirrored[27], visibility: 0.1 };
+  assert.equal(keepConsistentJoints(points, crop, 1, mirrored)[27].visibility, 0);
 });

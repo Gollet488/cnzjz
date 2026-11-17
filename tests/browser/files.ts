@@ -1,10 +1,48 @@
-import { expect, type Page, type TestInfo } from '@playwright/test';
+import { expect, type Page, type Request, type TestInfo } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
-import { AnalysisSession, type Acquisition } from '../../src/analysis/session.ts';
+import {
+  AnalysisSession,
+  METRIC_VERSION,
+  OFFLINE_METRIC_VERSION,
+  type Acquisition,
+} from '../../src/analysis/session.ts';
 import { POINT_NAMES } from '../../src/config.ts';
+import { WEIGHTED_OFFLINE_METRIC_VERSION } from '../../src/types.ts';
 import { createToolRegistry } from '../../src/analysis/tools.ts';
 import { serializeCSV } from '../../src/utils/csv.ts';
+import { localModelRoute } from '../../src/agent/providers/localModel.ts';
+
+export async function selectOllamaModel(
+  page: Page,
+  model: string,
+  address = 'http://127.0.0.1:11434',
+) {
+  const settings = page.getByRole('region', { name: '模型设置' });
+  const menu = page.getByLabel('模型', { exact: true });
+  const toggle = page.getByRole('button', { name: '模型设置', exact: true });
+  if ((await menu.inputValue()) !== 'settings:local') await menu.selectOption('settings:local');
+  if (!(await settings.isVisible())) await toggle.click();
+  if (address !== 'http://127.0.0.1:11434') {
+    await settings.getByLabel('本地服务地址').fill(address);
+    await settings.getByRole('button', { name: '应用地址' }).click();
+  }
+  await settings
+    .getByLabel('检测到的本地模型')
+    .selectOption(JSON.stringify(['ollama', model, address]));
+  await toggle.click();
+}
+
+export const localChatURL = (address: string) => (url: URL) =>
+  url.href === `${address}/api/chat` || url.pathname === localModelRoute;
+
+export function ollamaChatBody(request: Request, address: string) {
+  if (request.method() !== 'POST') return;
+  if (request.url() === `${address}/api/chat`) return request.postDataJSON();
+  if (new URL(request.url()).pathname !== localModelRoute) return;
+  const relay = request.postDataJSON();
+  if (relay?.address === address && relay.path === '/api/chat') return relay.body;
+}
 
 // Admission/abort guard for the existing real-page test. It never supplies a
 // response: admitted requests reach the real proxy; a limit closes the context
@@ -75,7 +113,7 @@ export function realAgentBudget(
 }
 
 // Independent CSV parser: handles quoted delimiters, doubled quotes and CRLF.
-export function parseCSV(bytes: Buffer) {
+export function parseCSV(bytes: Buffer, expectedColumns: number | null = 354) {
   assert.deepEqual([...bytes.subarray(0, 3)], [239, 187, 191]);
   const text = bytes.toString('utf8').slice(1);
   const rows: string[][] = [];
@@ -104,7 +142,7 @@ export function parseCSV(bytes: Buffer) {
     rows.push(row);
   }
   const header = rows.shift()!;
-  assert.equal(header.length, 354);
+  if (expectedColumns !== null) assert.equal(header.length, expectedColumns);
   assert.ok(rows.length);
   return rows.map((values) => {
     assert.equal(values.length, header.length);
@@ -142,13 +180,34 @@ export async function fullCSV(page: Page, info: TestInfo, name: string) {
   );
 }
 
+export async function pauseDemoAfterSampling(page: Page) {
+  const player = page.getByRole('group', { name: '采集播放器' });
+  const clock = player.locator('.rolling-text');
+  await expect
+    .poll(
+      async () => {
+        const [minutes, seconds] = (await clock.textContent({ timeout: 2000 }))!.split(':');
+        return Number(minutes) * 60 + Number(seconds);
+      },
+      { timeout: 35_000 },
+    )
+    .toBeGreaterThanOrEqual(21);
+  await player.getByRole('button', { name: '暂停分析', exact: true }).click();
+}
+
 export function replayCSV(rows: Record<string, string>[], { verifyDerived = true } = {}) {
   const first = rows[0];
+  const metricVersion = first.metric_version;
+  assert.ok(
+    metricVersion === METRIC_VERSION ||
+      metricVersion === WEIGHTED_OFFLINE_METRIC_VERSION ||
+      metricVersion === OFFLINE_METRIC_VERSION,
+  );
   const session = new AnalysisSession(first.source as any, {
     threshold: Number(first.confidence_threshold),
     window: Number(first.filter_window_frames),
     aspect: Number(first.source_aspect),
-    metricVersion: '2.1',
+    metricVersion,
   });
   if (first.source === 'file' && first.synthetic === 'true') session.setFileSynthetic(true);
   for (const row of rows) {

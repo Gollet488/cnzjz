@@ -4,13 +4,13 @@
 
 本项目面向通用人体运动的姿态采集与量化分析，提供本地推理、可追溯数值和 Agent 工具调用。启动、保留 Git 历史的上传步骤和已知限制见 [构建与交付](docs/delivery.md)，参赛要求核对见 [仓库提交清单](docs/submission-checklist.md)，目标需求见 [requirement.md](requirement.md)。
 
-已核验的发布基线为 `b36c10b`。同一 SHA 的 Checks、Pages 部署、线上产物核对及后续修复与待验条件见 [当前交付状态](docs/delivery-status.md)。
+远程发布、本机候选和剩余验收条件见 [当前交付状态](docs/delivery-status.md)。
 
 ## 技术架构
 
 Vue 3 / TypeScript 负责页面和状态，Element Plus 提供交互组件，ECharts 展示时序图表。MediaPipe Pose Landmarker Lite 在浏览器内提取人体关键点；本地视频经过 MP4Box 索引、WebCodecs 解码与 Worker 推理，其他格式先由 FFmpeg WebAssembly 转换。分析层计算通用几何与时序指标，Agent 通过受控工具读取分析结果并交付带证据的报告、视图或导出。
 
-Ollama 由浏览器连接本机服务。DeepSeek、OpenAI GPT、Anthropic Claude、智谱 GLM 和 Moonshot Kimi 通过 Node 代理访问官方 API，支持本机版和带云端模型接口的 HTTPS 自托管版。[系统架构](docs/architecture.md) · [文档索引](docs/README.md)
+AI Agent 可发现本机 Ollama、LM Studio、llama.cpp 和 vLLM 等模型服务。DeepSeek、OpenAI GPT、Anthropic Claude、智谱 GLM 和 Moonshot Kimi 通过 Node 代理访问官方 API，支持本机版和带云端模型接口的 HTTPS 自托管版。[本机模型配置](docs/agent-model-selection.md#本机配置) · [系统架构](docs/architecture.md) · [文档索引](docs/README.md)
 
 ## 启动
 
@@ -26,18 +26,18 @@ pnpm dev
 
 `prepare:assets` 将锁定版本的 MediaPipe 运行文件和固定哈希的 Lite 模型放入 public，模型缺失时需要联网下载。已有资源可以用 `pnpm check:assets` 校验。
 
-基础分析无需 API 密钥。使用云端模型时，在本机版或已配置 Agent 接口的 HTTPS 版选模型、粘贴供应商的官方 API Key，再点「测试当前模型连接」。用完点击「清除 Key」。本机版也可通过 `.env` 配置。[模型连接指南](docs/agent-model-selection.md#快速连接)
+基础分析无需 API 密钥。在「AI Agent 分析」中，选择「本地模型 · 检测与选择」即可查看检测到的本机模型。自定义端口可在模型设置里填写地址。使用云端模型时，选择供应商和模型，再点「测试当前模型连接」。本机版可从环境变量或 `.env` 读取 Key，也可在页面填写临时 Key。HTTPS 自托管版使用页面临时 Key。[模型连接指南](docs/agent-model-selection.md#快速连接)
 
 ## 使用
 
 1. 默认页面使用明确标记的合成姿态演示数据。
 2. 摄像头模式需要浏览器授权；保证单人、全身入镜。
-3. 本地视频支持 MP4、MOV、MKV、AVI、WebM、FLV、WMV、MPEG、TS、3GP、OGV 等容器，不按扩展名拒绝文件。可直接分析的 H.264 视频保留原流程；其他输入自动使用本地 FFmpeg WebAssembly 转为 H.264 后分析，双视频对比使用同一流程。转换资源随 `prepare:assets` 准备，无需上传视频或连接 CDN。支持范围仍受实际编码、文件完整性与设备内存限制；加密文件无法保证支持。单文件最高 500 MB；转换可能耗时较长，可取消，转换结果缩放至不超过 1920×1080，时间轴与完整性以转换后视频为准。CSV 的 `acquisition_mode=webcodecs-transcoded` 标识转换流程。
-4. 分析页可选关节、raw/filtered、区间与关键点，查看角度、速度、轨迹和左右差异。
+3. 本地视频支持 MP4、MOV、MKV、AVI、WebM、FLV、WMV、MPEG、TS、3GP、OGV 等容器，不按扩展名拒绝文件。浏览器能直接读取的视频最大 2 GB。需要 FFmpeg WebAssembly 转换的文件最大 500 MB，双视频对比使用同一套导入流程。转换资源随 `prepare:assets` 准备，无需上传视频或连接 CDN。支持范围受实际编码、文件完整性和设备内存限制。转换可取消，重新编码时横屏最高 1920×1080，竖屏最高 1080×1920，时间轴与完整性以转换后视频为准。CSV 的 `acquisition_mode=webcodecs-transcoded` 标识转换流程。
+4. 分析页可选关节、区间与关键点，查看角度、速度、轨迹和左右差异。角度图可切换原始与滤波，快速动作可在分析设置选用 3 帧窗口。选中历史帧时间轴后，可用方向键逐帧定位。暂停或定位到采样帧后，可用「复核当前帧」放大画面、手动点选三点，并下载单帧复核记录。
 5. 导出页保存 CSV 或 PNG；CSV 支持取消和进度，支持原生文件写入时使用文件流，否则使用内存 Blob。
 6. 在 Agent 页输入目标并选择模型。首次使用可展开「首次连接？查看连接指南」，测试通过后再发送任务。自定义模型 ID 位于「模型设置」。也可使用两段 ROM 比较任务卡手动填参或让已选模型草拟，核对后确认运行。详见 [Agent 工作台指南](docs/agent-workbench.md)。
 
-视频、画面、关键点推理和数值计算留在浏览器。云端任务的指令和必要的工具反馈，经当前站点的代理发给供应商官方 API。临时 Key 在当前页面内存中保留，刷新后清除。HTTPS 自托管代理逐次使用用户提供的 Key。Ollama 需允许页面来源跨域访问。
+视频、画面、关键点推理和数值计算留在浏览器。云端任务的指令和必要的工具反馈，经当前站点的代理发给供应商官方 API。临时 Key 在当前页面内存中保留，刷新后清除。HTTPS 自托管代理逐次使用用户提供的 Key。从公网网页连接本地模型时，需在本地服务允许该网页跨域访问。
 
 GitHub Pages 使用 `/cnzjz/` 静态构建，提供浏览器内视频分析、图表、双视频对比和 CSV/PNG 导出。公网云端 Agent 使用独立的 Node 接口和同源 HTTPS 站点。[公网部署步骤](docs/delivery.md#公网部署云端-agent)
 
@@ -80,7 +80,9 @@ node scripts/evaluate-agent.mjs --model <本地模型名> --repeat 1 --case comp
 
 当前最多保留 18,000 帧。超过此帧数的本地视频会抽样覆盖全片，进度与 CSV 会注明抽样。二维投影、遮挡、视角和置信度会影响指标；系统不识别运动种类、不评分、不判断动作对错。本机开发和默认生产预览使用根路径。
 
-在「姿态对比」上传参考和待测视频，分别拖动起点滑块，将同一个动作的开始画面对齐。开始后按约 10 Hz 比较重叠时间段，显示各关节的二维夹角和「待测减参考」差值。可点击最大差异，回看对应的双路画面和各自的原视频时间。两路均通过置信度阈值时才显示该关节的差值。建议用相近的视角与动作节奏，回看结果来自已采样画面。
+公开 Vicon 动捕对照已完成下蹲样本的二维精度实测。当前模型的角度结果整体未达到候选精度门槛，适合结合画面作相近拍摄条件下的相对观察。[独立参考评测](docs/pose-accuracy.md)
+
+在「姿态对比」上传参考和待测视频，分别拖动起点滑块，将同一个动作的开始画面对齐。两路使用和「采集与分析」相同的视频追踪与滤波，再按源帧时间在重叠区间以约 10 Hz 配对，显示各关节的二维夹角和「待测减参考」差值。可点击最大差异，回看对应的双路画面和各自的原视频时间。两路均通过置信度阈值时才显示该关节的差值。建议用相近的视角与动作节奏。
 
 ## 团队信息
 

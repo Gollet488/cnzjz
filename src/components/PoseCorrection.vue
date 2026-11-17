@@ -146,7 +146,7 @@ const priority = computed(() => {
 </script>
 
 <template>
-  <section class="panel correction-panel" aria-labelledby="correction-heading">
+  <section class="correction-panel" aria-labelledby="correction-heading">
     <div class="panel-heading">
       <div class="section-title">
         <span class="title-marker" />
@@ -263,17 +263,18 @@ const priority = computed(() => {
 
 <style scoped>
 .correction-panel {
-  margin-bottom: 20px;
+  container-type: inline-size;
 }
-.correction-panel .panel-heading {
-  padding-bottom: 12px;
+.dashboard-capture .correction-panel .panel-heading {
+  padding: 10px 12px;
 }
 .correction-rule {
   min-width: 0;
-  margin: 0 20px 10px;
-  padding: 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 5px;
+  margin: 0 10px 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  box-shadow: var(--capture-recessed);
 }
 .correction-rule legend {
   padding: 0 4px;
@@ -281,15 +282,13 @@ const priority = computed(() => {
   font-size: 12px;
 }
 .correction-body {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 20px;
+  display: grid;
+  gap: 10px;
   font-size: 12px;
 }
 .correction-fields {
-  flex: 1 1 360px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   align-content: center;
   align-items: end;
@@ -305,13 +304,18 @@ const priority = computed(() => {
   height: 43px;
   padding: 0 7px;
   border: 1px solid var(--line-strong);
-  border-radius: 5px;
-  background: var(--surface);
+  border-radius: var(--control-radius);
+  background: var(--capture-surface);
+  box-shadow: var(--capture-recessed);
   color: var(--ink);
   font: inherit;
 }
 .correction-fields .field-error-message {
   grid-column: 1 / -1;
+}
+.correction-fields input:not(:focus) {
+  background: var(--capture-surface);
+  box-shadow: var(--capture-recessed);
 }
 .correction-fields select:disabled {
   background: var(--surface-muted);
@@ -324,10 +328,9 @@ const priority = computed(() => {
   gap: 8px;
 }
 .correction-feedback {
-  flex: 1 1 240px;
   padding: 9px 11px;
-  border-radius: 5px;
-  background: var(--surface-muted);
+  border-radius: var(--control-radius);
+  background: var(--surface);
   color: var(--text);
   line-height: 1.6;
 }
@@ -354,14 +357,14 @@ const priority = computed(() => {
   margin-right: auto;
 }
 .correction-note {
-  margin: 10px 20px 14px;
+  margin: 10px 12px 12px;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.5;
 }
-@media (max-width: 520px) {
+@container (min-width: 520px) {
   .correction-fields {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 </style>

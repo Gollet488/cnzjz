@@ -627,7 +627,10 @@ export class AgentRuntime {
         run.rounds++;
         assertActive();
         if (boundRom) verifyRomIntent(reply.calls, boundRom, this.session.info());
-        if (preservesCloudContext(provider.id.replace(/-api$/, ''), provider.model))
+        if (
+          provider.id === 'local-openai-local' ||
+          preservesCloudContext(provider.id.replace(/-api$/, ''), provider.model)
+        )
           pendingNativeCalls = new Set(reply.calls.flatMap((call) => (call.id ? [call.id] : [])));
         if (!reply.calls.length) {
           if (++recoveries > this.limits.recoveries) throw new Error('RECOVERY_LIMIT');

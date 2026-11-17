@@ -11,11 +11,17 @@ import {
   assessDeliveryScope,
 } from '../../src/agent/evaluation.ts';
 import { resolveCitation } from '../../src/agent/runtime.ts';
-import { MODEL_INSTRUCTION_VERSION, MODEL_SYSTEM_PROMPT } from '../../src/agent/modelProtocol.ts';
+import {
+  MODEL_INSTRUCTION_VERSION,
+  MODEL_PROTOCOL_VERSION,
+  MODEL_SYSTEM_PROMPT,
+} from '../../src/agent/modelProtocol.ts';
+import { ROM_INTENT_PROMPT } from '../../src/agent/romIntent.ts';
 import { cloudProviders } from '../../src/agent/modelCatalog.ts';
 import { DEEPSEEK_ADDRESS, DEEPSEEK_INFERENCE } from '../../src/agent/providers/deepseek.ts';
 import {
   fullCSV,
+  pauseDemoAfterSampling,
   downloadFile,
   verifyAudit,
   replayCSV,
@@ -113,8 +119,7 @@ test('REAL cloud model three turns and saved report/CSV, bounded fixed configura
       );
       await page.goto('/');
       record.browser = await page.evaluate(() => navigator.userAgent);
-      await expect(page.locator('.transport-time')).toContainText('00:21', { timeout: 25000 });
-      await page.getByRole('button', { name: '暂停分析', exact: true }).click();
+      await pauseDemoAfterSampling(page);
       const rows = await fullCSV(page, info, `session-${repetition}-material.csv`);
       const session = replayCSV(rows);
       const label = `session-${repetition}`;
@@ -210,11 +215,22 @@ test('REAL cloud model three turns and saved report/CSV, bounded fixed configura
         expect(run.model).toBe(model);
         expect(record.probes).toBe(0);
         expect(run.status).toBe('completed');
-        expect(run.modelProtocolVersion).toBe('3.12.0');
+        expect(run.modelProtocolVersion).toBe(MODEL_PROTOCOL_VERSION);
+        const reviewedLocally = run.romReview?.parameterSource === 'local';
         expect(audit.requests[0].messages[0]).toEqual({
           role: 'system',
-          content: MODEL_SYSTEM_PROMPT,
+          content: reviewedLocally ? ROM_INTENT_PROMPT : MODEL_SYSTEM_PROMPT,
         });
+        if (reviewedLocally) {
+          expect(audit.requests).toHaveLength(1);
+          expect(audit.requests[0].reply.calls).toEqual([
+            {
+              name: 'review_rom_intent',
+              arguments: { intent: ['compare', 'revise', 'deliver'][index] },
+            },
+          ]);
+        }
+        expect(run.romReview?.confirmation).toBeDefined();
         expect(run.timing.application).toBe('ready');
         expect(run.timing.audit).toBe('saved');
         expect(run.completion.missing).toEqual([]);

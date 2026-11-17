@@ -23,7 +23,9 @@ pnpm build
 
 本机有固定资源时可运行 `pnpm check:assets` 校验；缺少模型时，`pnpm prepare:assets` 会从固定官方地址下载并核对哈希。浏览器测试使用 Playwright Chromium 或本机 Chrome，Pages 检查使用 Chrome。根路径和 Pages 的复跑命令见候选证据索引。
 
-静态 Pages 支持浏览器内的视频分析、图表、双视频对比和 CSV/PNG 导出。对比由用户为每路选择起点，在重叠区间按约 10 Hz 采样，以两路可信关节的二维投影角度计算差值，可回看两路各自的源时间。摄像头需要安全上下文及授权。Ollama 需要本机服务允许页面来源且可被浏览器访问。官方云端 API 通过本机 Vite 开发或生产预览内的 Node 代理访问，可使用页面临时 Key 或本机 `.env`。[环境配置](environment.md) · [模型连接指南](agent-model-selection.md#快速连接)
+静态 Pages 支持浏览器内的视频分析、图表、双视频对比和 CSV/PNG 导出。对比由用户为每路选择起点，在重叠区间按最多约 10 Hz 采样。对比页显示采样覆盖、双路有效角度和几何距离，可按样本回看或在暂停、完成后导出两路时间、角度、差值和缺失记录。[对比采样说明](offline-video.md#双视频对比)
+
+摄像头需要安全上下文及授权。Ollama 需要本机服务允许页面来源且可被浏览器访问。官方云端 API 通过本机 Vite 开发或生产预览内的 Node 代理访问，可使用页面临时 Key 或本机 `.env`。[环境配置](environment.md) · [模型连接指南](agent-model-selection.md#快速连接)
 
 ## 核对候选与发布条件
 

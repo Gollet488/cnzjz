@@ -9,12 +9,16 @@ import { ROM_INTENT_PROMPT } from '../../src/agent/romIntent.ts';
 import { resolveCitation } from '../../src/agent/runtime.ts';
 import {
   fullCSV,
+  pauseDemoAfterSampling,
   downloadFile,
   verifyAudit,
   parseCSV,
   rom,
   numericEqual,
   realAgentBudget,
+  localChatURL,
+  ollamaChatBody,
+  selectOllamaModel,
 } from './files.ts';
 
 test('REAL MODEL demonstration: compare → right/second interval → evidence/view → report/CSV', async ({
@@ -50,8 +54,7 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
   );
   await page.goto('/');
   summary.userAgent = await page.evaluate(() => navigator.userAgent);
-  await expect(page.locator('.transport-time')).toContainText('00:21', { timeout: 25_000 });
-  await page.getByRole('button', { name: '暂停分析', exact: true }).click();
+  await pauseDemoAfterSampling(page);
   const rows = await fullCSV(page, info, 'real-session.csv');
   summary.reference = {
     sessionId: rows[0].session_id,
@@ -60,11 +63,7 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
   };
   await persist();
   await page.locator('nav').getByRole('button', { name: 'AI Agent 分析' }).click();
-  const choice = JSON.stringify(['ollama', model, 'http://127.0.0.1:11434']);
-  await expect(
-    page.getByLabel('模型', { exact: true }).locator('option').filter({ hasText: model }),
-  ).toBeAttached();
-  await page.getByLabel('模型', { exact: true }).selectOption(choice);
+  await selectOllamaModel(page, model, address);
   await page.getByRole('button', { name: '模型设置', exact: true }).click();
   const settings = page.getByRole('region', { name: '模型设置' });
   await settings.getByRole('button', { name: '测试连接', exact: true }).click();
@@ -119,8 +118,10 @@ test('REAL MODEL demonstration: compare → right/second interval → evidence/v
       .click({ timeout: 2000 })
       .catch(() => {});
   });
-  await page.route(`${address}/api/chat`, (route) =>
-    budget.beforeRequest() ? route.continue() : route.abort(),
+  await page.route(localChatURL(address), (route) =>
+    !ollamaChatBody(route.request(), address) || budget.beforeRequest()
+      ? route.continue()
+      : route.abort(),
   );
   try {
     for (const [index, goal] of goals.entries()) {

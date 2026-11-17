@@ -1,4 +1,6 @@
 export const METRIC_VERSION = '2.1' as const;
+export const WEIGHTED_OFFLINE_METRIC_VERSION = '2.2' as const;
+export const OFFLINE_METRIC_VERSION = '2.3' as const;
 
 export interface Landmark {
   x: number;
@@ -16,7 +18,10 @@ export interface AnalysisParameters {
   threshold: number;
   window: number;
   aspect: number;
-  metricVersion: typeof METRIC_VERSION;
+  metricVersion:
+    | typeof METRIC_VERSION
+    | typeof WEIGHTED_OFFLINE_METRIC_VERSION
+    | typeof OFFLINE_METRIC_VERSION;
 }
 export interface VarianceSummary {
   value: number | null;

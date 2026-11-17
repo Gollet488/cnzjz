@@ -34,7 +34,7 @@ flowchart TD
   Tools --> Metrics
   Tools --> Feedback[有界反馈 / 证据与审计]
   Feedback --> Agent
-  Agent --> Model[本机 Ollama 或经同源代理访问官方云端 API]
+  Agent --> Model[本机 Ollama 或 OpenAI 兼容服务，或官方云端 API]
   Model --> Agent
   Agent --> Deliver[报告 / 视图 / 导出]
 ```
@@ -45,7 +45,7 @@ flowchart TD
 
 关键点经过阈值、滤波和几何计算生成角度、速度、轨迹等通用指标。会话、参数和修订号共同约束工具证据；输入或参数变化时，旧分析结果与视图需要失效，避免沿用过期结论。详见 [分析契约](analysis-contract.md)。
 
-Agent 使用模型提供的工具调用，交由本地运行时校验和执行，再将有界结果反馈给模型。报告、视图和导出与实际工具证据关联；运行时保留执行审计。Ollama / DeepSeek 共用模型适配接口，详见 [Agent 运行时](agent-runtime.md) 和 [控制协议](agent-control-protocol.md)。
+Agent 使用模型提供的工具调用，交由本地运行时校验和执行，再将有界结果反馈给模型。报告、视图和导出与实际工具证据关联，运行时保留执行审计。Ollama、本地 OpenAI 兼容服务和云端供应商共用模型适配接口。详见 [Agent 运行时](agent-runtime.md) 和 [控制协议](agent-control-protocol.md)。
 
 ## 运行与部署
 

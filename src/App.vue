@@ -10,12 +10,15 @@ import {
   reactive,
   watch,
   nextTick,
+  onMounted,
+  onBeforeUnmount,
 } from 'vue';
 import {
   ArrowLeftRight,
   ShieldCheck,
   ChevronDown,
   ArrowUpRight,
+  ArrowUp,
   ArrowDown,
   Settings2,
   BookOpen,
@@ -39,8 +42,6 @@ import {
   Trash2,
   X,
   SlidersHorizontal,
-  ChartNoAxesCombined,
-  Bot,
   Moon,
   Sun,
 } from 'lucide-vue-next';
@@ -58,8 +59,8 @@ import { WorkspaceApplicationError } from './agent/completion.ts';
 import type { AgentRun } from './agent/runtime.ts';
 import { DEFAULT_SETTINGS, JOINTS, MAX_FRAMES, POINT_NAMES } from './config';
 import { DEMO_SIZE } from './utils/dimensions';
-import { angleValue } from './utils/poseMath';
-import { METRIC_VERSION } from './analysis/session';
+import { angleValue, shortProjectionSides } from './utils/poseMath';
+import { METRIC_VERSION, OFFLINE_METRIC_VERSION, type SessionInfo } from './analysis/session';
 import { sourceClock, sourceLabel, sourceTimeSpan } from './analysis/sourceDisplay';
 import { createToolRegistry } from './analysis/tools';
 import type { ChartView } from './analysis/tools';
@@ -91,32 +92,32 @@ const AgentPanel = defineAsyncComponent({
   ...featureLoading,
   loader: () => import('./components/AgentPanel.vue'),
 });
+const AngleReview = defineAsyncComponent({
+  ...featureLoading,
+  loader: () => import('./components/AngleReview.vue'),
+});
 const nav = [
   {
     id: 'workspace',
-    icon: ScanLine,
     label: '采集与分析',
     description: '采集姿态关键点，查看关节角度与重心变化。',
   },
   {
     id: 'analysis',
-    icon: ChartNoAxesCombined,
     label: '时序可视化',
     description: '查看本次会话的关节角度、重心与统计指标。',
   },
   {
     id: 'compare',
-    icon: ArrowLeftRight,
     label: '姿态对比',
     description: '对齐两段视频，查看动作差异出现的关节和时刻。',
   },
   {
     id: 'agent',
-    icon: Bot,
     label: 'AI Agent 分析',
     description: '输入分析目标，由 Agent 调用本地工具计算指标。',
   },
-  { id: 'export', icon: Download, label: '数据导出', description: '下载逐帧数据与可视化报告。' },
+  { id: 'export', label: '数据导出', description: '下载逐帧数据与可视化报告。' },
 ];
 const page = ref('workspace'),
   source = ref<Source>('demo'),
@@ -127,6 +128,12 @@ const page = ref('workspace'),
   fullOpen = ref(false),
   busy = ref(false);
 const currentPage = computed(() => nav.find((item) => item.id === page.value) ?? nav[0]!);
+const pageTop = ref<HTMLElement>();
+const pageContent = ref<HTMLElement>();
+const showBackToTop = ref(false);
+const pageScrolling = ref(false);
+let scrollIdleTimer: number | undefined;
+let returningToTop = false;
 const settings = reactive({ ...DEFAULT_SETTINGS });
 const joint = ref<Joint>('knee'),
   markers = ref<Marker[]>([]),
@@ -140,6 +147,7 @@ const joint = ref<Joint>('knee'),
   offlineSampleTotal = ref<number | null>(null);
 const pointIndex = ref(15),
   pointBasis = ref<'raw' | 'filtered'>('filtered');
+const angleChartBasis = ref<ChartView['basis']>('filtered');
 const analysisMounted = ref(false),
   agentMounted = ref(false);
 const noMarkers: Marker[] = [];
@@ -257,6 +265,63 @@ initializeDemo();
 const latest = computed(() =>
   selectedIndex.value >= 0 ? frames.value[selectedIndex.value] : frames.value.at(-1),
 );
+const angleReviewOpen = ref(false);
+const angleReviewError = ref('');
+const angleReview = shallowRef<{
+  image: ImageBitmap;
+  session: SessionInfo;
+  sample: PoseFrame;
+  joint: Joint;
+}>();
+let angleReviewRequest: AbortController | undefined;
+function releaseAngleReview() {
+  angleReviewRequest?.abort();
+  angleReviewRequest = undefined;
+  angleReview.value?.image.close();
+  angleReview.value = undefined;
+}
+async function openAngleReview() {
+  const target = stage.value;
+  const sample = latest.value;
+  if (
+    playing.value ||
+    busy.value ||
+    source.value === 'demo' ||
+    !target ||
+    !sample ||
+    angleReviewOpen.value
+  )
+    return;
+  const request = new AbortController();
+  angleReviewRequest = request;
+  const session = sessionInfo.value;
+  const selectedJoint = joint.value;
+  angleReviewError.value = '';
+  angleReviewOpen.value = true;
+  try {
+    const image = await target.readReviewImage(sample.time, request.signal);
+    if (request.signal.aborted) image.close();
+    else angleReview.value = { image, session, sample, joint: selectedJoint };
+  } catch (error) {
+    if (!request.signal.aborted)
+      angleReviewError.value = error instanceof Error ? error.message : '无法读取复核画面。';
+  }
+}
+watch(
+  angleReviewOpen,
+  (open) => {
+    if (!open) releaseAngleReview();
+  },
+  { flush: 'sync' },
+);
+watch(
+  [sessionInfo, latest, joint, page, busy, playing],
+  () => {
+    angleReviewOpen.value = false;
+  },
+  { flush: 'sync' },
+);
+onBeforeUnmount(releaseAngleReview);
 const duration = computed(() => frames.value.at(-1)?.time ?? 0);
 const chartCursorTime = computed(() => (selectedIndex.value >= 0 ? latest.value?.time : undefined));
 const playbackProgress = computed(() => {
@@ -317,6 +382,47 @@ const maxVelocity = computed(() => selectedSummary.value.maxVelocity);
 const jointSummaries = computed(() => selectedSummary.value.joints);
 const currentAngle = (key: Joint, side: Channel) =>
   latest.value ? angleValue(latest.value.angles, key, side) : null;
+function stableCaptureHint<T>(read: () => T, scope: () => string) {
+  const shown = shallowRef(read());
+  watch([read, scope, playing], ([value, key, active], [, previousKey], onCleanup) => {
+    if (!active || key !== previousKey) shown.value = value;
+    else if (value !== shown.value) {
+      // Keep brief frame-to-frame changes out of the capture UI. Paused review
+      // shows the selected frame immediately.
+      const timer = setTimeout(() => (shown.value = value), 240);
+      onCleanup(() => clearTimeout(timer));
+    }
+  });
+  return shown;
+}
+const shortProjection = stableCaptureHint(
+  () => {
+    if (source.value === 'demo' || !latest.value) return '';
+    const { threshold, aspect } = sessionInfo.value.parameters;
+    const sides = shortProjectionSides(latest.value.rawPoints, joint.value, threshold, aspect);
+    if (!sides.length) return '';
+    const label = JOINTS.find(({ key }) => key === joint.value)!.label;
+    return `${sides.length === 2 ? '双侧' : sides[0] === 'left' ? '左侧' : '右侧'}${label}`;
+  },
+  () => `${sessionInfo.value.sessionId}/${joint.value}`,
+);
+const captureQualityLabels = {
+  waiting: '等待采集',
+  missing: '当前帧无可用姿态',
+  partial: '部分关键点不可用',
+  tracked: '单人姿态 · 本地分析',
+} as const;
+const captureQuality = stableCaptureHint<keyof typeof captureQualityLabels>(
+  () =>
+    !latest.value
+      ? 'waiting'
+      : !latest.value.points.length
+        ? 'missing'
+        : lowConfidenceCount.value
+          ? 'partial'
+          : 'tracked',
+  () => sessionInfo.value.sessionId,
+);
 function recalculate() {
   playing.value = false;
   agentChart.value = null;
@@ -396,7 +502,12 @@ function reset(resume = true, fileName?: string) {
   playing.value = false;
   session.reset(
     source.value,
-    { ...session.info().parameters, threshold: settings.threshold, window: settings.window },
+    {
+      ...session.info().parameters,
+      threshold: settings.threshold,
+      window: settings.window,
+      metricVersion: source.value === 'file' ? OFFLINE_METRIC_VERSION : METRIC_VERSION,
+    },
     fileName,
   );
   if (source.value === 'file') session.setFileSynthetic(syntheticFile.value);
@@ -469,6 +580,20 @@ function seek(value: number | number[]) {
   // seek; a value-only prop watcher cannot represent that request.
   if (source.value === 'file') stage.value?.seekToTime(seekTime.value);
 }
+function stepHistory(event: KeyboardEvent) {
+  const direction =
+    event.key === 'ArrowRight' || event.key === 'ArrowUp'
+      ? 1
+      : event.key === 'ArrowLeft' || event.key === 'ArrowDown'
+        ? -1
+        : 0;
+  if (!direction || !frames.value.length) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const last = frames.value.length - 1;
+  const current = selectedIndex.value < 0 ? last : selectedIndex.value;
+  seek(frames.value[Math.max(0, Math.min(last, current + direction))].time);
+}
 function agentRange(start: number, end: number) {
   agentChart.value = {
     ...agentSelection.value,
@@ -507,13 +632,7 @@ function offlineStatus(state: OfflineState, metadata: OfflineMetadata | null) {
   offlineSampleTotal.value = metadata?.sampleTotal ?? null;
   const sampled = metadata && metadata.sampleTotal < metadata.total;
   session.setAcquisition({
-    mode: metadata?.transcoded
-      ? sampled
-        ? 'webcodecs-transcoded-sampled'
-        : 'webcodecs-transcoded'
-      : sampled
-        ? 'webcodecs-sampled'
-        : 'webcodecs',
+    mode: `webcodecs${metadata?.transcoded ? '-transcoded' : ''}${metadata?.clipped ? '-clip' : ''}${sampled ? '-sampled' : ''}`,
     status: state,
     expectedFrames: metadata?.total ?? null,
     processedFrames: session.frames.length,
@@ -524,6 +643,7 @@ function offlineStatus(state: OfflineState, metadata: OfflineMetadata | null) {
   publishSession();
 }
 async function redecode() {
+  if (busy.value) return;
   reset(false);
   await nextTick();
   playing.value = true;
@@ -572,9 +692,64 @@ async function report() {
     ElMessage.error(reportMessage.value);
   }
 }
+function updateBackToTop() {
+  const headerBottom = pageTop.value?.getBoundingClientRect().bottom ?? Infinity;
+  const revealAfter = Math.min(144, window.innerHeight * 0.22);
+  const threshold = showBackToTop.value ? 32 : revealAfter;
+  showBackToTop.value = !returningToTop && page.value !== 'export' && headerBottom <= -threshold;
+}
+function stopPageScrolling() {
+  pageScrolling.value = false;
+  returningToTop = false;
+  updateBackToTop();
+}
+function waitForScrollIdle() {
+  window.clearTimeout(scrollIdleTimer);
+  scrollIdleTimer = window.setTimeout(stopPageScrolling, 450);
+}
+function handlePageScroll() {
+  updateBackToTop();
+  pageScrolling.value = showBackToTop.value;
+  if (pageScrolling.value || returningToTop) waitForScrollIdle();
+}
+function returnToTop() {
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  returningToTop = true;
+  showBackToTop.value = false;
+  pageScrolling.value = false;
+  waitForScrollIdle();
+  pageTop.value?.focus({ preventScroll: true });
+  window.scrollTo({ top: 0, behavior: reduceMotion ? 'instant' : 'smooth' });
+}
+onMounted(() => {
+  window.addEventListener('scroll', handlePageScroll, { passive: true });
+  window.addEventListener('resize', updateBackToTop);
+  updateBackToTop();
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', handlePageScroll);
+  window.removeEventListener('resize', updateBackToTop);
+  window.clearTimeout(scrollIdleTimer);
+});
 watch(page, () => {
   if (page.value !== 'workspace') playing.value = false;
 });
+watch(
+  page,
+  (_, __, onCleanup) => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    window.clearTimeout(scrollIdleTimer);
+    stopPageScrolling();
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    const animation = pageContent.value?.animate([{ opacity: 0.92 }, { opacity: 1 }], {
+      duration: 120,
+      easing: 'ease-out',
+    });
+    onCleanup(() => animation?.cancel());
+  },
+  { flush: 'post' },
+);
 watch(
   () => [settings.window, settings.threshold],
   () => {
@@ -595,7 +770,7 @@ defineExpose({ analysisTools, sessionInfo });
 <template>
   <div class="app-shell">
     <div
-      v-if="csvState !== 'idle' && page !== 'export' && !exportOpen"
+      v-if="csvState !== 'idle' && page !== 'export' && !exportOpen && !angleReviewOpen"
       class="csv-status"
       role="status"
       aria-live="polite"
@@ -620,25 +795,20 @@ defineExpose({ analysisTools, sessionInfo });
       <button v-else @click="csvState = 'idle'">关闭</button>
     </div>
     <div class="main-shell">
-      <header class="topbar">
+      <header ref="pageTop" class="topbar" tabindex="-1">
         <a class="brand" href="#" @click.prevent="page = 'workspace'">
-          <img :src="brandMark" alt="" width="36" height="36" />
-          <strong>Kinetic <span>动观</span></strong>
+          <img :src="brandMark" alt="" width="26" height="26" />
+          <strong>Colourful Move</strong>
         </a>
         <nav class="topbar-nav" aria-label="主导航">
           <button
             v-for="item in nav"
             :key="item.id"
             type="button"
-            :aria-label="item.label"
             :aria-current="page === item.id ? 'page' : undefined"
-            :title="page === item.id ? undefined : item.label"
             @click="page = item.id"
           >
-            <component :is="item.icon" :size="18" aria-hidden="true" />
-            <span class="topbar-nav-label" aria-hidden="true"
-              ><span>{{ item.label }}</span></span
-            >
+            {{ item.label }}
           </button>
         </nav>
         <div class="icon-actions">
@@ -653,11 +823,40 @@ defineExpose({ analysisTools, sessionInfo });
             <Sun :size="16" aria-hidden="true" />
             <Moon :size="16" aria-hidden="true" />
           </button>
-          <IconButton label="使用指南" @click="guideOpen = true"><BookOpen /></IconButton>
-          <IconButton label="分析设置" @click="settingsOpen = true"><Settings2 /></IconButton>
+          <IconButton
+            label="使用指南"
+            class="glass-icon-button"
+            expand-start
+            aria-haspopup="dialog"
+            @click="guideOpen = true"
+          >
+            <BookOpen />
+          </IconButton>
+          <IconButton
+            label="分析设置"
+            class="glass-icon-button"
+            expand-start
+            aria-haspopup="dialog"
+            @click="settingsOpen = true"
+          >
+            <Settings2 />
+          </IconButton>
         </div>
       </header>
-      <main>
+      <Transition name="back-to-top">
+        <button
+          v-show="showBackToTop"
+          type="button"
+          class="back-to-top"
+          :data-idle="!pageScrolling || undefined"
+          :inert="!showBackToTop"
+          aria-label="返回顶部"
+          @click="returnToTop"
+        >
+          <ArrowUp :size="18" aria-hidden="true" />
+        </button>
+      </Transition>
+      <main ref="pageContent">
         <div class="page-heading">
           <div>
             <h1>{{ currentPage.label }}</h1>
@@ -753,13 +952,17 @@ defineExpose({ analysisTools, sessionInfo });
                     v-model="joint"
                     size="small"
                     aria-label="选择分析关节"
-                    style="width: 100px"
+                    class="chart-joint-select"
                     ><el-option
                       v-for="item in JOINTS"
                       :key="item.key"
                       :label="item.label"
                       :value="item.key" /></el-select
-                  ><IconButton label="放大角度图表" @click="fullOpen = true"
+                  ><IconButton
+                    label="放大角度图表"
+                    expand-start
+                    aria-haspopup="dialog"
+                    @click="fullOpen = true"
                     ><Maximize2 /></IconButton></div></div
               ><TimeChart
                 :frames="visibleFrames"
@@ -767,12 +970,19 @@ defineExpose({ analysisTools, sessionInfo });
                 :joint="joint"
                 :markers="markers"
                 :interval="range"
+                :angle-basis="angleChartBasis"
                 kind="angle"
                 :active="page === 'workspace' || page === 'analysis'"
                 :expanded="page === 'analysis'"
                 :cursor-time="chartCursorTime"
                 @seek="seek"
                 @range="selectChartRange" /><div class="chart-footer"
+                ><label class="angle-basis-control">
+                  角度口径
+                  <select v-model="angleChartBasis">
+                    <option value="filtered">滤波</option>
+                    <option value="raw">原始</option>
+                  </select> </label
                 ><span><MoveUpRight :size="12" />Shift 拖动平移 · 滚轮缩放</span
                 ><button v-if="page === 'workspace'" @click="page = 'analysis'"
                   >探索时序数据<ArrowUpRight :size="12" /></button></div
@@ -835,7 +1045,28 @@ defineExpose({ analysisTools, sessionInfo });
                   :style="{
                     width: ((currentAngle(item.key, 'right') ?? 0) / 180) * 100 + '%',
                   }" /></span></button
-            ><div class="joint-footnote">角度已滤波，脊柱显示中线值。</div
+            ><div class="joint-footnote">
+              角度已滤波，脊柱显示中线值。
+              <p
+                v-if="source !== 'demo'"
+                class="projection-note"
+                :data-warning="Boolean(shortProjection)"
+              >
+                {{
+                  shortProjection
+                    ? `${shortProjection}投影较短，建议换视角`
+                    : '二维夹角受拍摄视角影响'
+                }}
+              </p>
+              <el-button
+                v-if="source !== 'demo'"
+                class="angle-review-trigger"
+                size="small"
+                :disabled="!latest || playing || busy"
+                :title="!latest ? '采集后可复核' : playing ? '暂停后可复核' : undefined"
+                @click="openAngleReview"
+                >复核当前帧</el-button
+              > </div
             ><div class="center-summary"
               ><div class="subsection-title"><Target :size="15" /><b>近似重心</b></div
               ><div class="coordinate-row"
@@ -846,26 +1077,33 @@ defineExpose({ analysisTools, sessionInfo });
                 ></div
               ><p>归一化坐标，按左右髋部置信度加权</p></div
             ><div class="filter-status"
-              ><div><CheckCheck :size="15" /><span>滑动均值滤波已启用</span></div
+              ><div
+                ><CheckCheck :size="15" /><span>{{
+                  source === 'file' ? '动作自适应滤波已启用' : '滑动均值滤波已启用'
+                }}</span></div
               ><span>{{ settings.window }} 帧窗口</span></div
             ></aside
           >
 
-          <div v-show="page === 'workspace'" class="dashboard-capture">
-            <section
-              id="pose-capture"
-              class="panel capture-panel"
-              aria-labelledby="capture-title"
-              tabindex="-1"
-            >
-              <div class="panel-heading capture-heading">
-                <div class="section-title"
-                  ><span class="title-marker" /><h2 id="capture-title">姿态采集</h2></div
-                >
-                <IconButton label="显示与分析设置" @click="settingsOpen = true">
-                  <SlidersHorizontal />
-                </IconButton>
-              </div>
+          <section
+            v-show="page === 'workspace'"
+            id="pose-capture"
+            class="panel dashboard-capture capture-panel"
+            aria-labelledby="capture-title"
+            tabindex="-1"
+          >
+            <div class="panel-heading capture-heading">
+              <div class="section-title"
+                ><span class="title-marker" /><h2 id="capture-title">姿态采集</h2></div
+              >
+              <IconButton
+                class="capture-settings"
+                label="显示与分析设置"
+                expand-start
+                @click="settingsOpen = true"
+              >
+                <SlidersHorizontal />
+              </IconButton>
               <div class="source-toolbar">
                 <div class="source-tabs" role="group" aria-label="采集来源">
                   <button
@@ -891,131 +1129,140 @@ defineExpose({ analysisTools, sessionInfo });
                   </button>
                 </div>
               </div>
-              <label
-                v-if="source === 'file'"
-                style="display: block; padding: 8px 18px; font-size: 12px"
-              >
-                <input v-model="syntheticFile" type="checkbox" @change="fileProvenance" />
-                生成/合成视频素材（synthetic）
-              </label>
-              <PoseStage
-                ref="stage"
-                :source="source"
-                :playing="playing"
-                :settings="settings"
-                :selected-frame="latest"
-                :source-aspect="sessionInfo.parameters.aspect"
-                :seek-time="seekTime"
-                :session-id="sessionInfo.sessionId"
-                @frame="capture"
-                @status="status"
-                @ready="ready"
-                @ended="playing = false"
-                @busy="busy = $event"
-                @offline="offlineStatus"
-              />
-              <div class="capture-legend"
-                ><span><i class="legend-dot mint" />人体骨骼</span
-                ><span><i class="legend-dot amber" />近似重心</span
-                ><span class="capture-quality"
-                  ><i
-                    class="mini-dot"
-                    :class="
-                      latest?.points.length === 33 && !lowConfidenceCount ? 'green-dot' : 'red-dot'
-                    "
-                  />{{
-                    source === 'demo'
-                      ? '合成序列 · 非推理结果'
-                      : !latest
-                        ? '等待采集'
-                        : !latest.points.length
-                          ? '当前帧无可用姿态'
-                          : lowConfidenceCount
-                            ? '部分关键点可用'
-                            : '单人姿态 · 本地分析'
-                  }}</span
-                ></div
-              >
-              <div class="transport"
-                ><PlaybackTransport
-                  :playing="playing"
-                  :busy="busy"
-                  :time="latest?.time ?? 0"
-                  :progress="playbackProgress"
-                  @toggle="togglePlay"
-                /><div class="transport-main"
-                  ><IconButton label="重置会话" @click="reset()"><RotateCcw /></IconButton
-                  ><button class="text-button" @click="recalculate">重算指标</button
-                  ><button v-if="source === 'file'" class="text-button" @click="redecode">{{
-                    sessionInfo.acquisition?.mode.endsWith('-sampled')
-                      ? '重新抽样分析'
-                      : '重新逐帧分析'
-                  }}</button
-                  ><span class="transport-divider" /><button class="text-button" @click="mark"
-                    ><Flag :size="14" />手动打点</button
-                  ><button
-                    class="text-button clip-button"
-                    :class="{ clipping: clipStart !== null }"
-                    @click="clip"
-                    ><Scissors :size="14" />{{
-                      clipStart === null ? '截取片段' : '完成截取'
-                    }}</button
-                  ></div
-                ><div class="timeline-row"
-                  ><el-slider
-                    :model-value="latest?.time ?? 0"
-                    :min="0"
-                    :max="Math.max(duration, 0.01)"
-                    :step="0.01"
-                    :show-tooltip="false"
-                    aria-label="历史帧时间轴"
-                    @input="seek"
-                  /><span>{{ display(latest?.time ?? 0, 2) }} s</span></div
-                ><div class="capture-marker-rail"
-                  ><MarkerTimeline
-                    :markers="markers"
-                    :domain="[0, duration]"
-                    :selection="
-                      clipRange ??
-                      (clipStart === null
-                        ? null
-                        : [
-                            Math.min(clipStart, latest?.time ?? clipStart),
-                            Math.max(clipStart, latest?.time ?? clipStart),
-                          ])
-                    "
-                    @seek="seek" /></div
-                ><div v-if="markers.length" class="marker-list"
-                  ><button
-                    v-for="(marker, index) in markers"
-                    :key="index"
-                    @click="seek(marker.time)"
-                    ><Flag :size="10" />{{ marker.label }} · {{ marker.time.toFixed(1) }}s</button
-                  ></div
-                ></div
-              >
-              <div class="capture-tip"
-                ><Info :size="13" /><span
-                  >请保持单人全身入镜，正面或侧面视角更佳。角度为 2D 平面投影值。</span
-                ></div
-              >
-            </section>
-            <div v-if="message" class="status-message"
-              ><Info :size="15" />{{ message
-              }}<button aria-label="关闭提示" @click="message = ''"><X :size="14" /></button
-            ></div>
-            <div v-if="lowConfidenceCount > 0 && source !== 'demo'" class="status-message"
-              ><Info :size="15" />{{
-                lowConfidenceCount
-              }}
-              个关键点不可用，仍记录可测关节；缺失角度留空。请检查光照、遮挡和拍摄视角。</div
-            >
-            <PoseCorrection
-              :frame="liveCorrection ? undefined : latest"
-              :live="liveCorrection"
-              :camera="correctionCamera"
-            />
-          </div>
+            </div>
+            <div class="capture-content">
+              <div class="capture-body">
+                <label v-if="source === 'file'" class="capture-provenance">
+                  <input v-model="syntheticFile" type="checkbox" @change="fileProvenance" />
+                  生成/合成视频素材（synthetic）
+                </label>
+                <div class="capture-preview">
+                  <PoseStage
+                    ref="stage"
+                    :source="source"
+                    :playing="playing"
+                    :active="page === 'workspace'"
+                    :settings="settings"
+                    :selected-frame="latest"
+                    :source-aspect="sessionInfo.parameters.aspect"
+                    :seek-time="seekTime"
+                    :session-id="sessionInfo.sessionId"
+                    @frame="capture"
+                    @status="status"
+                    @ready="ready"
+                    @ended="playing = false"
+                    @busy="busy = $event"
+                    @offline="offlineStatus"
+                    @analyze-clip="redecode"
+                  >
+                    <template #legend>
+                      <div class="capture-legend"
+                        ><span><i class="legend-dot mint" />人体骨骼</span
+                        ><span><i class="legend-dot amber" />近似重心</span
+                        ><span
+                          class="capture-quality"
+                          :class="{ 'capture-quality-fixed': source !== 'demo' }"
+                          ><i
+                            class="mini-dot"
+                            :class="
+                              source === 'demo' || captureQuality === 'tracked'
+                                ? 'green-dot'
+                                : 'red-dot'
+                            "
+                          />{{
+                            source === 'demo'
+                              ? '合成序列 · 非推理结果'
+                              : captureQualityLabels[captureQuality]
+                          }}</span
+                        ></div
+                      >
+                    </template>
+                  </PoseStage>
+                </div>
+                <div class="capture-console">
+                  <div class="transport"
+                    ><PlaybackTransport
+                      :playing="playing"
+                      :busy="busy"
+                      :time="latest?.time ?? 0"
+                      :progress="playbackProgress"
+                      @toggle="togglePlay"
+                    /><div class="transport-main"
+                      ><IconButton label="重置会话" @click="reset()"><RotateCcw /></IconButton
+                      ><button class="text-button" @click="recalculate">重算指标</button
+                      ><button
+                        v-if="source === 'file'"
+                        class="text-button"
+                        :disabled="busy"
+                        @click="redecode"
+                        >{{
+                          sessionInfo.acquisition?.mode.endsWith('-sampled')
+                            ? '重新抽样分析'
+                            : '重新逐帧分析'
+                        }}</button
+                      ><button class="text-button" @click="mark"><Flag :size="14" />手动打点</button
+                      ><button
+                        class="text-button clip-button"
+                        :class="{ clipping: clipStart !== null }"
+                        @click="clip"
+                        ><Scissors :size="14" />{{
+                          clipStart === null ? '截取片段' : '完成截取'
+                        }}</button
+                      ></div
+                    ><div class="timeline-row" @keydown.capture="stepHistory"
+                      ><el-slider
+                        :model-value="latest?.time ?? 0"
+                        :min="0"
+                        :max="Math.max(duration, 0.01)"
+                        :step="0.01"
+                        :show-tooltip="false"
+                        aria-label="历史帧时间轴"
+                        @input="seek"
+                      /><span>{{ display(latest?.time ?? 0, 2) }} s</span></div
+                    ><div class="capture-marker-rail"
+                      ><MarkerTimeline
+                        :markers="markers"
+                        :domain="[0, duration]"
+                        :selection="
+                          clipRange ??
+                          (clipStart === null
+                            ? null
+                            : [
+                                Math.min(clipStart, latest?.time ?? clipStart),
+                                Math.max(clipStart, latest?.time ?? clipStart),
+                              ])
+                        "
+                        @seek="seek" /></div
+                    ><div v-if="markers.length" class="marker-list"
+                      ><button
+                        v-for="(marker, index) in markers"
+                        :key="index"
+                        @click="seek(marker.time)"
+                        ><Flag :size="10" />{{ marker.label }} ·
+                        {{ marker.time.toFixed(1) }}s</button
+                      ></div
+                    ></div
+                  >
+                  <div class="capture-tip"
+                    ><Info :size="13" /><span
+                      >请保持单人全身入镜，正面或侧面视角更佳。角度为 2D 平面投影值。{{
+                        source === 'demo' ? '' : '低置信度的角度留空。'
+                      }}</span
+                    ></div
+                  >
+                  <div v-if="message" class="status-message"
+                    ><Info :size="15" />{{ message
+                    }}<button aria-label="关闭提示" @click="message = ''"><X :size="14" /></button
+                  ></div>
+                  <PoseCorrection
+                    :frame="liveCorrection ? undefined : latest"
+                    :live="liveCorrection"
+                    :camera="correctionCamera"
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
 
         <div v-if="analysisMounted" v-show="page === 'analysis'" class="analysis-bottom"
@@ -1258,7 +1505,11 @@ defineExpose({ analysisTools, sessionInfo });
       </main>
     </div>
 
-    <el-drawer v-model="settingsOpen" title="分析与显示设置" size="360px"
+    <el-drawer
+      v-model="settingsOpen"
+      class="glass-panel"
+      title="分析与显示设置"
+      size="min(360px, 100%)"
       ><p class="drawer-intro"
         >参数变更会暂停采集，基于保存的 raw
         样本统一重算并更新引用；保留时间、标记和片段。回看不会重算，显式重置才清空数据。</p
@@ -1272,7 +1523,29 @@ defineExpose({ analysisTools, sessionInfo });
           :precision="2"
           controls-position="right" /></div
       ><div class="setting-row"
-        ><div><b>滑动滤波窗口</b><p>以连续关键点均值减弱帧间抖动</p></div
+        ><div>
+          <b>滑动滤波窗口</b
+          ><p>{{
+            source === 'file'
+              ? '本地视频优先采用较近的帧，以减少快速动作的滞后'
+              : '窗口越大越平滑，动作变化也会显示得更晚'
+          }}</p>
+          <div class="filter-presets" role="group" aria-label="滤波窗口快捷设置">
+            <button
+              type="button"
+              :aria-pressed="settings.window === 3"
+              @click="settings.window = 3"
+            >
+              快速动作（3 帧）
+            </button>
+            <button
+              type="button"
+              :aria-pressed="settings.window === 5"
+              @click="settings.window = 5"
+            >
+              默认（5 帧）
+            </button>
+          </div> </div
         ><el-input-number
           v-model="settings.window"
           :min="1"
@@ -1300,51 +1573,94 @@ defineExpose({ analysisTools, sessionInfo });
         >恢复默认设置</el-button
       ></el-drawer
     >
-    <el-dialog v-model="guideOpen" title="开始你的第一次姿态观察" width="min(620px, 94vw)"
-      ><div class="guide-content"
-        ><div class="guide-step"
-          ><span>01</span
-          ><div
-            ><h3>选择画面来源</h3
-            ><p
-              >演示模式使用明确标注的合成序列，无需摄像头。真实分析请切换到摄像头或上传
-              MP4。单人全身入镜，正面或侧面视角更佳。</p
-            ></div
-          ></div
-        ><div class="guide-step"
-          ><span>02</span
-          ><div
-            ><h3>采集、观察、记录时刻</h3
-            ><p
-              >点击开始分析，在画布中查看骨骼与关节夹角。暂停后拖动时间轴查看已采集帧；手动打点可以为关键时刻命名。两次点击截取片段，分别记录起点和终点。</p
-            ></div
-          ></div
-        ><div class="guide-step"
-          ><span>03</span
-          ><div
-            ><h3>探索指标并导出</h3
-            ><p
-              >时序页支持选择关节和缩放时间区间；数据导出页可下载逐帧 CSV 或 PNG
-              汇总报告。当前会话只保存在内存，刷新前请导出。</p
-            ></div
-          ></div
-        ><div class="guide-limits"
-          ><h3><Info :size="17" />理解量测边界</h3
-          ><p
-            >单目 2D
-            投影角度不是真实三维角度，不等同专业动捕。左右髋中点只是重心近似。遮挡、光照和视角都会影响置信度；仅检测单人，多人会干扰结果。系统不识别运动类型、不判断动作对错、不内置运动知识库。连续分析最多
-            18,000 帧。超过上限的本地视频会抽样覆盖全片，帧间快速动作可能漏采。</p
-          ><a
+    <el-dialog
+      v-model="guideOpen"
+      class="glass-panel"
+      title="使用指南"
+      width="min(620px, calc(100% - 24px))"
+      align-center
+    >
+      <div class="guide-content" tabindex="0" role="region" aria-label="使用说明">
+        <ol class="guide-steps">
+          <li>
+            <h3>选择来源并开始分析</h3>
+            <p>
+              「演示模式」自动播放合成姿态。使用「实时摄像头」时，点击「开始分析」并允许浏览器访问摄像头。使用「上传视频」时，选好本地文件，等准备完成后再开始。建议光线充足，单人全身从正面或侧面入镜。
+            </p>
+          </li>
+          <li>
+            <h3>回看、打点和截取</h3>
+            <p>
+              暂停后拖动时间轴回看已采集帧。「手动打点」记录当前时刻，标记可在「数据导出」里改名。要选定一段数据，在起点点「截取片段」，移到终点再点「完成截取」。
+            </p>
+          </li>
+          <li>
+            <h3>保存本次分析</h3>
+            <p>
+              在「数据导出」下载逐帧 CSV 或 PNG
+              图片报告。已截取时使用当前片段，否则使用完整会话。换源、重新选视频、重置或刷新前请先导出，采集数据和标记只保存在当前页面。
+            </p>
+          </li>
+        </ol>
+
+        <details class="guide-topic">
+          <summary>时序图与指标</summary>
+          <p>
+            在「时序可视化」选择关节。横拖曲线查看采样值，松开后定位。滚轮缩放时间区间，按住 Shift
+            拖动平移。聚焦图表游标后可用方向键选帧，按 Enter
+            定位。角度图和关键点图均可切换原始（raw）与滤波（filtered）口径。查看快速动作的峰值时，可用两种口径交叉核对。
+          </p>
+          <p>
+            角度是二维投影，近似重心由左右髋部估算，适合在相近条件下相对比较。肢段朝向镜头或在画面中重叠时，角度容易放大关键点的定位偏差，可换视角复核。低置信度的计算值留空。有效样本覆盖率按所选区间内的已采样帧计算，包含未检出帧。
+          </p>
+          <a
             href="https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker/web_js"
             target="_blank"
             rel="noreferrer"
             >MediaPipe 官方文档 ↗</a
-          ></div
-        ></div
-      ><template #footer
-        ><el-button type="primary" @click="guideOpen = false">了解，开始观察</el-button></template
-      ></el-dialog
-    >
+          >
+        </details>
+
+        <details class="guide-topic">
+          <summary>对齐两段视频</summary>
+          <p>
+            在「姿态对比」分别选择参考视频和待测视频，把两边的「对齐起点」拖到同一个动作开始的画面，再点「开始对比」。角度差是待测减参考。点击「回看最大差异」可定位两路画面，双路均有有效角度时才计算差值。
+          </p>
+        </details>
+
+        <details class="guide-topic">
+          <summary>用 AI Agent 分析</summary>
+          <p>
+            采集数据后打开「AI Agent
+            分析」并选择模型。首次使用可展开「首次连接？查看连接指南」，按提示配置并测试连接。发送目标时写清关节、左右侧和时间区间，再打开结果引用核对实际采样时刻和样本数。两段关节活动幅度（ROM）比较也可通过任务卡手动填写。
+          </p>
+          <p>
+            基础采集和图表无需 API
+            Key。原始视频、画面和关键点在浏览器内处理。使用云端模型时，任务指令和必要的指标摘要经站点代理发送给所选供应商。
+          </p>
+        </details>
+
+        <details class="guide-topic">
+          <summary>设备、文件和采样限制</summary>
+          <p>
+            推荐使用新版 Chrome 或 Edge 打开本机地址或 HTTPS
+            页面。摄像头无法启动时，检查站点与系统权限，以及设备是否被其他程序占用。
+          </p>
+          <p>
+            支持 MP4、MOV、MKV、AVI、WebM 等格式。可直接读取的视频上限为 2 GB，需要本地转换时上限为
+            500 MB，时间轴以转换后的文件为准。若读取失败，可先尝试较短的 H.264 MP4。
+          </p>
+          <p>
+            每次最多保留 {{ MAX_FRAMES.toLocaleString('en-US') }}
+            帧。超长本地视频会抽样覆盖全片，快速动作可能漏采。摄像头历史画面不可用时，可回到有画面的时刻生成
+            PNG，逐帧数值仍可导出 CSV。
+          </p>
+        </details>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="guideOpen = false">关闭指南</el-button>
+      </template>
+    </el-dialog>
     <el-dialog v-model="exportOpen" title="导出本次分析" width="min(440px, calc(100vw - 24px))"
       ><p class="drawer-intro"
         >{{ source === 'demo' ? '合成演示数据' : '本地采集数据' }} · {{ visibleFrames.length }} 帧{{
@@ -1378,23 +1694,53 @@ defineExpose({ analysisTools, sessionInfo });
         支持取消；刷新前请保存数据。</p
       ></el-dialog
     >
-    <el-dialog v-model="fullOpen" title="关节角度时序 · 区间探索" width="min(1100px, 95vw)"
+    <el-dialog
+      v-model="angleReviewOpen"
+      title="逐帧角度复核"
+      width="min(940px, calc(100% - 24px))"
+      class="glass-panel"
+      align-center
+      destroy-on-close
+    >
+      <AngleReview
+        v-if="angleReview"
+        :image="angleReview.image"
+        :session="angleReview.session"
+        :sample="angleReview.sample"
+        :joint="angleReview.joint"
+      />
+      <p v-else-if="angleReviewError" role="alert">{{ angleReviewError }}</p>
+      <p v-else-if="angleReviewOpen" role="status">正在读取所选帧…</p>
+    </el-dialog>
+    <el-dialog
+      v-model="fullOpen"
+      class="expanded-chart-dialog"
+      title="关节角度时序 · 区间探索"
+      width="min(1100px, calc(100% - 24px))"
+      align-center
+      destroy-on-close
       ><TimeChart
-        v-if="fullOpen"
         :frames="visibleFrames"
         :revision="sessionInfo.revision"
         :joint="joint"
         :markers="markers"
         :interval="range"
+        :angle-basis="angleChartBasis"
         kind="angle"
         :cursor-time="chartCursorTime"
         expanded
         @range="selectChartRange"
         @seek="seek"
-      /><p class="drawer-intro"
-        >蓝色为左侧或脊柱中线，橙色为右侧；使用 filtered
-        角度。横拖选择采样帧，松开定位回看。滚轮缩放，按住 Shift 拖动平移；低置信度帧显示为缺口。</p
-      ></el-dialog
+      /><p class="drawer-intro">
+        <label class="angle-basis-control">
+          角度口径
+          <select v-model="angleChartBasis">
+            <option value="filtered">滤波</option>
+            <option value="raw">原始</option>
+          </select>
+        </label>
+        蓝色为左侧或脊柱中线，橙色为右侧。横拖定位，滚轮缩放，Shift 拖动平移。
+      </p></el-dialog
     >
   </div>
 </template>

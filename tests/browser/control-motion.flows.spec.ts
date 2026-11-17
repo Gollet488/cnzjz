@@ -18,7 +18,7 @@ test('source and chart controls distinguish selection, hover and keyboard focus'
 
   await demo.press('Space');
   const chart = page.locator('.angle-panel');
-  const select = chart.getByRole('combobox');
+  const select = chart.getByRole('combobox', { name: '选择分析关节', exact: true });
   const wrapper = chart.locator('.el-select__wrapper');
   const restingShadow = await wrapper.evaluate((element) => getComputedStyle(element).boxShadow);
   await select.focus();
@@ -64,8 +64,8 @@ test('floating fields retain the label and expose validation with reduced-motion
   await page.getByRole('button', { name: 'AI Agent 分析' }).click();
   await page.getByRole('button', { name: '模型设置', exact: true }).click();
 
-  const address = page.getByRole('textbox', { name: '本地 Ollama 地址' });
-  const label = page.locator('label').filter({ hasText: /^本地 Ollama 地址$/ });
+  const address = page.getByRole('textbox', { name: '本地服务地址' });
+  const label = page.locator('label').filter({ hasText: /^本地服务地址$/ });
   const apply = page.getByRole('button', { name: '应用地址' });
   await address.fill('');
   await address.blur();
@@ -82,20 +82,20 @@ test('floating fields retain the label and expose validation with reduced-motion
   await expect.poll(shaking).toBe(1);
   await expect(address).toHaveAttribute('aria-invalid', 'true');
   await expect(address).toHaveCSS('border-color', 'rgb(169, 51, 53)');
-  await expect(address).toHaveAccessibleDescription(/请输入本机 Ollama 根地址/);
+  await expect(address).toHaveAccessibleDescription(/请输入本机服务地址/);
   await expect.poll(shaking).toBe(0);
   await address.press('Enter');
   await expect.poll(shaking).toBe(1);
 
   await address.fill('http://127.0.0.1:11434');
   await expect(address).not.toHaveAttribute('aria-invalid');
-  await expect(page.getByText('请输入本机 Ollama 根地址', { exact: false })).toHaveCount(0);
+  await expect(page.getByText('请输入本机服务地址', { exact: false })).toHaveCount(0);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await address.fill('invalid-address');
   await address.press('Enter');
   await expect(address).toHaveAttribute('aria-invalid', 'true');
   await expect.poll(shaking).toBe(0);
-  await expect(address).toHaveAccessibleDescription(/请输入本机 Ollama 根地址/);
+  await expect(address).toHaveAccessibleDescription(/请输入本机服务地址/);
 });
 
 test('CSV download gathers cards, tracks real writes, then shows a check and resets', async ({

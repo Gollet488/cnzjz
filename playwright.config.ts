@@ -1,5 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
+const devURL = `http://127.0.0.1:${process.env.BROWSER_DEV_PORT ?? 5186}`;
+const productionURL = `http://127.0.0.1:${process.env.BROWSER_PREVIEW_PORT ?? 5187}`;
+
 // Both projects open the real index.html. No QA page or product test hook.
 export default defineConfig({
   testDir: './tests/browser',
@@ -21,19 +24,19 @@ export default defineConfig({
     channel: process.env.BROWSER_CHANNEL || undefined,
   },
   projects: [
-    { name: 'dev', use: { baseURL: 'http://127.0.0.1:5186' } },
-    { name: 'production', use: { baseURL: 'http://127.0.0.1:5187' } },
+    { name: 'dev', use: { baseURL: devURL } },
+    { name: 'production', use: { baseURL: productionURL } },
   ],
   webServer: [
     {
       command: 'node scripts/browser-server.mjs dev',
-      url: 'http://127.0.0.1:5186',
+      url: devURL,
       reuseExistingServer: false,
       stdout: 'pipe',
     },
     {
       command: 'node scripts/browser-server.mjs production',
-      url: 'http://127.0.0.1:5187',
+      url: productionURL,
       reuseExistingServer: false,
       timeout: 120_000,
     },

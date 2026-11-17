@@ -1,3 +1,5 @@
+import type { VideoClip } from './protocol.ts';
+
 export interface EncodedSample {
   offset: number;
   size: number;
@@ -110,11 +112,79 @@ export class PresentationAudit {
   }
 }
 
-// One-based presentation indices, covering both endpoints. Above the session
-// budget we infer at most every other frame, while still auditing decoder PTS.
-export function analysisFrameIndices(total: number, limit: number) {
-  const count = total <= limit ? total : Math.min(limit, Math.ceil(total / 2));
-  return Array.from({ length: count }, (_, i) =>
-    count < 2 ? 1 : 1 + Math.round((i * (total - 1)) / (count - 1)),
-  );
+// One-based indices within the selected interval, including its endpoints.
+export function analysisFrameIndices(presentation: SourceSample[], limit: number) {
+  return presentationFrameIndices(presentation.length, limit, (i) => presentation[i].timestamp);
+}
+
+export function presentationFrameIndices(
+  total: number,
+  limit: number,
+  timestamp: (i: number) => number,
+) {
+  const count = Math.min(total, limit);
+  if (count === total || count < 2) return Uint32Array.from({ length: count }, (_, i) => i + 1);
+  const result = new Uint32Array(count);
+  const first = timestamp(0);
+  const last = timestamp(total - 1);
+  let frame = 0;
+  result[0] = 1;
+  result[count - 1] = total;
+  for (let slot = 1; slot < count - 1; slot++) {
+    const target = first + (slot * (last - first)) / (count - 1);
+    // Reserve one distinct source frame for every remaining slot.
+    const latest = total - count + slot;
+    frame++;
+    while (frame < latest && target - timestamp(frame) >= timestamp(frame + 1) - target) frame++;
+    result[slot] = frame + 1;
+  }
+  return result;
+}
+
+export function planVideoClip(
+  source: { presentation: SourceSample[]; decode: SourceSample[] },
+  clip?: VideoClip,
+) {
+  const { presentation, decode } = source;
+  if (!clip) return { presentation, decodeStart: 0, decodeEnd: decode.length - 1 };
+  if (
+    !Number.isInteger(clip.start) ||
+    !Number.isInteger(clip.end) ||
+    clip.start < 0 ||
+    clip.end < clip.start ||
+    clip.end >= presentation.length
+  )
+    throw new Error('所选片段超出视频帧范围。');
+  if (clip.start === 0 && clip.end === presentation.length - 1)
+    return { presentation, decodeStart: 0, decodeEnd: decode.length - 1 };
+
+  const selected = presentation.slice(clip.start, clip.end + 1);
+  const frames = new Set(selected);
+  let decodeStart = -1;
+  let decodeEnd = -1;
+  for (let i = 0, found = 0; found < frames.size; i++) {
+    if (!frames.has(decode[i])) continue;
+    if (decodeStart === -1) decodeStart = i;
+    decodeEnd = i;
+    found++;
+  }
+  while (!decode[decodeStart].is_sync) decodeStart--;
+  // An open GOP can have leading B pictures that depend on the previous GOP.
+  // Include one extra GOP as preroll, and emit only the requested PTS.
+  if (decodeStart > 0) {
+    decodeStart--;
+    while (!decode[decodeStart].is_sync) decodeStart--;
+  }
+  return { presentation: selected, decodeStart, decodeEnd };
+}
+
+export function nearestVideoFrame(timestamps: Float64Array, timeUs: number) {
+  let low = 0;
+  let high = timestamps.length - 1;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (timestamps[mid] < timeUs) low = mid + 1;
+    else high = mid;
+  }
+  return low > 0 && timeUs - timestamps[low - 1] <= timestamps[low] - timeUs ? low - 1 : low;
 }

@@ -28,6 +28,7 @@ const props = withDefaults(
     expanded?: boolean;
     revision?: number;
     view?: ChartView | null;
+    angleBasis?: ChartView['basis'];
     interval?: [number, number] | null;
     aspect?: number;
     threshold?: number;
@@ -51,6 +52,7 @@ const domain = computed<[number, number]>(() => {
   return [props.frames[0]?.time ?? 0, props.frames.at(-1)?.time ?? 0];
 });
 const selection = computed(() => props.view?.interval ?? props.interval);
+const angleBasis = computed(() => props.view?.basis ?? props.angleBasis ?? 'filtered');
 const temporalGrid = { left: 52, right: 24, top: 24, bottom: 42 };
 const cursor = shallowRef<{
   index: number;
@@ -477,7 +479,7 @@ function draw() {
     props.revision,
     props.kind,
     center || point ? null : props.joint,
-    props.view?.basis,
+    center || point ? null : angleBasis.value,
     props.view?.channels,
     props.pointIndex,
     props.pointBasis,
@@ -513,7 +515,7 @@ function draw() {
               color: side === 'right' ? 'right' : 'left',
               data: frames.map<[number, number | null]>((f) => [
                 f.time,
-                angleValue(props.view?.basis === 'raw' ? f.rawAngles : f.angles, props.joint, side),
+                angleValue(angleBasis.value === 'raw' ? f.rawAngles : f.angles, props.joint, side),
               ]),
             }));
     const breaks = frames.flatMap((f, i) => (i > 0 && f.samplingGapLimit !== null ? [i] : []));
@@ -784,6 +786,7 @@ watch(
     () => props.markers.map((m) => m.label + ':' + m.time).join('|'),
     () => props.kind,
     () => props.view,
+    angleBasis,
     () => props.interval,
     () => props.aspect,
     () => props.pointIndex,
