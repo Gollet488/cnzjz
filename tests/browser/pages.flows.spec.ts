@@ -10,6 +10,7 @@ test.use({
 declare global {
   interface Window {
     terminatedWorkers: string[];
+    advanceConverterDownload: () => void;
   }
 }
 
@@ -60,62 +61,86 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
     await expect(help).toContainText('重启 Ollama');
   });
 
-  test('two-video comparison survives a slow FFmpeg WASM response', async ({ page }, info) => {
+  test('two-video comparison shares a slow FFmpeg download and recovers from interruption', async ({
+    page,
+  }) => {
     const wasm = '**/ffmpeg/ffmpeg-core.wasm';
-    const start = Date.now();
-    const downloads: number[] = [];
-    const convertedAt: number[] = [];
-    let clickedAt: number | undefined;
-    let firstPairAt: number | undefined;
-    page.on('requestfinished', (request) => {
-      if (request.url().endsWith('/ffmpeg-core.wasm')) downloads.push(Date.now() - start);
-    });
-    await page.route(wasm, async (route) => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 17_000));
-      await route.continue();
+    let attempts = 0;
+    await page.route(wasm, (route) =>
+      ++attempts === 1 ? route.abort('connectionreset') : route.continue(),
+    );
+    await page.clock.install();
+    await page.addInitScript(() => {
+      const fetchResource = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const response = await fetchResource(...args);
+        if (!response.ok || !response.url.endsWith('/ffmpeg-core.wasm')) return response;
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const megabyte = 1024 * 1024;
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(bytes.subarray(0, megabyte));
+              let offset = megabyte;
+              window.advanceConverterDownload = () => {
+                const end = offset === megabyte ? 2 * megabyte : bytes.length;
+                controller.enqueue(bytes.subarray(offset, end));
+                offset = end;
+                if (offset === bytes.length) controller.close();
+              };
+            },
+          }),
+        );
+      };
     });
     await page.goto('./');
     await page.locator('nav').getByRole('button', { name: '姿态对比', exact: true }).click();
     const panel = page.locator('.comparison-panel');
     const files = panel.locator('input[type=file]');
-    try {
-      await files.nth(0).setInputFiles(resolve('tests/fixtures/format.avi'));
-      await files.nth(1).setInputFiles(resolve('tests/fixtures/format.webm'));
-      const status = panel.locator('[role=status]');
-      await Promise.all(
-        [0, 1].map(async (index) => {
-          await expect(status.nth(index)).toHaveText('已在本机转换，使用转换后时间轴。', {
-            timeout: 60_000,
-          });
-          convertedAt[index] = Date.now() - start;
-        }),
-      );
-      expect(downloads).toHaveLength(2);
-      clickedAt = Date.now() - start;
-      await panel.getByRole('button', { name: '开始对比', exact: true }).click();
-      await expect(panel.locator('.compare-playhead')).toContainText(/参考 .+ s · 待测 .+ s/, {
-        timeout: 55_000,
-      });
-      firstPairAt = Date.now() - start;
-      await expect(panel.locator('.compare-playhead')).toContainText('对比结束');
-    } finally {
-      await info.attach('slow-comparison-timing', {
-        body: JSON.stringify({
-          downloads,
-          convertedAt,
-          clickedAt,
-          firstPairAt,
-        }),
-        contentType: 'application/json',
-      });
-    }
+    await files.nth(0).setInputFiles(resolve('tests/fixtures/format.avi'));
+    await files.nth(1).setInputFiles(resolve('tests/fixtures/format.webm'));
+    const status = panel.locator('[role=status]');
+    const both = (message: string) => expect(status).toHaveText([message, message]);
+    await both('正在下载视频转换器… 已接收 1 MB');
+    await page.clock.fastForward(26_000);
+    await page.evaluate(() => window.advanceConverterDownload());
+    await both('正在下载视频转换器… 已接收 2 MB');
+    await page.clock.fastForward(26_000);
+    await page.evaluate(() => window.advanceConverterDownload());
+    await both('已在本机转换，使用转换后时间轴。');
+    expect(attempts).toBe(2);
+    await panel.getByRole('button', { name: '开始对比', exact: true }).click();
+    await expect(panel.locator('.compare-playhead')).toContainText('对比结束');
   });
 
-  for (const failure of ['worker 404', 'WASM 404', 'unresponsive initialization'] as const) {
-    test(`FFmpeg: ${failure} closes the worker and allows AVI retry`, async ({ page }, info) => {
-      const resource =
-        failure === 'worker 404' ? '**/ffmpeg/worker.js' : '**/ffmpeg/ffmpeg-core.wasm';
-      const stalled = failure === 'unresponsive initialization';
+  for (const { failure, resource, stalled, workerStarted, message } of [
+    {
+      failure: 'worker 404',
+      resource: '**/ffmpeg/worker.js',
+      workerStarted: true,
+      message: '视频转换器加载失败',
+    },
+    {
+      failure: 'WASM 404',
+      resource: '**/ffmpeg/ffmpeg-core.wasm',
+      message: '下载转换器资源时服务器返回 HTTP 404',
+    },
+    {
+      failure: 'unresponsive download',
+      resource: '**/ffmpeg/ffmpeg-core.wasm',
+      stalled: true,
+      message: '下载视频转换器超时',
+    },
+    {
+      failure: 'unresponsive initialization',
+      resource: '**/ffmpeg/ffmpeg-core.js',
+      stalled: true,
+      workerStarted: true,
+      message: '视频转换器初始化超时',
+    },
+  ]) {
+    test(`FFmpeg: ${failure} reports the stage and allows AVI retry`, async ({ page }, info) => {
+      if (stalled) await page.clock.install();
       const { promise: hold, resolve: release } = Promise.withResolvers<void>();
       await page.addInitScript(() => {
         const NativeWorker = window.Worker;
@@ -149,11 +174,9 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
         await input.setInputFiles(avi);
         const requested = await loading;
         expect(new URL(requested.url()).pathname).toMatch(/^\/cnzjz\/ffmpeg\//);
+        if (stalled) await page.clock.fastForward(46_000);
         const status = page.locator('.status-message');
-        await expect(status).toContainText(
-          stalled ? '视频转换器初始化超时' : '视频转换器加载失败',
-          { timeout: stalled ? 55_000 : 8_000 },
-        );
+        await expect(status).toContainText(message);
         const elapsedMs = Date.now() - start;
         const httpStatus = stalled ? null : (await requested.response())?.status();
         if (!stalled) expect(httpStatus).toBe(404);
@@ -165,7 +188,7 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
               worker,
             ),
           )
-          .toEqual([worker]);
+          .toEqual(workerStarted ? [worker] : []);
         await info.attach('converter-failure', {
           body: JSON.stringify({
             failure,
@@ -174,7 +197,7 @@ test.describe('static Pages artifact', { tag: '@pages' }, () => {
             worker,
             elapsedMs,
             message: await status.innerText(),
-            workerClosed: true,
+            workerStarted: Boolean(workerStarted),
           }),
           contentType: 'application/json',
         });

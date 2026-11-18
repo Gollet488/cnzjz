@@ -1,4 +1,5 @@
 import type { VideoProbe } from './protocol';
+import { loadConverterCore } from './converterCore';
 
 // Extensions supplement video/* because Windows often reports no video MIME for
 // MKV, TS, RMVB and other containers. Content, rather than the suffix, is decoded.
@@ -6,7 +7,7 @@ export const VIDEO_ACCEPT =
   'video/*,.mp4,.m4v,.mov,.qt,.webm,.mkv,.avi,.flv,.f4v,.wmv,.asf,.mpg,.mpeg,.mpe,.m2v,.ts,.mts,.m2ts,.m2t,.3gp,.3g2,.ogv,.ogg,.vob,.rm,.rmvb,.divx,.dv,.mxf,.nut';
 export const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_CONVERSION_BYTES = 500 * 1024 * 1024;
-// A cold start downloads and compiles the 32 MB WASM core, possibly alongside a second input.
+// Only worker startup and compilation count here. Download has its own deadlines.
 const CONVERTER_STARTUP_MS = 45_000;
 const CONVERSION_MS = 10 * 60_000;
 
@@ -76,9 +77,20 @@ export async function prepareVideo(
   signal.throwIfAborted();
   if (file.size > MAX_CONVERSION_BYTES)
     throw new Error('该文件需要转换，但已超过 500 MB 转换上限。请先转为 H.264 MP4 或截取片段。');
-  status('正在加载本地视频转换器…');
-  const { FFmpeg, FFFSType } = await import('@ffmpeg/ffmpeg');
-  signal.throwIfAborted();
+  let converter: typeof import('@ffmpeg/ffmpeg');
+  let wasmURL: string;
+  try {
+    converter = await import('@ffmpeg/ffmpeg');
+    const core = await loadConverterCore(signal, status);
+    signal.throwIfAborted();
+    wasmURL = URL.createObjectURL(core);
+  } catch (error) {
+    signal.throwIfAborted();
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`视频转换器加载失败：${detail}。请检查网络后重新选择视频。`, { cause: error });
+  }
+  const { FFmpeg, FFFSType } = converter;
+  status('正在初始化视频转换器…');
   const ffmpeg = new FFmpeg();
   const abort = () => ffmpeg.terminate();
   signal.addEventListener('abort', abort, { once: true });
@@ -110,11 +122,15 @@ export async function prepareVideo(
     status(`正在本机转换视频… ${percent}%`);
   });
   try {
-    await ffmpeg.load({
-      classWorkerURL: `${import.meta.env.BASE_URL}ffmpeg/worker.js`,
-      coreURL: `${import.meta.env.BASE_URL}ffmpeg/ffmpeg-core.js`,
-      wasmURL: `${import.meta.env.BASE_URL}ffmpeg/ffmpeg-core.wasm`,
-    });
+    try {
+      await ffmpeg.load({
+        classWorkerURL: `${import.meta.env.BASE_URL}ffmpeg/worker.js`,
+        coreURL: `${import.meta.env.BASE_URL}ffmpeg/ffmpeg-core.js`,
+        wasmURL,
+      });
+    } finally {
+      URL.revokeObjectURL(wasmURL);
+    }
     signal.throwIfAborted();
     clearTimeout(timer);
     initializing = false;
